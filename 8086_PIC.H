@@ -72,7 +72,7 @@ extern const uint8_t commandcom[];
 
 #define US_TO_CT_TICKS  (CPU_CT_HZ/1000000UL)    // uS to CoreTimer Ticks
     
-#define VERNUML 50
+#define VERNUML 90
 #define VERNUMH 0
 
 

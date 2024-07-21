@@ -590,10 +590,6 @@ FFFF:000F                Top of 8086 / 88 address space*/
             Nop();
             break;
             
-#ifdef EXT_80x87
-          status8087,control8087;     // ma v. 0x9b!! boh...
-            
-#endif
 
 #ifdef EXT_80286
           case 0x0:      // LLDT/LTR/SLDT/SMSW/VERW
@@ -2569,8 +2565,8 @@ aggFlagSWA:    // aux, zero, sign, parity
 #ifdef EXT_80x87
           status8087,control8087;
             
+				// WAIT Wait for FPU 
 #endif
-				// WAIT se NON c'è 8087!
 				break;
         
    		case 0x9c:        // PUSHF
@@ -3758,6 +3754,131 @@ do_irq:
         _al=GetValue(MAKE20BITS(*theDs,_bx+_al));
         break;
         
+#ifdef EXT_80x87      // https://www.ic.unicamp.br/~celio/mc404/opcodes.html#Co
+			case 0xd8:
+        switch(Pipe2.b.l) {
+          }
+          status8087,control8087;
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+			case 0xd9: 
+        switch(Pipe2.b.l) {
+          case 0xd0:    // FNOP
+            break;
+          case 0x3c:      // FNSTCW
+            _si=control8087;
+#warning NO! finire con tutti indirizzamenti...
+            break;
+          case 0xE0:    // FCHS
+            break;
+          case 0xE1:    // FABS
+            break;
+          case 0xE5:    // FXAM
+            break;
+          case 0xEE:    // FLDZ
+            break;
+          case 0xE8:    // FLD1
+            break;
+          case 0xE9:    // FLDL2T
+            break;
+          case 0xEB:    // FLDPI
+            break;
+          case 0xEC:    // FLDLG2
+            break;
+          case 0xED:    // FLDLN2
+            break;
+          case 0xF0:    // F2XM1
+            break;
+          case 0xF1:    // FYL2X
+            break;
+          case 0xF2:    // FPTAN
+            break;
+          case 0xF3:    // FPATAN
+            break;
+          case 0xF4:    // FXTRACT
+            break;
+          case 0xF6:    // FDECSTP
+            break;
+          case 0xF7:    // FINCSTP
+            break;
+          case 0xF8:    // FPREM
+            break;
+          case 0xF9:    // FYL2XP1
+            break;
+          case 0xFA:    // FSQRT
+            break;
+          case 0xFC:    // FRNDINT
+            break;
+          case 0xFD:    // FSCALE
+            break;
+          }
+          status8087,control8087;
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+			case 0xda:
+        switch(Pipe2.b.l) {
+          }
+          status8087,control8087;
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+			case 0xdb:
+        switch(Pipe2.b.l) {
+          case 0xe0:      // FENI
+            break;
+          case 0xe1:      // FDISI
+            break;
+          case 0xe2:      // FCLEX
+            break;
+          case 0xe3:      // FNINIT
+            break;
+          }
+          status8087,control8087;
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+			case 0xdc:
+        switch(Pipe2.b.l) {
+          }
+          status8087,control8087;
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+			case 0xdd:
+        switch(Pipe2.b.l) {
+          }
+          status8087,control8087;
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+			case 0xde:
+        switch(Pipe2.b.l) {
+          }
+          status8087,control8087;
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+			case 0xdf:
+          status8087,control8087;
+        switch(Pipe2.b.l) {
+          case 0:
+            break;
+          }
+        if(Pipe2.mod==2)      // 
+          _ip++;
+        _ip++;
+        break;
+          
+#else            
 			case 0xd8:
 			case 0xd9:
 			case 0xda:
@@ -3767,14 +3888,6 @@ do_irq:
 			case 0xde:
 			case 0xdf:
         // coprocessore matematico
-#ifdef EXT_80x87
-          status8087,control8087;
-        if(Pipe2.mod==2)      // 
-          _ip+=2;
-        else
-          _ip++;
-          
-#else            
         if(Pipe2.mod==2)      // faccio "nulla" :)   https://stackoverflow.com/questions/42543905/what-are-8086-esc-instruction-opcodes
           _ip+=2;
         else

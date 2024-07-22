@@ -99,14 +99,15 @@
 
 
 const char CopyrightString[]= {'P','C','/','X','T',' ','E','m','u','l','a','t','o','r',' ','v',
-	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '2','1','/','0','7','/','2','4', 0 };
+	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '2','2','/','0','7','/','2','4', 0 };
 
 const char Copyr1[]="(C) Dario's Automation 2019-2024 - G.Dar\xd\xa\x0";
 
 
 // Global Variables:
 extern BOOL fExit,debug;
-extern BYTE DoIRQ,DoNMI,DoHalt,DoReset,ColdReset;
+extern BYTE CPUPins;
+extern BYTE ColdReset;
 extern BYTE ram_seg[];
 extern BYTE CGAram[];
 extern BYTE CGAreg[16];
@@ -924,7 +925,7 @@ int main(void) {
 #endif
 
   
-  DoReset=1;
+  CPUPins |= DoReset;
 #ifdef USING_SIMULATOR
   puts("boot emulator");
    	ColdReset=0;    Emulate(0);

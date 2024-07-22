@@ -50,7 +50,7 @@
 #endif
 #endif
 
-//#define ROM_BASIC 1    non va, verificare versione ecc 21/7/24 // https://github.com/jeffpar/pcjs/tree/gh-pages/machines/pcx86/ibm/5150/rom/basic/
+//#define ROM_BASIC 1    //non va, verificare versione ecc 21/7/24 // https://github.com/jeffpar/pcjs/tree/gh-pages/machines/pcx86/ibm/5150/rom/basic/
 #define RAM_DOS 1
 
 
@@ -72,7 +72,7 @@ extern const uint8_t commandcom[];
 
 #define US_TO_CT_TICKS  (CPU_CT_HZ/1000000UL)    // uS to CoreTimer Ticks
     
-#define VERNUML 90
+#define VERNUML 91
 #define VERNUMH 0
 
 
@@ -95,6 +95,13 @@ typedef uint16_t GFX_COLOR;
 #define TRUE 1
 #define FALSE 0
 
+
+enum {
+  DoReset=1,
+  DoNMI=2,
+  DoIRQ=4,
+  DoHalt=8
+  };
 
 union __attribute__((__packed__)) PIPE {
 	uint32_t d;

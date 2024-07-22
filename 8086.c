@@ -36,12 +36,12 @@
 #undef EXT_80286
 #undef EXT_80386
 #undef EXT_80486
-#define EXT_80x87
+//#define EXT_80x87
 
 BYTE fExit=0;
 BYTE debug=0;
 
-BYTE DoReset=0,DoIRQ=0,DoNMI=0,DoHalt=0;
+BYTE CPUPins=0;
 extern BYTE ColdReset;
 
 extern BYTE ram_seg[];
@@ -155,7 +155,7 @@ int Emulate(int mode) {
 		};
 	register union REGISTRO_F _f;
 	union REGISTRO_F _f1;
-  uint16_t inRep=0;
+  uint16_t inRep=0; uint8_t inRepStep=0;
   BYTE segOverride=0,inEI=0;
 	uint16_t *theDs;
 #ifdef EXT_80386
@@ -174,8 +174,8 @@ int Emulate(int mode) {
 	_ip=0;
   _cs=0xffff;
   _f.x=_f1.x=0; _f.unused=1;
-  inRep=0; segOverride=0; inEI=0;
-  DoNMI=0; DoIRQ=0; DoHalt=0; ExtIRQNum=0;
+  inRep=0; inRepStep=0; segOverride=0; inEI=0;
+  CPUPins = 0; ExtIRQNum=0;
 	do {
 
 		c++;
@@ -217,38 +217,38 @@ int Emulate(int mode) {
       if(!SW2)        // test tastiera, me ne frego del repeat/rientro :)
         keysFeedPtr=254;
       if(!SW1)        // 
-        DoReset=1;
+        CPUPins |= DoReset;
 
       }
 //[#warning VERIFICARE dopo bug fix; PATCH pulizia IRQ, manca out 0x20, 0x20 nel bios... 2024 MA TANTO NON VA LO STESSO PORCOCRISTO 14/7/24]
     if(i8259RegR[0] & 0x1) {
-      DoIRQ=1;
+      CPUPins |= DoIRQ;
 // [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
       ExtIRQNum=8;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
       i8259RegR[0] &= ~0x1;
       }
     if(i8259RegR[0] & 0x2) {
-      DoIRQ=1;
+      CPUPins |= DoIRQ;
       ExtIRQNum=9;      // IRQ 9 Keyboard
       i8259RegR[0] &= ~0x2;
       }
     if(i8259RegR[0] & 0x10) {
-      DoIRQ=1;
+      CPUPins |= DoIRQ;
       ExtIRQNum=0x0c;      // IRQ 12 COM1
       i8259RegR[0] &= ~0x10;
       }
     if(i8259RegR[0] & 0x40) {
-      DoIRQ=1;
+      CPUPins |= DoIRQ;
       ExtIRQNum=14;      // IRQ 6 Floppy disc
       i8259RegR[0] &= ~0x40;
       }
     if(i8259Reg2R[0] & 0x1) {
-      DoIRQ=1;
+      CPUPins |= DoIRQ;
       ExtIRQNum=0x70;      // IRQ RTC
       i8259Reg2R[0] &= ~0x1;
       }
             
-		if(DoReset) {
+		if(CPUPins & DoReset) {
 			initHW();
       _ip=0;
       _cs=0xffff;
@@ -259,15 +259,14 @@ int Emulate(int mode) {
 #endif     
       
 			_f.x=_f1.x=0; _f.unused=1;    // https://thestarman.pcministry.com/asm/debug/8086REGs.htm
-      inRep=0; segOverride=0; inEI=0;
-			DoNMI=0; DoIRQ=0; DoHalt=0; ExtIRQNum=0;
+      inRep=0; inRepStep=0; segOverride=0; inEI=0;
+			CPUPins=0; ExtIRQNum=0;
 #ifdef EXT_80386
       sizeOverride=0;
 #endif
-      DoReset=0;
 			}
-		if(DoNMI && !inEI) {
-			DoNMI=0; DoHalt=0;
+		if((CPUPins & DoNMI) && !inEI) {
+      CPUPins &= ~(DoNMI | DoHalt);
 
 			PUSH_STACK(_f.x);
 			PUSH_STACK(_cs);
@@ -276,9 +275,9 @@ int Emulate(int mode) {
 			_cs=GetShortValue(0x000a);
 			_f.Trap=0; _f.IF=0;
 			}
-		if(DoIRQ && !inEI) {
+		if((CPUPins & DoIRQ) && !inEI) {
 			if(_f.IF) {
-				DoIRQ=0; DoHalt=0; 
+        CPUPins &= ~(DoIRQ | DoHalt);
 				PUSH_STACK(_f.x);
 				PUSH_STACK(_cs);
 				PUSH_STACK(_ip);
@@ -289,7 +288,7 @@ int Emulate(int mode) {
 				}
 			}
 
-		if(DoHalt)
+		if(CPUPins & DoHalt)
 			continue;		// esegue cmq IRQ
    
 //printf("Pipe1: %02x, Pipe2w: %04x, Pipe2b1: %02x,%02x\n",Pipe1,Pipe2.word,Pipe2.bytes.byte1,Pipe2.bytes.byte2);
@@ -300,20 +299,20 @@ int Emulate(int mode) {
       case 1:   // REPZ
         _cx--;
         if(_f.Zero && _cx)
-          _ip--;
+          _ip -= inRepStep;      // v. bug 8088!! così dovrebbe andare.. 22/7/24
         else
           inRep=0;
         break;
       case 2:   // REPNZ
         _cx--;
         if(!_f.Zero && _cx)
-          _ip--;
+          _ip -= inRepStep;
         else
           inRep=0;
         break;
       case 3:   // REP (v.singoli casi)
         if(--_cx)
-          _ip--;
+          _ip -= inRepStep;
         else
           inRep=0;
         break;
@@ -334,7 +333,7 @@ int Emulate(int mode) {
 
     
      LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte più veloci
-                    // .9-2uS 16/7/24 senza ottimizzazioni (con O1 si pianta emulatore...
+                    // 500-1uS 22/7/24 con O2! [.9-2uS 16/7/24 senza ottimizzazioni (con O1 si pianta emulatore...
      
 #ifdef USING_SIMULATOR
 // fa cagare, lentissimo anche con baud rate alto     printf("CS:IP=%04X:%04X\n",_cs,_ip);
@@ -659,6 +658,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
           case 0x8f:      // JG
             break;
           case 0x90:      // SETO
+            
             break;
           case 0x91:      // SETNO
             break;
@@ -1189,6 +1189,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 
 			case 0x26:
 				segOverride=0+1;			// ES
+        inRepStep=0;
         inEI=1;
 				break;
 
@@ -1342,6 +1343,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 
 			case 0x2e:
 				segOverride=1+1;			// CS
+        inRepStep=0;
         inEI=1;
 				break;
 
@@ -1470,6 +1472,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 
 			case 0x36:
         segOverride=2+1;			// SS
+        inRepStep=0;
         inEI=1;
 				break;
 
@@ -1572,6 +1575,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 
 			case 0x3e:
         segOverride=3+1;			// DS
+        inRepStep=0;
         inEI=1;
 				break;
 
@@ -1676,11 +1680,13 @@ aggFlagSWA:    // aux, zero, sign, parity
 #ifdef EXT_80386
 			case 0x64:
 				segOverride=4+1;			// FS
+        inRepStep=0;
         inEI=1;
 				break;
         
 			case 0x65:
 				segOverride=5+1;			// GS
+        inRepStep=0;
         inEI=1;
 				break;
 #endif
@@ -1817,17 +1823,23 @@ aggFlagSWA:    // aux, zero, sign, parity
 #endif
 				break;
 
-			case 0x6c:        // INSB
+			case 0x6c:        // INSB; NO OVVERIDE qua  https://www.felixcloutier.com/x86/ins:insb:insw:insd
+        if(inRep) {   // .. ma prefisso viene accettato cmq...
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
 				PutValue(MAKE20BITS(_es,_di),InValue(_dx));
         if(_f.Dir)
           _di--;
         else
           _di++;
-        if(inRep) 
-          inRep=3;
 				break;
 
 			case 0x6d:        // INSW
+        if(inRep) {   // .. ma prefisso viene accettato cmq...
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
 				PutShortValue(MAKE20BITS(_es,_di),InShortValue(_dx));
         if(_f.Dir) {
           _di-=2;   // anche 32bit??
@@ -1835,30 +1847,42 @@ aggFlagSWA:    // aux, zero, sign, parity
         else {
           _di+=2;
           }
-        if(inRep) 
-          inRep=3;
 				break;
 
 			case 0x6e:        // OUTSB
-				OutValue(_dx,GetValue(MAKE20BITS(_es,_di)));
+        // [FORSE ds può fare override!
+        if(inRep) {
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
+        if(segOverride) {
+          theDs=&segs.r[segOverride-1].x;
+          segOverride=0;
+          }
+				OutValue(_dx,GetValue(MAKE20BITS(*theDs,_di)));
         if(_f.Dir)
           _di--;
         else
           _di++;
-        if(inRep) 
-          inRep=3;
 				break;
 
 			case 0x6f:        // OUTSW
-				OutShortValue(_dx,GetShortValue(MAKE20BITS(_es,_di)));
+        // [FORSE ds può fare override!
+        if(inRep) {
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
+        if(segOverride) {
+          theDs=&segs.r[segOverride-1].x;
+          segOverride=0;
+          }
+				OutShortValue(_dx,GetShortValue(MAKE20BITS(*theDs,_di)));
         if(_f.Dir) {
           _di-=2;   // anche 32bit??
           }
         else {
           _di+=2;
           }
-        if(inRep) 
-          inRep=3;
 				break;
 #endif
 
@@ -2630,7 +2654,11 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
         
 			case 0xa4:      // MOVSB
-        // FORSE ds può fare override!
+        // [FORSE ds può fare override!
+        if(inRep) {
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
           segOverride=0;
@@ -2646,12 +2674,14 @@ aggFlagSWA:    // aux, zero, sign, parity
           _di++;
           _si++;
           }
-        if(inRep) 
-          inRep=3;
 				break;
 
 			case 0xa5:      // MOVSW
-        // FORSE ds può fare override!
+        // [FORSE ds può fare override!
+        if(inRep) {
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
           segOverride=0;
@@ -2667,19 +2697,17 @@ aggFlagSWA:    // aux, zero, sign, parity
           _di+=2;
           _si+=2;
           }
-        if(inRep) 
-          inRep=3;
 				break;
         
 			case 0xa6:      // CMPSB
-        // FORSE ds può fare override!
+        // [FORSE ds può fare override!
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
           segOverride=0;
           }
         else
           theDs=&_ds;
-				res3.b= GetValue(MAKE20BITS(_es,_di)) - GetValue(MAKE20BITS(*theDs,_si));
+				res3.x= (uint16_t)GetValue(MAKE20BITS(*theDs,_si)) - GetValue(MAKE20BITS(_es,_di));   // https://pdos.csail.mit.edu/6.828/2008/readings/i386/CMPS.htm
         if(_f.Dir) {
           _di--;
           _si--;
@@ -2692,14 +2720,14 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0xa7:      // CMPSW
-        // FORSE ds può fare override!
+        // [FORSE ds può fare override!
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
           segOverride=0;
           }
         else
           theDs=&_ds;
-				res3.x= GetShortValue(MAKE20BITS(_es,_di)) - GetShortValue(MAKE20BITS(*theDs,_si));
+				res3.d= (uint32_t)GetShortValue(MAKE20BITS(*theDs,_si)) - GetShortValue(MAKE20BITS(_es,_di));
         if(_f.Dir) {
           _di-=2;   // anche 32bit??
           _si-=2;
@@ -2728,46 +2756,83 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
         
 			case 0xaa:      // STOSB
-				PutValue(MAKE20BITS(_es,_di),_al);
+        // [FORSE es può fare override!
+        if(inRep) {
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
+        if(segOverride) {
+          theDs=&segs.r[segOverride-1].x;
+          segOverride=0;
+          }
+        else
+          theDs=&_es;
+				PutValue(MAKE20BITS(*theDs,_di),_al);
         if(_f.Dir)
           _di--;
         else
           _di++;
-        if(inRep) 
-          inRep=3;
 				break;
 
 			case 0xab:      // STOSW
-				PutShortValue(MAKE20BITS(_es,_di),_ax);
+        // [FORSE es può fare override!
+        if(inRep) {
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
+        if(segOverride) {
+          theDs=&segs.r[segOverride-1].x;
+          segOverride=0;
+          }
+        else
+          theDs=&_es;
+				PutShortValue(MAKE20BITS(*theDs,_di),_ax);
         if(_f.Dir)
           _di-=2;   // anche 32bit??
         else
           _di+=2;
-        if(inRep) 
-          inRep=3;
 				break;
 
-			case 0xac:      // LODSB; NO OVERRIDE qua!
-				_al=GetValue(MAKE20BITS(_ds,_si));
+			case 0xac:      // LODSB; [was NO OVERRIDE qua! ... v. bug 8088
+        // [FORSE ds può fare override!
+        if(inRep) {     // questo ha poco senso qua :)
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
+        if(segOverride) {
+          theDs=&segs.r[segOverride-1].x;
+          segOverride=0;
+          }
+        else
+          theDs=&_ds;
+				_al=GetValue(MAKE20BITS(*theDs,_si));
         if(_f.Dir)
           _si--;
         else
           _si++;
-        if(inRep)     // questo ha poco senso qua :)
-          inRep=3;
 				break;
 
 			case 0xad:      // LODSW
-				_ax=GetShortValue(MAKE20BITS(_ds,_si));
+        // [FORSE ds può fare override!
+        if(inRep) {
+          inRep=3;
+          inRepStep=segOverride ? 2 : 1;
+          }
+        if(segOverride) {
+          theDs=&segs.r[segOverride-1].x;
+          segOverride=0;
+          }
+        else
+          theDs=&_ds;
+				_ax=GetShortValue(MAKE20BITS(*theDs,_si));
         if(_f.Dir)
           _si-=2;   // anche 32bit??
         else
           _si+=2;
-        if(inRep) 
-          inRep=3;
 				break;
 
-			case 0xae:      // SCASB
+			case 0xae:      // SCASB; NO OVERRIDE qua!  http://www.nacad.ufrj.br/online/intel/vtune/users_guide/mergedProjects/analyzer_ec/mergedProjects/reference_olh/mergedProjects/instructions/instruct32_hh/vc285.htm
+        // però uno può infilarci il prefisso cmq, quindi v. inRep
 				res1.b= _al;
         res2.b= GetValue(MAKE20BITS(_es,_di));
 				res3.x= (uint16_t)res1.b - res2.b;
@@ -3975,7 +4040,7 @@ do_irq:
 				OutShortValue(_dx,_ax);
 				break;
 
-			case 0xf0:				// LOCK
+			case 0xf0:				// LOCK (prefisso...
 				break;
 
 			case 0xf1:
@@ -3993,7 +4058,7 @@ Trap:
 				break;
 
 			case 0xf4:
-			  DoHalt=1;
+			  CPUPins |= DoHalt;
 				break;
 
 			case 0xf5:				// CMC

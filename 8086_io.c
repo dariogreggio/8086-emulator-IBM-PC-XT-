@@ -45,7 +45,6 @@ uint8_t i6845RegR[18],i6845RegW[18];
 uint8_t i146818RegR[2],i146818RegW[2],i146818RAM[64];
 uint8_t FloppyContrRegR[8],FloppyContrRegW[8],FloppyFIFO[16],FloppyFIFOPtr;
 uint8_t Keyboard[1]={0};
-extern uint8_t DoReset,DoIRQ,DoNMI,DoHalt;
 uint8_t ColdReset=1;
 uint8_t ExtIRQNum=0;
 extern uint8_t Pipe1;

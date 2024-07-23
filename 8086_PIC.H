@@ -346,7 +346,7 @@ void LCDWrite(const char *);
 #define LED2 LATDbits.LATD0
 #define LED3 LATDbits.LATD11
 #define SW2  PORTFbits.RF0
-#define SW1  PORTBbits.RB0          // bah uso AREF tanto per...
+#define SW1  PORTBbits.RB0          // bah uso AREF tanto per...          
 
 #define	LCDDCTris  TRISBbits.TRISB3				// http://attach01.oss-us-west-1.aliyuncs.com/IC/Datasheet/11009.zip?spm=a2g0o.detail.1000023.9.70352ae94rI9S1&file=11009.zip
 #define	LCDRSTTris TRISBbits.TRISB10

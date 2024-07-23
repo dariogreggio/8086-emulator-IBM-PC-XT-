@@ -41,7 +41,7 @@
 BYTE fExit=0;
 BYTE debug=0;
 
-BYTE CPUPins=0;
+BYTE CPUPins=DoReset;
 extern BYTE ColdReset;
 
 extern BYTE ram_seg[];
@@ -214,9 +214,9 @@ int Emulate(int mode) {
         }
       VIDIRQ=0;
           
-      if(!SW2)        // test tastiera, me ne frego del repeat/rientro :)
+      if(!SW1)        // test tastiera, me ne frego del repeat/rientro :)
         keysFeedPtr=254;
-      if(!SW1)        // 
+      if(!SW2)        // 
         CPUPins |= DoReset;
 
       }
@@ -2266,8 +2266,8 @@ aggFlagSWA:    // aux, zero, sign, parity
       				_ip++;      // imm16...
 	            op2.reg16= &regs.r[Pipe2.rm].x;
               res1.x=*op2.reg16;
-							if(Pipe1 & 2) 			// sign extend
-								op1.mem = (int16_t)Pipe2.b.h;
+							if(Pipe1 & 2) 			// sign extend  BOH verificare come va sotto... 2024
+								op1.mem = (int16_t)(int8_t)Pipe2.b.h;
 							else
   							op1.mem=Pipe2.xm.w;   // CONTROLLARE!
 //        MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
@@ -4107,7 +4107,7 @@ Trap:
 								case 5:       // IMUL8
                   op1.reg8= &_al;
                   res1.b=*op1.reg8;
-									res3.x = (int16_t)res1.b*(int8_t)res2.b;
+									res3.x = (int16_t)(int8_t)res1.b*(int8_t)res2.b;
 									_ax=res3.x;			// non è bello ma...		
 									if(!_ah)				// verificare...
 										_f.Carry=_f.Ovf=0;
@@ -4221,7 +4221,7 @@ Trap:
 								case 5:       // IMUL8
         					op1.reg8= &_al;
                   res1.b=*op1.reg8;
-									res3.x = (int16_t)res1.b*(int8_t)res2.b;
+									res3.x = (int16_t)(int8_t)res1.b*(int8_t)res2.b;
 									_al=LOBYTE(res3.x);			// 
 									_ah=HIBYTE(res3.x);			// 
 									if(!_ah)				// verificare...

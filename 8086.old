@@ -4,10 +4,10 @@
 //per LSL ecc https://stackoverflow.com/questions/1712744/left-shift-overflow-on-68k-x86
 
 //v. per Ovf metodo usato su 68000 senza byte alto... provare
-// la cosa di inEI... chissà... e anche in Z80; però SERVE su segment override!! (ovvio; dice anche che i primi 8088 avevano questo bug, vedi CPU TEST in BIOS https://cosmodoc.org/topics/processor-detection/ )  
+// la cosa di inEI... chissÃ ... e anche in Z80; perÃ² SERVE su segment override!! (ovvio; dice anche che i primi 8088 avevano questo bug, vedi CPU TEST in BIOS https://cosmodoc.org/topics/processor-detection/ )  
 
 // (ok con BIOS migliore, per minibios serve la patch [#warning NO lo fa ancora 14/7, rivedere i clear 8259
-//  Più o meno ora va tutto [, anche se dopo la schermata sembra piantarsi in eccezione (a volte) .. credo sia ancora un problema di interrupt e hw]
+//  PiÃ¹ o meno ora va tutto [, anche se dopo la schermata sembra piantarsi in eccezione (a volte) .. credo sia ancora un problema di interrupt e hw]
 //   [ora VA! 21/7/24, non esce la scritta "press setup" ma direi ok, verificare bios se si vuole (ora il miniBIOS si blocca dopo il test memoria... 16/7/24
 //   [ORA VA!! c'era altro bug istruzioni 20/7/24 (e con ottimizzazioni 1 e 2 si schianta... sembra aspettare la tastiera o altro, credo ancora problemi hw
 //   [ OK 20/7/24 [no! v. irq timer (in debug va ma in release riporta 0K RAM e System Error 03, senza schiantarsi...
@@ -55,7 +55,7 @@ union PIPE Pipe2;
 
 
 int Emulate(int mode) {
-  // in termini di memoria usata, tenere locali le variabili è molto meglio...
+  // in termini di memoria usata, tenere locali le variabili Ã¨ molto meglio...
 #ifndef EXT_80386
 	union __attribute__((__packed__)) REGISTERS {
 		BYTE b[16];
@@ -223,7 +223,7 @@ int Emulate(int mode) {
 //[#warning VERIFICARE dopo bug fix; PATCH pulizia IRQ, manca out 0x20, 0x20 nel bios... 2024 MA TANTO NON VA LO STESSO PORCOCRISTO 14/7/24]
     if(i8259RegR[0] & 0x1) {
       CPUPins |= DoIRQ;
-// [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
+// [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e cosÃ¬ fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
       ExtIRQNum=8;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
       i8259RegR[0] &= ~0x1;
       }
@@ -299,7 +299,7 @@ int Emulate(int mode) {
       case 1:   // REPZ
         _cx--;
         if(_f.Zero && _cx)
-          _ip -= inRepStep;      // v. bug 8088!! così dovrebbe andare.. 22/7/24
+          _ip -= inRepStep;      // v. bug 8088!! cosÃ¬ dovrebbe andare.. 22/7/24
         else
           inRep=0;
         break;
@@ -332,7 +332,7 @@ int Emulate(int mode) {
       inEI=0;
 
     
-     LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte più veloci
+     LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte piÃ¹ veloci
                     // 500-1uS 22/7/24 con O2! [.9-2uS 16/7/24 senza ottimizzazioni (con O1 si pianta emulatore...
      
 #ifdef USING_SIMULATOR
@@ -350,28 +350,28 @@ int Emulate(int mode) {
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b+res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b;      // cast cosÃ¬ ottengo il carry!
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
                 goto aggFlagAB;
                 break;
               case 1:
                 res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
                 res2.x=*op1.reg16;
-        				res3.d = (uint32_t)res1.x+res2.x;   // cast così ottengo il carry!
+        				res3.d = (uint32_t)res1.x+res2.x;   // cast cosÃ¬ ottengo il carry!
                 PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
                 goto aggFlagAW;
                 break;
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-								res3.x = (uint16_t)res1.b+res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8 = res3.b;
                 goto aggFlagAB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
                 res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-        				res3.d = (uint32_t)res1.x+res2.x;   // cast così ottengo il carry!
+        				res3.d = (uint32_t)res1.x+res2.x;   // cast cosÃ¬ ottengo il carry!
                 *op1.reg16 = res3.x;
                 goto aggFlagAW;
                 break;
@@ -386,28 +386,28 @@ int Emulate(int mode) {
               case 0:
                 res1.b=*op2.reg8;
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b+res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b;      // cast cosÃ¬ ottengo il carry!
                 *op2.reg8=res3.b;
                 goto aggFlagAB;
                 break;
               case 1:
                 res1.x=*op2.reg16;
                 res2.x=*op1.reg16;
-        				res3.d = (uint32_t)res1.x+res2.x;   // cast così ottengo il carry!
+        				res3.d = (uint32_t)res1.x+res2.x;   // cast cosÃ¬ ottengo il carry!
                 *op2.reg16=res3.x;
                 goto aggFlagAW;
                 break;
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=*op2.reg8;
-								res3.x = (uint16_t)res1.b+res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8=res3.b;
                 goto aggFlagAB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
                 res2.x=*op2.reg16;
-        				res3.d = (uint32_t)res1.x+res2.x;   // cast così ottengo il carry!
+        				res3.d = (uint32_t)res1.x+res2.x;   // cast cosÃ¬ ottengo il carry!
                 *op1.reg16=res3.x;
                 goto aggFlagAW;
                 break;
@@ -419,7 +419,7 @@ int Emulate(int mode) {
 			case 4:       // ADDB immediate
         res1.b=_al;
         res2.b=Pipe2.b.l;
-				res3.x = (uint16_t)res1.b+res2.b;      // cast così ottengo il carry!
+				res3.x = (uint16_t)res1.b+res2.b;      // cast cosÃ¬ ottengo il carry!
         _al = res3.b;
 				_ip++;
 				
@@ -458,7 +458,7 @@ aggFlagBZ:    // zero, sign, parity
 			case 5:       // ADDW immediate
         res1.x=_ax;
         res2.x=Pipe2.x.l;
-				res3.d = (uint32_t)res1.x+res2.x;   // cast così ottengo il carry!
+				res3.d = (uint32_t)res1.x+res2.x;   // cast cosÃ¬ ottengo il carry!
         _ax = res3.x;
 				_ip+=2;
         
@@ -490,7 +490,7 @@ aggFlagWZ:    // zero, sign, parity
         par ^= parn;
         parn= par >> 4;
         par ^= parn;
-//        parn= par >> 8;   // no! dice che cmq è solo sul byte basso https://stackoverflow.com/questions/29292455/parity-of-a-number-assembly-8086
+//        parn= par >> 8;   // no! dice che cmq Ã¨ solo sul byte basso https://stackoverflow.com/questions/29292455/parity-of-a-number-assembly-8086
 //        par ^= parn;
         _f.Parity=par & 1;
         }
@@ -521,7 +521,7 @@ aggFlagWZ:    // zero, sign, parity
 #ifdef RAM_DOS 
           case 0x2:      // read-disk, pseudo-load MBR :)
             switch(_al) {
-              case 0:   // (pseudo) settori :) ma è in CH/CL...
+              case 0:   // (pseudo) settori :) ma Ã¨ in CH/CL...
                 memcpy(&ram_seg[_bx /*0x007c00*/],MBR, 512 /*sizeof(MBR)*/);
                 _ah=0;
                 _al=1  /*sizeof(MBR)/512*/;
@@ -887,7 +887,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
         _ip+=2;
         */
 #ifdef EXT_80386
-        			// e se segue b4 b5 è fs o gs!
+        			// e se segue b4 b5 Ã¨ fs o gs!
 #define WORKING_REG regs.r[(Pipe2.reg].x      // CONTROLLARE
 				i=GetShortValue(Pipe2.xm.w);
 				WORKING_REG=GetShortValue(i);
@@ -907,7 +907,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
                 goto aggFlagAB;
                 break;
@@ -921,7 +921,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8 = res3.b;
                 goto aggFlagAB;
                 break;
@@ -943,7 +943,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 0:
                 res1.b=*op2.reg8;
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 *op2.reg8=res3.b;
                 goto aggFlagAB;
                 break;
@@ -957,7 +957,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=*op2.reg8;
-								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8=res3.b;
                 goto aggFlagAB;
                 break;
@@ -976,7 +976,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 			case 0x14:        // ADC
         res1.b=_al;
         res2.b=Pipe2.b.l;
-				res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast così ottengo il carry!
+				res3.x = (uint16_t)res1.b+res2.b+_f.Carry;      // cast cosÃ¬ ottengo il carry!
         _al = res3.b;
 				_ip++;
         goto aggFlagAB;
@@ -985,7 +985,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 			case 0x15:        // ADC
         res1.x=_ax;
         res2.x=Pipe2.x.l;
-				res3.d = (uint32_t)res1.x+res2.x+_f.Carry;   // cast così ottengo il carry!
+				res3.d = (uint32_t)res1.x+res2.x+_f.Carry;   // cast cosÃ¬ ottengo il carry!
         _ax = res3.x;
 				_ip+=2;
         goto aggFlagAW;
@@ -1000,7 +1000,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
                 goto aggFlagAB;
                 break;
@@ -1014,7 +1014,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8 = res3.b;
                 goto aggFlagAB;
                 break;
@@ -1036,7 +1036,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 0:
                 res1.b=*op2.reg8;
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 *op2.reg8=res3.b;
                 goto aggFlagSB;
                 break;
@@ -1050,7 +1050,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=*op2.reg8;
-								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8=res3.b;
                 goto aggFlagSB;
                 break;
@@ -1069,7 +1069,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 			case 0x1c:        // SBB
         res1.b=_al;
         res2.b=Pipe2.b.l;
-				res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast così ottengo il carry!
+				res3.x = (uint16_t)res1.b-res2.b-_f.Carry;      // cast cosÃ¬ ottengo il carry!
         _al = res3.b;
 				_ip++;
         goto aggFlagSB;
@@ -1078,7 +1078,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 			case 0x1d:        // SBB
         res1.x=_ax;
         res2.x=Pipe2.x.l;
-				res3.d = (uint32_t)res1.x-res2.x-_f.Carry;   // cast così ottengo il carry!
+				res3.d = (uint32_t)res1.x-res2.x-_f.Carry;   // cast cosÃ¬ ottengo il carry!
         _ax = res3.x;
 				_ip+=2;
         goto aggFlagSW;
@@ -1222,7 +1222,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
                 goto aggFlagSB;
                 break;
@@ -1236,7 +1236,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8 = res3.b;
                 goto aggFlagSB;
                 break;
@@ -1258,7 +1258,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 0:
                 res1.b=*op2.reg8;
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 *op2.reg8=res3.b;
                 goto aggFlagSB;
                 break;
@@ -1272,7 +1272,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=*op2.reg8;
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 *op1.reg8=res3.b;
                 goto aggFlagSB;
                 break;
@@ -1291,7 +1291,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 			case 0x2c:      // SUBB
         res1.b=_al;
         res2.b=Pipe2.b.l;
-				res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+				res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
         _al = res3.b;
 				_ip++;
 
@@ -1317,7 +1317,7 @@ aggFlagSBA:    // aux, zero, sign, parity
 			case 0x2d:			// SUBW
         res1.x=_ax;
         res2.x=Pipe2.x.l;
-				res3.d = (uint32_t)res1.x-res2.x;   // cast così ottengo il carry!
+				res3.d = (uint32_t)res1.x-res2.x;   // cast cosÃ¬ ottengo il carry!
         _ax = res3.x;
 				_ip+=2;
         
@@ -1499,7 +1499,7 @@ aggFlagSWA:    // aux, zero, sign, parity
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 goto aggFlagSB;
                 break;
               case 1:
@@ -1511,7 +1511,7 @@ aggFlagSWA:    // aux, zero, sign, parity
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 goto aggFlagSB;
                 break;
               case 3:
@@ -1531,7 +1531,7 @@ aggFlagSWA:    // aux, zero, sign, parity
               case 0:
                 res1.b=*op2.reg8;
                 res2.b=*op1.reg8;
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 goto aggFlagSB;
                 break;
               case 1:
@@ -1543,7 +1543,7 @@ aggFlagSWA:    // aux, zero, sign, parity
               case 2:
                 res1.b=*op1.reg8;
                 res2.b=*op2.reg8;
-								res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+								res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
                 goto aggFlagSB;
                 break;
               case 3:
@@ -1560,7 +1560,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 			case 0x3c:      // CMPB
         res1.b=_al;
         res2.b=Pipe2.b.l;
-				res3.x = (uint16_t)res1.b-res2.b;      // cast così ottengo il carry!
+				res3.x = (uint16_t)res1.b-res2.b;      // cast cosÃ¬ ottengo il carry!
 				_ip++;
         goto aggFlagSB;
 				break;
@@ -1568,7 +1568,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 			case 0x3d:			// CMPW
         res1.x=_ax;
         res2.x=Pipe2.x.l;
-				res3.d = (uint32_t)res1.x-res2.x;   // cast così ottengo il carry!
+				res3.d = (uint32_t)res1.x-res2.x;   // cast cosÃ¬ ottengo il carry!
 				_ip+=2;
         goto aggFlagSW;
 				break;
@@ -1850,7 +1850,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0x6e:        // OUTSB
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -1867,7 +1867,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0x6f:        // OUTSW
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -1988,7 +1988,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 			case 0x83:				// ADD ecc rm16, immediate16 con sign-extend
         GetMorePipe(MAKE20BITS(_cs,_ip-1));   // andrebbe fatto solo se necessario... RISISTEMARE!
         _ip++;
-				if(!(Pipe1 & 2)) 			// vuol dire che l'operando è 8bit ma esteso a 16
+				if(!(Pipe1 & 2)) 			// vuol dire che l'operando Ã¨ 8bit ma esteso a 16
           //ma non so bene che fa 82... v. anche sotto
           _ip++;
         
@@ -2654,7 +2654,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
         
 			case 0xa4:      // MOVSB
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -2677,7 +2677,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0xa5:      // MOVSW
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -2700,7 +2700,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
         
 			case 0xa6:      // CMPSB
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
           segOverride=0;
@@ -2720,7 +2720,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0xa7:      // CMPSW
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
           segOverride=0;
@@ -2756,7 +2756,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
         
 			case 0xaa:      // STOSB
-        // [FORSE es può fare override!
+        // [FORSE es puÃ² fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -2775,7 +2775,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0xab:      // STOSW
-        // [FORSE es può fare override!
+        // [FORSE es puÃ² fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -2794,7 +2794,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0xac:      // LODSB; [was NO OVERRIDE qua! ... v. bug 8088
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(inRep) {     // questo ha poco senso qua :)
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -2813,7 +2813,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0xad:      // LODSW
-        // [FORSE ds può fare override!
+        // [FORSE ds puÃ² fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -2832,7 +2832,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 
 			case 0xae:      // SCASB; NO OVERRIDE qua!  http://www.nacad.ufrj.br/online/intel/vtune/users_guide/mergedProjects/analyzer_ec/mergedProjects/reference_olh/mergedProjects/instructions/instruct32_hh/vc285.htm
-        // però uno può infilarci il prefisso cmq, quindi v. inRep
+        // perÃ² uno puÃ² infilarci il prefisso cmq, quindi v. inRep
 				res1.b= _al;
         res2.b= GetValue(MAKE20BITS(_es,_di));
 				res3.x= (uint16_t)res1.b - res2.b;
@@ -2939,7 +2939,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 							} 
             // usare COMPUTE_RM_OFS 2024
             
-						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione è variabile... MIGLIORARE!
+						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione Ã¨ variabile... MIGLIORARE!
 						res3.b=res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
 						i=res2.b=op1.mem;
 						switch(Pipe2.reg) {
@@ -3001,7 +3001,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 								break;
 							}
 						if(i==1)
-              _f.Ovf=(res3.b ^ *op1.reg8) & 0x80 ? 1 : 0;		// Ovf=1 se il segno è preservato
+              _f.Ovf=(res3.b ^ *op1.reg8) & 0x80 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
             if(i)
               goto aggFlagBZ;
@@ -3071,7 +3071,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 								break;
 							}
 						if(i==1)
-  						_f.Ovf=(res3.b ^ *op2.reg8) & 0x80 ? 1 : 0;		// Ovf=1 se il segno è preservato
+  						_f.Ovf=(res3.b ^ *op2.reg8) & 0x80 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						*op2.reg8=res3.b;
 						if(i)
               goto aggFlagBZ;
@@ -3135,7 +3135,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 							}
             // usare COMPUTE_RM_OFS 2024
             
-						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione è variabile... migliorare!
+						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione Ã¨ variabile... migliorare!
 						res3.x=res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
 						i=res2.b=op1.mem;
 						switch(Pipe2.reg) {
@@ -3197,7 +3197,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 								break;
 							}
 						if(i==1)
-  						_f.Ovf=(res3.x ^ *op1.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno è preservato
+  						_f.Ovf=(res3.x ^ *op1.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
             if(i)
               goto aggFlagWZ;
@@ -3267,7 +3267,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 								break;
 							}
 						if(i==1)
-  						_f.Ovf=(res3.x ^ *op2.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno è preservato
+  						_f.Ovf=(res3.x ^ *op2.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						*op2.reg16=res3.x;
             if(i)
               goto aggFlagWZ;
@@ -3276,7 +3276,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				break;
 #endif
         
-#ifndef EXT_80186     // bah, così dicono..
+#ifndef EXT_80186     // bah, cosÃ¬ dicono..
 			case 0xc0:
 #endif
 
@@ -3285,7 +3285,7 @@ aggFlagSWA:    // aux, zero, sign, parity
         _sp+=Pipe2.x.l;
 				break;
         
-#ifndef EXT_80186     // bah, così dicono..
+#ifndef EXT_80186     // bah, cosÃ¬ dicono..
 			case 0xc1:
 #endif
 
@@ -3385,7 +3385,7 @@ aggFlagSWA:    // aux, zero, sign, parity
               PutShortValue(MAKE20BITS(*theDs,op2.mem),op1.mem);
 							}
             break;
-          case 3:		// non è chiaro se c'è qua...
+          case 3:		// non Ã¨ chiaro se c'Ã¨ qua...
             if(!(Pipe1 & 1)) {
 	            op1.reg8= Pipe2.b.l & 0x4 ? &regs.r[Pipe2.b.l & 0x3].b.h : &regs.r[Pipe2.b.l & 0x3].b.l;
               op2.mem=Pipe2.bd[immofs];
@@ -3393,7 +3393,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 							}
 						else {
 							op1.reg16= &regs.r[Pipe2.rm].x;
-							GetPipe(MAKE20BITS(_cs,_ip++));		// mi sposto avanti per il 6°byte; //verificare...
+							GetPipe(MAKE20BITS(_cs,_ip++));		// mi sposto avanti per il 6Â°byte; //verificare...
               op2.mem=MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
               *op2.reg16=op2.mem;
               }
@@ -3431,7 +3431,7 @@ aggFlagSWA:    // aux, zero, sign, parity
         break;
 #endif
         
-#ifndef EXT_80186     // bah, così dicono..
+#ifndef EXT_80186     // bah, cosÃ¬ dicono..
 			case 0xc8:
 #endif
 			case 0xca:      // RETF
@@ -3440,7 +3440,7 @@ aggFlagSWA:    // aux, zero, sign, parity
         _sp+=Pipe2.x.l;
         break;
         
-#ifndef EXT_80186     // bah, così dicono..
+#ifndef EXT_80186     // bah, cosÃ¬ dicono..
 			case 0xc9:
 #endif
 			case 0xcb:
@@ -3455,7 +3455,7 @@ Return32:
 				break;
 
 			case 0xcd:
-    /*IF ((vector_number « 2) + 3) is not within IDT limit
+    /*IF ((vector_number Â« 2) + 3) is not within IDT limit
         THEN #GP; FI; 
     IF stack not large enough for a 6-byte return information
         THEN #SS; FI;*/
@@ -3480,7 +3480,7 @@ do_irq:
             _cs=GetShortValue((i *4) +2);
             }
           else {
-// tecnicamente è un eccezione, non trap...            _f.Trap=1;
+// tecnicamente Ã¨ un eccezione, non trap...            _f.Trap=1;
             }
           }
         else {
@@ -3573,7 +3573,7 @@ do_irq:
 									}
 								break;
 							}
-						_f.Ovf=(res1.b ^ GetValue(MAKE20BITS(*theDs,op2.mem)) ) & 0x80 ? 1 : 0;		// Ovf=1 se il segno è preservato
+						_f.Ovf=(res1.b ^ GetValue(MAKE20BITS(*theDs,op2.mem)) ) & 0x80 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						PutValue(MAKE20BITS(*theDs,op2.mem),res1.b);
             break;
           case 3:
@@ -3638,7 +3638,7 @@ do_irq:
 									}
 								break;
 							}
-						_f.Ovf=(res1.b ^ *op2.reg8) & 0x80 ? 1 : 0;		// Ovf=1 se il segno è preservato
+						_f.Ovf=(res1.b ^ *op2.reg8) & 0x80 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						*op2.reg8=res1.b;
 						break;
 					}
@@ -3716,7 +3716,7 @@ do_irq:
 									}
 								break;
 							}
-						_f.Ovf=(res1.x ^ GetShortValue(MAKE20BITS(*theDs,op2.mem)) ) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno è preservato
+						_f.Ovf=(res1.x ^ GetShortValue(MAKE20BITS(*theDs,op2.mem)) ) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						PutShortValue(MAKE20BITS(*theDs,op2.mem),res1.x);
             break;
           case 3:
@@ -3781,7 +3781,7 @@ do_irq:
 									}
 								break;
 							}
-						_f.Ovf=(res1.x ^ *op2.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno è preservato
+						_f.Ovf=(res1.x ^ *op2.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 						*op2.reg16=res1.x;
 						break;
 					}
@@ -3789,7 +3789,7 @@ do_irq:
 
 			case 0xd4:      // AAM
         i=_al;
-        _ah=i / Pipe2.b.l;    // 10 fisso in teoria, ma si può usare genericamente come base per la conversione...
+        _ah=i / Pipe2.b.l;    // 10 fisso in teoria, ma si puÃ² usare genericamente come base per la conversione...
         _al=i % Pipe2.b.l;    //
         res3.x=_ax;
         _ip++;
@@ -3805,7 +3805,7 @@ do_irq:
         goto aggFlagBZ;			// 
 				break;
         
-			case 0xd6:      // dice che non è documentata...
+			case 0xd6:      // dice che non Ã¨ documentata...
 				_al=_f.Carry ? 0xff : 0;
 				break;
 
@@ -4078,7 +4078,7 @@ Trap:
 							switch(Pipe2.reg) {
 								case 0:       // TEST
 								case 1:       // TEST forse....
-    							GetPipe(MAKE20BITS(_cs,_ip-2));		// mi sposto per il 6°byte; //migliorare...
+    							GetPipe(MAKE20BITS(_cs,_ip-2));		// mi sposto per il 6Â°byte; //migliorare...
                   _ip++;
         					res1.b = Pipe2.b.h;
 									res3.b = res1.b & res2.b;
@@ -4098,7 +4098,7 @@ Trap:
                   op1.reg8= &_al;
                   res1.b=*op1.reg8;
 									res3.x = (uint16_t)res1.b*res2.b;
-									_ax=res3.x;			// non è bello ma...		
+									_ax=res3.x;			// non Ã¨ bello ma...		
 									if(!_ah)				// verificare...
 										_f.Carry=_f.Ovf=0;
 									else
@@ -4108,7 +4108,7 @@ Trap:
                   op1.reg8= &_al;
                   res1.b=*op1.reg8;
 									res3.x = (int16_t)(int8_t)res1.b*(int8_t)res2.b;
-									_ax=res3.x;			// non è bello ma...		
+									_ax=res3.x;			// non Ã¨ bello ma...		
 									if(!_ah)				// verificare...
 										_f.Carry=_f.Ovf=0;
 									else
@@ -4116,7 +4116,7 @@ Trap:
 									break;
 								case 6:       // DIV8
 									res3.b = (uint16_t)_ax / res2.b;
-									_ah = _ax % res2.b;			// non è bello ma...
+									_ah = _ax % res2.b;			// non Ã¨ bello ma...
 									_al = res3.b;
 									break;
 								case 7:       // IDIV8
@@ -4131,7 +4131,7 @@ Trap:
 							switch(Pipe2.reg) {
 								case 0:       // TEST
 								case 1:       // TEST forse....
-    							GetPipe(MAKE20BITS(_cs,_ip-2));		// mi sposto per il 6°byte; //migliorare...
+    							GetPipe(MAKE20BITS(_cs,_ip-2));		// mi sposto per il 6Â°byte; //migliorare...
                   _ip+=2;
         					op1.mem = Pipe2.xm.w;
 									res3.x = res1.x & res2.x;
@@ -4152,7 +4152,7 @@ Trap:
                   res1.x=*op1.reg16;
 									res3.d = (uint32_t)res1.x*res2.x;
 									_ax = LOWORD(res3.d);			// 
-									_dx = HIWORD(res3.d);			// non è bello ma...		
+									_dx = HIWORD(res3.d);			// non Ã¨ bello ma...		
 									if(!_dx)				// verificare...
 										_f.Carry=_f.Ovf=0;
 									else
@@ -4163,7 +4163,7 @@ Trap:
                   res1.x=*op1.reg16;
 									res3.d = (int32_t)res1.x*(int16_t)res2.x;
 									_ax = LOWORD(res3.d);			// 
-									_dx = HIWORD(res3.d);			// non è bello ma...		
+									_dx = HIWORD(res3.d);			// non Ã¨ bello ma...		
 									if(!_dx)				// verificare...
 										_f.Carry=_f.Ovf=0;
 									else
@@ -4171,7 +4171,7 @@ Trap:
 									break;
 								case 6:       // DIV16
 									res3.x = (uint16_t)MAKELONG(_ax,_dx) / res2.x;
-									_dx = (uint16_t)MAKELONG(_ax,_dx) % res2.x;			// non è bello ma...
+									_dx = (uint16_t)MAKELONG(_ax,_dx) % res2.x;			// non Ã¨ bello ma...
 		              _ax = res3.x;
 									break;
 								case 7:       // IDIV16
@@ -4232,7 +4232,7 @@ Trap:
         // DIV NON aggiorna flag!
 								case 6:       // DIV8
 									res3.b = _ax / res2.b;
-									_ah = _ax % res2.b;			// non è bello ma...
+									_ah = _ax % res2.b;			// non Ã¨ bello ma...
 									_al = res3.b;
 									break;
 								case 7:       // IDIV8
@@ -4271,7 +4271,7 @@ Trap:
                   res1.x=*op1.reg16;
 									res3.d = (uint32_t)res1.x*res2.x;
 									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non è bello ma...		
+									_dx=HIWORD(res3.d);			// non Ã¨ bello ma...		
 									if(!_dx)				// verificare...
 										_f.Carry=_f.Ovf=0;
 									else
@@ -4282,7 +4282,7 @@ Trap:
                   res1.x=*op1.reg16;
 									res3.d = (int32_t)res1.x*(int16_t)res2.x;
 									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non è bello ma...		
+									_dx=HIWORD(res3.d);			// non Ã¨ bello ma...		
 									if(!_dx)				// verificare...
 										_f.Carry=_f.Ovf=0;
 									else
@@ -4291,7 +4291,7 @@ Trap:
         // DIV NON aggiorna flag!
 								case 6:       // DIV16
 									res3.x = MAKELONG(_ax,_dx) / res2.x;
-									_dx = MAKELONG(_ax,_dx) % res2.x;			// non è bello ma...
+									_dx = MAKELONG(_ax,_dx) % res2.x;			// non Ã¨ bello ma...
 		              _ax = res3.x;
 									break;
 								case 7:       // IDIV16
@@ -4436,14 +4436,14 @@ Trap:
 								case 3:			// CALL FAR uintDWORD32_t PTR
 									PUSH_STACK(_cs);
 									PUSH_STACK(_ip+2);
-									_ip=*op1.reg16;			// VERIFICARE COME SI FA! o forse non c'è
+									_ip=*op1.reg16;			// VERIFICARE COME SI FA! o forse non c'Ã¨
 									_cs=*op1.reg16+2;
 									break;
 								case 4:       // JMP DWORD PTR jmp [100]
 									_ip=*op1.reg16;
 									break;
 								case 5:       // JMP FAR DWORD PTR
-									_ip=*op1.reg16;			// VERIFICARE COME SI FA! o forse non c'è
+									_ip=*op1.reg16;			// VERIFICARE COME SI FA! o forse non c'Ã¨
 									_cs=*op1.reg16+2;
 									break;
 								case 6:       // PUSH
@@ -4666,7 +4666,7 @@ void computeRS16(void) {
         }
       break;
     }
-  _f.Ovf=(res1.x ^ *op2.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno è preservato
+  _f.Ovf=(res1.x ^ *op2.reg16) & 0x8000 ? 1 : 0;		// Ovf=1 se il segno Ã¨ preservato
 
   }
 #endif

@@ -48,17 +48,19 @@ BYTE CPUDivider=2000000L/CPU_CLOCK_DIVIDER;
 extern BYTE ColdReset;
 
 extern BYTE ram_seg[];
-extern BYTE CGAreg[];
-extern uint8_t i8259RegR[],i8259RegW[],i8259ICW[]
+extern BYTE CGAreg[],MDAreg[];
+extern uint8_t i8259ICW[],i8259IMR,i8259IRR,i8259ISR
 #ifdef PCAT
-,i8259Reg2R[],i8259Reg2W[],i8259ICW2[]
+	,i8259ICW2[],i8259IMR2,i8259IRR2,i8259ISR2
 #endif
 	;
 extern uint8_t MachineFlags,MachineFlags2;
 extern uint16_t i8253TimerR[],i8253TimerW[];
 extern uint8_t i8253RegR[],i8253RegW[],i8253Mode[];
-extern BYTE ExtIRQNum;
-extern SWORD VICRaster;
+extern uint8_t i8255RegR[];
+extern uint8_t floppyTimer;
+extern uint8_t ExtIRQNum;
+extern uint16_t VICRaster;
 
 BYTE Pipe1;
 union PIPE Pipe2;
@@ -77,6 +79,7 @@ volatile BYTE VIDIRQ=0;
 	union REGISTERS16 segs;
 #else
 	union REGISTERS32 segs;
+	union SEGMENT_DESCRIPTOR seg_descr[6];
 #endif
 
 
@@ -86,16 +89,16 @@ volatile BYTE VIDIRQ=0;
 #define ZERO_16() (!res3.x)
 #define AUX_ADD_8() (((res1.b & 0xf) + (res2.b & 0xf)) & 0xf0 ? 1 : 0)
 /*1-carry out from bit 7 on addition or borrow into bit 7 on subtraction
-0-otherwise*/
+	0-otherwise*/
 #define AUX_ADD_16() (((res1.b & 0xf) + (res2.b & 0xf)) & 0xf0 ? 1 : 0)		// SEMPRE byte basso
 /*AUX flag: 1-carry out from bit 3 on addition or borrow into bit 3 on subtraction
-0-otherwise*/
+	0-otherwise*/
 #define AUX_SUB_8() (((res1.b & 0xf) - (res2.b & 0xf)) & 0xf0 ? 1 : 0)
 /*AUX flag: 1-carry out from bit 3 on addition or borrow into bit 3 on subtraction
-0-otherwise*/
+	0-otherwise*/
 #define AUX_SUB_16() (((res1.b & 0xf) - (res2.b & 0xf)) & 0xf0 ? 1 : 0)   // SEMPRE byte basso
 /*1-carry out from bit 7 on addition or borrow into bit 7 on subtraction
-0-otherwise*/
+	0-otherwise*/
 #if 0
 #define CARRY_ADD_8() (res3.x & 0xff00 ? 1 : 0)
 #define OVF_ADD_8() (!!(res3.x & 0xff00) != !!((res3.b & 0x80) ^ (res1.b & 0x80) ^ (res2.b & 0x80)))
@@ -134,16 +137,16 @@ if the carry in does not equal the carry out.*/
 		// per overflow  https://stackoverflow.com/questions/8034566/overflow-and-carry-flags-on-z80
 #endif
 
-/*// da Makushi o come cazzo si chiama :D
+/*// da Makushi 68000 o come cazzo si chiama :D
 // res2 è Source e res1 è Dest ossia quindi res3=Result  OCCHIO QUA*/
-#define CARRY_ADD_8() (!!(((res2.b & res1.b) | (~res3.b & (res2.b | res1.b))) & 0x80))		// ((S & D) | (~R & (S | D)))
-#define OVF_ADD_8()  (!!(((res2.b ^ res3.b) & (res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
-#define CARRY_ADD_16() (!!(((res2.x & res1.x) | (~res3.x &	(res2.x | res1.x))) & 0x8000))
-#define OVF_ADD_16() (!!(((res2.x ^ res3.x) & (res1.x ^ res3.x)) & 0x8000))
-#define CARRY_SUB_8() (!!(((res2.b & res3.b) | (~res1.b & (res2.b | res3.b))) & 0x80))		// ((S & R) | (~D & (S | R)))
-#define OVF_SUB_8()  (!!(((res2.b ^ res1.b) & (res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
-#define CARRY_SUB_16() (!!(((res2.x & res3.x) | (~res1.x &	(res2.x | res3.x))) & 0x8000))
-#define OVF_SUB_16() (!!(((res2.x ^ res1.x) & (res3.x ^ res1.x)) & 0x8000))
+#define CARRY_ADD_8()  (!!(((res2.b & res1.b) | (~res3.b & (res2.b | res1.b))) & 0x80))		// ((S & D) | (~R & (S | D)))
+#define OVF_ADD_8()    (!!(((res2.b ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
+#define CARRY_ADD_16() (!!(((res2.x & res1.x) | (~res3.x & (res2.x | res1.x))) & 0x8000))
+#define OVF_ADD_16()   (!!(((res2.x ^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
+#define CARRY_SUB_8()  (!!(((res2.b & res3.b) | (~res1.b & (res2.b | res3.b))) & 0x80))		// ((S & R) | (~D & (S | R)))
+#define OVF_SUB_8()    (!!(((res2.b ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
+#define CARRY_SUB_16() (!!(((res2.x & res3.x) | (~res1.x & (res2.x | res3.x))) & 0x8000))
+#define OVF_SUB_16()   (!!(((res2.x ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
 
 int Emulate(int mode) {
   // in termini di memoria usata, tenere locali le variabili è molto meglio...
@@ -195,7 +198,7 @@ int Emulate(int mode) {
 	union REGISTRO_F _f1;
   uint16_t inRep=0;
 	uint8_t inRepStep=0;
-  BYTE segOverride=0,segOverrideIRQ=0,inEI=0,IRQLevel=32;
+  BYTE segOverride=0,segOverrideIRQ=0,inEI=0;
 	uint8_t inLock=0;
 	uint16_t *theDs;
 #ifdef EXT_80386
@@ -209,6 +212,8 @@ int Emulate(int mode) {
   BYTE immofs;
   register uint16_t i;
 	int c=0;
+	uint8_t timerDivider=0;
+
 
 
 
@@ -273,6 +278,7 @@ int Emulate(int mode) {
         keysFeedPtr=254;
       if(!SW2)        // 
         CPUPins |= DoReset;
+      }
 
 //questa parte equivale a INTA sequenza ecc  http://www.icet.ac.in/Uploads/Downloads/3_mod3.pdf
     if(i8259IRR & 0x1) {
@@ -280,28 +286,28 @@ int Emulate(int mode) {
 // [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
       ExtIRQNum=8;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
 			i8259ISR |= 1;	i8259IRR &= ~1;
-			if(i8259ICW[3] & B8(00000010))		// AutoEOI
+			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR &= ~0x1;
       }
     if(i8259IRR & 0x2) {
       CPUPins |= DoIRQ;
       ExtIRQNum=9;      // IRQ 9 Keyboard
 			i8259ISR |= 2;	i8259IRR &= ~2;
-			if(i8259ICW[3] & B8(00000010))		// AutoEOI
+			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR &= ~0x2;
       }
     if(i8259IRR & 0x10) {
       CPUPins |= DoIRQ;
       ExtIRQNum=0x0c;      // IRQ 12 COM1
 			i8259ISR |= 0x10;	i8259IRR &= ~0x10;
-			if(i8259ICW[3] & B8(00000010))		// AutoEOI
+			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR &= ~0x10;
       }
     if(i8259IRR & 0x40) {
       CPUPins |= DoIRQ;
       ExtIRQNum=14;      // IRQ 6 Floppy disc
 			i8259ISR |= 0x40;	i8259IRR &= ~0x40;
-			if(i8259ICW[3] & B8(00000010))		// AutoEOI
+			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR &= ~0x40;
       }
 #ifdef PCAT
@@ -309,11 +315,11 @@ int Emulate(int mode) {
       CPUPins |= DoIRQ;
       ExtIRQNum=0x70;      // IRQ RTC
 			i8259ISR2 |= 1;	i8259IRR2 &= ~1;
-			if(i8259ICW[3] & B8(00000010))		// AutoEOI
+			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR2 &= ~0x1;
       }
 #endif
-		if(i8255RegR[2]/*MachineFlags*/ & B8(11000000))		//https://www.minuszerodegrees.net/5150/misc/5150_nmi_generation.jpg
+		if(i8255RegR[2]/*MachineFlags*/ & 0b11000000)		//https://www.minuszerodegrees.net/5150/misc/5150_nmi_generation.jpg
 			CPUPins |= DoNMI;
 		// e sembra che cmq debba essere attivo in i8259Reg2R[0] OPPURE da b7 scritto a 0xA0! (pcxtbios
             
@@ -337,6 +343,7 @@ int Emulate(int mode) {
 			CPUPins=0; ExtIRQNum=0;
 #ifdef EXT_80386
       sizeOverride=0;
+			memset(seg_descr,0,sizeof(seg_descr));
 #endif
 			}
 
@@ -344,37 +351,37 @@ int Emulate(int mode) {
 			timerDivider=0;
 			// https://stanislavs.org/helppc/8253.html   http://wiki.osdev.org/Programmable_Interval_Timer#Mode_0_-_Interrupt_On_Terminal_Count
 			// devono andare a ~1.1MHz qua
-			// aggiungere modo BCD a tutti i conteggi!! :)  i8253Mode[0] & B8(00000001)
-			switch((i8253Mode[0] & B8(00001110)) >> 1) {// VERIFICARE altri modi a parte free running :)
+			// aggiungere modo BCD a tutti i conteggi!! :)  i8253Mode[0] & 0b00000001)
+			switch((i8253Mode[0] & 0b00001110) >> 1) {// VERIFICARE altri modi a parte free running :)
 				case 0:		// INTerrupt on terminal count
 					// (continous) output is low and goes high at counting end
 					i8253TimerR[0]--;
 					if(!i8253TimerR[0]) {
-						if(i8253Mode[0] & B8(01000000))          // reloaded
+						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
-						i8253Mode[0] |= B8(10000000);          // OUT=1
+						i8253Mode[0] |= 0b10000000;          // OUT=1
 						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
 							}
 						}
 					else {
-						i8253Mode[0] &= ~B8(10000000);          // OUT=0
+						i8253Mode[0] &= ~0b10000000;          // OUT=0
 						}
 					break;
 				case 1:
 					// one-shot output is low and goes high at counting end (retriggerable)
 					if(!i8253TimerR[0]) {
-						if(i8253Mode[0] & B8(01000000))          // reloaded
+						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
-						i8253Mode[0] |= B8(10000000);          // OUT=1
+						i8253Mode[0] |= 0b10000000;          // OUT=1
 						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
 							}
 						}
 					else {
-						i8253Mode[0] &= ~B8(10000000);          // OUT=0
+						i8253Mode[0] &= ~0b10000000;          // OUT=0
 						}
 					break;
 				case 2:
@@ -382,14 +389,14 @@ int Emulate(int mode) {
 					// free counter / rate generator
 					i8253TimerR[0]--;
 					if(i8253TimerR[0]==1) {
-						i8253Mode[0] &= ~B8(10000000);          // OUT=0
+						i8253Mode[0] &= ~0b10000000;          // OUT=0
 						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
 							}
 						}
 					else if(!i8253TimerR[0]) {
-						i8253Mode[0] |= B8(10000000);          // OUT=1
+						i8253Mode[0] |= 0b10000000;          // OUT=1
 						}
 					else {
 						}
@@ -399,9 +406,9 @@ int Emulate(int mode) {
 					// free counter / square wave rate generator
 					i8253TimerR[0]--;
 					if(!i8253TimerR[0]) {
-						i8253Mode[0] ^= B8(10000000);          // OUT=!OUT
+						i8253Mode[0] ^= 0b10000000;          // OUT=!OUT
 						// IRQ solo sul fronte discesa...
-						if(!(i8253Mode[0] & B8(10000000)) && !(i8259IMR & 1)) {
+						if(!(i8253Mode[0] & 0b10000000) && !(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
 							}
@@ -414,9 +421,9 @@ int Emulate(int mode) {
 				case 4:
 					// software triggered strobe
 					if(!i8253TimerR[0]) {
-						if(i8253Mode[0] & B8(01000000))          // reloaded
+						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
-						i8253Mode[0] &= ~B8(10000000);          // OUT=0
+						i8253Mode[0] &= ~0b10000000;          // OUT=0
 						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
@@ -424,15 +431,15 @@ int Emulate(int mode) {
 						}
 					else {
 						i8253TimerR[0]--;
-						i8253Mode[0] |= B8(10000000);          // OUT=1
+						i8253Mode[0] |= 0b10000000;          // OUT=1
 						}
 					break;
 				case 5:
 					// hardware triggered strobe
 					if(!i8253TimerR[0]) {
-						if(i8253Mode[0] & B8(01000000))          // reloaded
+						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
-						i8253Mode[0] &= ~B8(10000000);          // OUT=0
+						i8253Mode[0] &= ~0b10000000;          // OUT=0
 						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
@@ -440,33 +447,33 @@ int Emulate(int mode) {
 						}
 					else {
 						i8253TimerR[0]--;
-						i8253Mode[0] |= B8(10000000);          // OUT=1
+						i8253Mode[0] |= 0b10000000;          // OUT=1
 						}
 					break;
 				}
-			switch((i8253Mode[1] & B8(00001110)) >> 1) {// VERIFICARE altri modi a parte free running :)
+			switch((i8253Mode[1] & 0b00001110) >> 1) {// VERIFICARE altri modi a parte free running :)
 				case 0:		// INTerrupt on terminal count
 					// (continous) output is low and goes high at counting end
 					i8253TimerR[1]--;
 					if(!i8253TimerR[1]) {
-						if(i8253Mode[1] & B8(01000000))          // reloaded
+						if(i8253Mode[1] & 0b01000000)          // reloaded
 							;
-						i8253Mode[1] |= B8(10000000);          // OUT=1
+						i8253Mode[1] |= 0b10000000;          // OUT=1
 						}
 					else {
-						i8253Mode[1] &= ~B8(10000000);          // OUT=0
+						i8253Mode[1] &= ~0b10000000;          // OUT=0
 						}
 					break;
 				case 1:
 					// one-shot output is low and goes high at counting end (retriggerable)
 					if(!i8253TimerR[1]) {
-						i8253Mode[1] |= B8(10000000);          // OUT=1
-						if(i8253Mode[1] & B8(01000000))          // reloaded
+						i8253Mode[1] |= 0b10000000;          // OUT=1
+						if(i8253Mode[1] & 0b01000000)          // reloaded
 							;
 						}
 					else {
 						i8253TimerR[1]--;
-						i8253Mode[1] &= ~B8(10000000);          // OUT=0
+						i8253Mode[1] &= ~0b10000000;          // OUT=0
 						}
 					break;
 				case 2:
@@ -475,10 +482,10 @@ int Emulate(int mode) {
 					// QUESTO VA CON DMA QUI!
 					i8253TimerR[1]--;
 					if(i8253TimerR[1]==1) {
-						i8253Mode[1] &= ~B8(10000000);          // OUT=0
+						i8253Mode[1] &= ~0b10000000;          // OUT=0
 						}
 					else if(!i8253TimerR[1]) {
-						i8253Mode[1] |= B8(10000000);          // OUT=1
+						i8253Mode[1] |= 0b10000000;          // OUT=1
 						}
 					else {
 						}
@@ -488,7 +495,7 @@ int Emulate(int mode) {
 					// free counter / square wave rate generator
 					i8253TimerR[1]--;
 					if(!i8253TimerR[1]) {
-						i8253Mode[1] ^= B8(10000000);          // OUT=!OUT
+						i8253Mode[1] ^= 0b10000000;          // OUT=!OUT
 						i8253TimerR[1]=i8253TimerW[1];
 						}
 					else {
@@ -498,51 +505,51 @@ int Emulate(int mode) {
 				case 4:
 					// software triggered strobe
 					if(!i8253TimerR[1]) {
-						i8253Mode[1] &= ~B8(10000000);          // OUT=0
-						if(i8253Mode[1] & B8(01000000))          // reloaded
+						i8253Mode[1] &= ~0b10000000;          // OUT=0
+						if(i8253Mode[1] & 0b01000000)          // reloaded
 							;
 						}
 					else {
 						i8253TimerR[1]--;
-						i8253Mode[1] |= B8(10000000);          // OUT=1
+						i8253Mode[1] |= 0b10000000;          // OUT=1
 						}
 					break;
 				case 5:
 					// hardware triggered strobe
 					if(!i8253TimerR[1]) {
-						i8253Mode[1] &= ~B8(10000000);          // OUT=0
-						if(i8253Mode[1] & B8(01000000))          // reloaded
+						i8253Mode[1] &= ~0b10000000;          // OUT=0
+						if(i8253Mode[1] & 0b01000000)          // reloaded
 							;
 						}
 					else {
 						i8253TimerR[1]--;
-						i8253Mode[1] |= B8(10000000);          // OUT=1
+						i8253Mode[1] |= 0b10000000;          // OUT=1
 						}
 					break;
 				}
-			switch((i8253Mode[2] & B8(00001110)) >> 1) {// VERIFICARE altri modi a parte free running :)
+			switch((i8253Mode[2] & 0b00001110) >> 1) {// VERIFICARE altri modi a parte free running :)
 				case 0:		// INTerrupt on terminal count
 					// (continous) output is low and goes high at counting end
 					i8253TimerR[2]--;
 					if(!i8253TimerR[2]) {
-						if(i8253Mode[2] & B8(01000000))          // reloaded
+						if(i8253Mode[2] & 0b01000000)          // reloaded
 							;
-						i8253Mode[2] |= B8(10000000);          // OUT=1
+						i8253Mode[2] |= 0b10000000;          // OUT=1
 						}
 					else {
-						i8253Mode[2] &= ~B8(10000000);          // OUT=0
+						i8253Mode[2] &= ~0b10000000;          // OUT=0
 						}
 					break;
 				case 1:
 					// one-shot output is low and goes high at counting end (retriggerable)
 					if(!i8253TimerR[2]) {
-						if(i8253Mode[2] & B8(01000000))          // reloaded
+						if(i8253Mode[2] & 0b01000000)          // reloaded
 							;
-						i8253Mode[2] |= B8(10000000);          // OUT=1
+						i8253Mode[2] |= 0b10000000;          // OUT=1
 						}
 					else {
 						i8253TimerR[2]--;
-						i8253Mode[2] &= ~B8(10000000);          // OUT=0
+						i8253Mode[2] &= ~0b10000000;          // OUT=0
 						}
 					break;
 				case 2:
@@ -550,10 +557,10 @@ int Emulate(int mode) {
 					// free counter / rate generator
 					i8253TimerR[2]--;
 					if(i8253TimerR[2]==1) {
-						i8253Mode[2] &= ~B8(10000000);          // OUT=0
+						i8253Mode[2] &= ~0b10000000;          // OUT=0
 						}
 					else if(!i8253TimerR[2]) {
-						i8253Mode[2] |= B8(10000000);          // OUT=1
+						i8253Mode[2] |= 0b10000000;          // OUT=1
 						}
 					else {
 						}
@@ -563,7 +570,7 @@ int Emulate(int mode) {
 					// free counter / square wave rate generator
 					i8253TimerR[2]--;
 					if(!i8253TimerR[2]) {
-						i8253Mode[2] |= B8(10000000);          // OUT=!OUT
+						i8253Mode[2] |= 0b10000000;          // OUT=!OUT
 						i8253TimerR[2]=i8253TimerW[2];
 						}
 					else {
@@ -573,25 +580,25 @@ int Emulate(int mode) {
 				case 4:
 					// software triggered strobe
 					if(!i8253TimerR[2]) {
-						i8253Mode[2] &= ~B8(10000000);          // OUT=0
-						if(i8253Mode[2] & B8(01000000))          // reloaded
+						i8253Mode[2] &= ~0b10000000;          // OUT=0
+						if(i8253Mode[2] & 0b01000000)          // reloaded
 							;
 						}
 					else {
 						i8253TimerR[2]--;
-						i8253Mode[2] |= B8(10000000);          // OUT=1
+						i8253Mode[2] |= 0b10000000;          // OUT=1
 						}
 					break;
 				case 5:
 					// hardware triggered strobe
 					if(!i8253TimerR[2]) {
-						i8253Mode[2] &= ~B8(10000000);          // OUT=0
-						if(i8253Mode[2] & B8(01000000))          // reloaded
+						i8253Mode[2] &= ~0b10000000;          // OUT=0
+						if(i8253Mode[2] & 0b01000000)          // reloaded
 							;
 						}
 					else {
 						i8253TimerR[2]--;
-						i8253Mode[2] |= B8(10000000);          // OUT=1
+						i8253Mode[2] |= 0b10000000;          // OUT=1
 						}
 					break;
 				}
@@ -612,33 +619,39 @@ int Emulate(int mode) {
       case 0:
         break;
       case 1:   // REPZ/REPE
-        _cx--;
-        if(_f.Zero && _cx) {
+        if(--_cx && _f.Zero) {
           _ip -= inRepStep;      // v. bug 8088!! così dovrebbe andare.. 22/7/24
 					inEI++;
 					}
         else
-          inRep=inRepStep=0;
+          goto fineRep;
         break;
       case 2:   // REPNZ/REPNE
-        _cx--;
-        if(!_f.Zero && _cx) {
+        if(--_cx && !_f.Zero) {
           _ip -= inRepStep;
 					inEI++;
 					}
         else
-          inRep=inRepStep=0;
+          goto fineRep;
         break;
       case 3:   // REP (v.singoli casi)
         if(--_cx) {
           _ip -= inRepStep;
 					inEI++;
 					}
-        else
+        else {
+fineRep:
           inRep=inRepStep=0;
+					segOverride=0;
+#ifdef EXT_80386
+		      sizeOverride=0;
+#endif
+
+					}
         break;
       default:      // al primo giro...
         inRep &= 0xff;
+				inEI++;
         break;
       }
 
@@ -781,6 +794,7 @@ aggFlagABA:    // aux, zero, sign, parity
 aggFlagBZ:    // zero, sign, parity
 				_f.Zero=ZERO_8();
 				_f.Sign=SIGN_8();
+aggParity:
         {
         BYTE par,parn;
         parn=res3.b;
@@ -790,7 +804,7 @@ aggFlagBZ:    // zero, sign, parity
         par ^= parn;
         parn= par >> 4;
         par ^= parn;
-        _f.Parity=par & 1;
+        _f.Parity=par & 1 ? 0 : 1;		// invertito qua pd £$%&/
         }
 				break;
 
@@ -810,19 +824,9 @@ aggFlagAWA:    // aux, zero, sign, parity
 aggFlagWZ:    // zero, sign, parity
 				_f.Zero=ZERO_16();
 				_f.Sign=SIGN_16();
-        {
-        BYTE par,parn;
-        parn=res3.b;
-        par= parn >> 1;			// https://stackoverflow.com/questions/49763042/how-to-calculate-parity-using-xor
-        par ^= parn;
-        parn= par >> 2;
-        par ^= parn;
-        parn= par >> 4;
-        par ^= parn;
 //        parn= par >> 8;   // no! dice che cmq è solo sul byte basso https://stackoverflow.com/questions/29292455/parity-of-a-number-assembly-8086
 //        par ^= parn;
-        _f.Parity=par & 1;
-        }
+				goto aggParity;
 				break;
         
 			case 6:       // PUSH segment
@@ -1105,11 +1109,50 @@ FFFF:000F                Top of 8086 / 88 address space*/
             break;
           case 0x1f:      // NOP...
             break;
+          case 0x34:      // SYSENTER
+            break;
           case 0xa6:      // CMPXCHG/CMPXCHG8B
           case 0xa7:
           case 0xb0:
           case 0xb1:
           case 0xc7:
+            break;
+          case 0xc0:      // XADD
+          case 0xc1:      // XADD
+            break;
+          case 0x80:      // Jcc near
+          case 0x81:
+          case 0x82:
+          case 0x83:
+          case 0x84:
+          case 0x85:
+          case 0x86:
+          case 0x87:
+          case 0x88:
+          case 0x89:
+          case 0x8a:
+          case 0x8b:
+          case 0x8c:
+          case 0x8d:
+          case 0x8e:
+          case 0x8f:
+            break;
+          case 0x90:      // SETcc
+          case 0x91:
+          case 0x92:
+          case 0x93:
+          case 0x94:
+          case 0x95:
+          case 0x96:
+          case 0x97:
+          case 0x98:
+          case 0x99:
+          case 0x9a:
+          case 0x9b:
+          case 0x9c:
+          case 0x9d:
+          case 0x9e:
+          case 0x9f:
             break;
 #endif
           }
@@ -1225,29 +1268,29 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-                res2.b=*op1.reg8;
-								res3.b = res1.b+res2.b+_f.Carry;      
+                res2.b=*op1.reg8+_f.Carry;
+								res3.b = res1.b+res2.b;      
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
                 goto aggFlagAB;
                 break;
               case 1:
                 res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-                res2.x=*op1.reg16;
-                res3.x = res1.x+res2.x+_f.Carry;
+                res2.x=*op1.reg16+_f.Carry;
+                res3.x = res1.x+res2.x;
                 PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
                 goto aggFlagAW;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-								res3.b = res1.b+res2.b+_f.Carry;      
+                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
+								res3.b = res1.b+res2.b;      
                 *op1.reg8 = res3.b;
                 goto aggFlagAB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-                res3.x = res1.x+res2.x+_f.Carry;
+                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
+                res3.x = res1.x+res2.x;
                 *op1.reg16 = res3.x;
                 goto aggFlagAW;
                 break;
@@ -1258,29 +1301,29 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-								res3.b = res1.b+res2.b+_f.Carry;      
+                res2.b=*op1.reg8+_f.Carry;
+								res3.b = res1.b+res2.b;      
                 *op2.reg8=res3.b;
                 goto aggFlagAB;
                 break;
               case 1:
                 res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x = res1.x+res2.x+_f.Carry;
+                res2.x=*op1.reg16+_f.Carry;
+                res3.x = res1.x+res2.x;
                 *op2.reg16=res3.x;
                 goto aggFlagAW;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-								res3.b = res1.b+res2.b+_f.Carry;      
+                res2.b=*op2.reg8+_f.Carry;
+								res3.b = res1.b+res2.b;      
                 *op1.reg8=res3.b;
                 goto aggFlagAB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x = res1.x+res2.x+_f.Carry;
+                res2.x=*op2.reg16+_f.Carry;
+                res3.x = res1.x+res2.x;
                 *op1.reg16=res3.x;
                 goto aggFlagAW;
                 break;
@@ -1291,8 +1334,8 @@ aggFlagWZC:
 
 			case 0x14:        // ADC
         res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b+res2.b+_f.Carry;      
+        res2.b=Pipe2.b.l+_f.Carry;
+				res3.b = res1.b+res2.b;
         _al = res3.b;
 				_ip++;
         goto aggFlagAB;
@@ -1300,8 +1343,8 @@ aggFlagWZC:
 
 			case 0x15:        // ADC
         res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x+res2.x+_f.Carry;   
+        res2.x=Pipe2.x.l+_f.Carry;
+				res3.x = res1.x+res2.x;   
         _ax = res3.x;
 				_ip+=2;
         goto aggFlagAW;
@@ -1315,29 +1358,29 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b-_f.Carry;      
+                res2.b=*op1.reg8+_f.Carry;
+								res3.b = res1.b-res2.b;
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
                 goto aggFlagSB;
                 break;
               case 1:
                 res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x-_f.Carry;
+                res2.x=*op1.reg16+_f.Carry;
+                res3.x = res1.x-res2.x;
                 PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
                 goto aggFlagSW;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-								res3.b = res1.b-res2.b-_f.Carry;      
+                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
+								res3.b = res1.b-res2.b;      
                 *op1.reg8 = res3.b;
                 goto aggFlagSB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-                res3.x = res1.x-res2.x-_f.Carry;
+                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
+                res3.x = res1.x-res2.x;
                 *op1.reg16 = res3.x;
                 goto aggFlagSW;
                 break;
@@ -1348,29 +1391,29 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b-_f.Carry;      
+                res2.b=*op1.reg8+_f.Carry;
+								res3.b = res1.b-res2.b;      
                 *op2.reg8=res3.b;
                 goto aggFlagSB;
                 break;
               case 1:
                 res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x-_f.Carry;
+                res2.x=*op1.reg16+_f.Carry;
+                res3.x = res1.x-res2.x;
                 *op2.reg16=res3.x;
                 goto aggFlagSW;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-								res3.b = res1.b-res2.b-_f.Carry;      
+                res2.b=*op2.reg8+_f.Carry;
+								res3.b = res1.b-res2.b;      
                 *op1.reg8=res3.b;
                 goto aggFlagSB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x = res1.x-res2.x-_f.Carry;
+                res2.x=*op2.reg16+_f.Carry;
+                res3.x = res1.x-res2.x;
                 *op1.reg16=res3.x;
                 goto aggFlagSW;
                 break;
@@ -1381,8 +1424,8 @@ aggFlagWZC:
 
 			case 0x1c:        // SBB
         res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b-res2.b-_f.Carry;      
+        res2.b=Pipe2.b.l+_f.Carry;
+				res3.b = res1.b-res2.b;      
         _al = res3.b;
 				_ip++;
         goto aggFlagSB;
@@ -1390,8 +1433,8 @@ aggFlagWZC:
 
 			case 0x1d:        // SBB
         res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x-res2.x-_f.Carry;   
+        res2.x=Pipe2.x.l+_f.Carry;
+				res3.x = res1.x-res2.x;   
         _ax = res3.x;
 				_ip+=2;
         goto aggFlagSW;
@@ -1489,7 +1532,6 @@ aggFlagWZC:
 
 			case 0x26:
 				segOverride=0+1;			// ES
-        inRepStep=0;
         inEI++;
 				break;
 
@@ -1619,7 +1661,6 @@ aggFlagSWA:    // aux, zero, sign, parity
 
 			case 0x2e:
 				segOverride=1+1;			// CS
-        inRepStep=0;
         inEI++;
 				break;
 
@@ -1735,7 +1776,6 @@ aggFlagSWA:    // aux, zero, sign, parity
 
 			case 0x36:
         segOverride=2+1;			// SS
-        inRepStep=0;
         inEI++;
 				break;
 
@@ -1835,7 +1875,6 @@ aggFlagSWA:    // aux, zero, sign, parity
 
 			case 0x3e:
         segOverride=3+1;			// DS
-        inRepStep=0;
         inEI++;
 				break;
 
@@ -1866,6 +1905,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 				res2.x = 1;
 				res3.x = res1.x+res2.x;
 				*op2.reg16 = res3.x;
+
 aggFlagIncW:
       	_f.Ovf= res3.x == 0x8000 ? 1 : 0; //V = 1 if x=7FFFH before, else 0
         goto aggFlagAWA;
@@ -1884,6 +1924,7 @@ aggFlagIncW:
 				res2.x = 1;
 				res3.x = res1.x-res2.x;
 				*op2.reg16 = res3.x;
+
 aggFlagDecW:
       	_f.Ovf= res3.x == 0x7fff ? 1 : 0; //V = 1 if x=8000H before, else 0
         goto aggFlagSWA;
@@ -1921,10 +1962,10 @@ aggFlagDecW:
 
 #ifdef EXT_80186
 			case 0x60:      // PUSHA
-        i=regs.r[4].x;      // SS pushato INIZIALE!
+        res3.x=regs.r[4].x;      // SS pushato INIZIALE!
         for(i=0; i<4; i++)    // 
           PUSH_STACK(regs.r[i].x);
-        PUSH_STACK(i);
+        PUSH_STACK(res3.x);
         for(i=5; i<8; i++)    // 
           PUSH_STACK(regs.r[i].x);
 				break;
@@ -1952,13 +1993,11 @@ aggFlagDecW:
 #ifdef EXT_80386
 			case 0x64:
 				segOverride=4+1;			// FS
-        inRepStep=0;
         inEI+;
 				break;
         
 			case 0x65:
 				segOverride=5+1;			// GS
-        inRepStep=0;
         inEI++;
 				break;
 #endif
@@ -2113,6 +2152,8 @@ aggFlagDecW:
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
           }
+#ifdef EXT_80386
+#endif
 				PutShortValue(MAKE20BITS(_es,_di),InShortValue(_dx));
         if(_f.Dir) {
           _di-=2;   // anche 32bit??
@@ -2123,16 +2164,11 @@ aggFlagDecW:
 				break;
 
 			case 0x6e:        // OUTSB
-        // [FORSE ds può fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
           }
-        if(segOverride) {
-          theDs=&segs.r[segOverride-1].x;
-          segOverride=0;
-          }
-				OutValue(_dx,GetValue(MAKE20BITS(*theDs,_di)));
+				OutValue(_dx,GetValue(MAKE20BITS(_es,_di)));
         if(_f.Dir)
           _di--;
         else
@@ -2140,16 +2176,13 @@ aggFlagDecW:
 				break;
 
 			case 0x6f:        // OUTSW
-        // [FORSE ds può fare override!
         if(inRep) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
           }
-        if(segOverride) {
-          theDs=&segs.r[segOverride-1].x;
-          segOverride=0;
-          }
-				OutShortValue(_dx,GetShortValue(MAKE20BITS(*theDs,_di)));
+#ifdef EXT_80386
+#endif
+				OutShortValue(_dx,GetShortValue(MAKE20BITS(_es,_di)));
         if(_f.Dir) {
           _di-=2;   // anche 32bit??
           }
@@ -2257,8 +2290,8 @@ aggFlagDecW:
 
 			case 0x80:				// ADD ecc rm8, immediate8
 			case 0x81:				// ADD ecc rm16, immediate16
-//			case 0x82:				// undefined/nop... (ADD ecc rm8, immediate8  con sign-extend
-			case 0x83:				// ADD ecc rm16, immediate16 con sign-extend
+			case 0x82:				// undefined/nop... (ADD ecc rm8, immediate8  con sign-extend   LO USA EDLIN!@#£$%
+			case 0x83:				// ADD ecc rm16, immediate8 con sign-extend
         GetMorePipe(MAKE20BITS(_cs,_ip-1));   // andrebbe fatto solo se necessario... RISISTEMARE!
         _ip++;
 				if(!(Pipe1 & 2)) 			// vuol dire che l'operando è 8bit ma esteso a 16
@@ -2266,12 +2299,7 @@ aggFlagDecW:
         
 				COMPUTE_RM_OFS
 					GET_MEM_OPER            
-          
-//            if(immofs>3)
-//              GetMorePipe(MAKE20BITS(_cs,_ip-1));
 					if(!(Pipe1 & 1)) {
-// 3/12              _ip++;
-            
             res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
             op1.mem=Pipe2.bd[immofs];
 						res2.b=(uint8_t)op1.mem;
@@ -2287,12 +2315,14 @@ aggFlagDecW:
 								goto aggFlagBZC;
 								break;
 							case 2:       // ADC
-								res3.b=res1.b + res2.b + _f.Carry;
+								res2.b += _f.Carry;
+								res3.b=res1.b + res2.b;
 		            PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
 								goto aggFlagAB;
 								break;
 							case 3:       // SBB
-								res3.b=res1.b - res2.b - _f.Carry;
+								res2.b += _f.Carry;
+								res3.b=res1.b - res2.b;
 		            PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
 								goto aggFlagSB;
 								break;
@@ -2342,12 +2372,14 @@ aggFlagDecW:
 								goto aggFlagWZC;
 								break;
 			        case 2:       // ADC
-								res3.x = res1.x + res2.x + _f.Carry;
+								res2.x += _f.Carry;
+								res3.x = res1.x + res2.x;
 		            PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
 								goto aggFlagAW;
 								break;
 			        case 3:       // SBB
-								res3.x = res1.x - res2.x - _f.Carry;
+								res2.x += _f.Carry;
+								res3.x = res1.x - res2.x;
 		            PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
 								goto aggFlagSW;
 								break;
@@ -2384,7 +2416,6 @@ aggFlagDecW:
             }
           break;
         case 3:
-          immofs=0;
 					GET_REGISTER_8_16_2
 					if(!(Pipe1 & 1)) {
             res1.b=*op2.reg8;
@@ -2403,12 +2434,14 @@ aggFlagDecW:
 								goto aggFlagBZC;
 								break;
 							case 2:       // ADC
-								res3.b=res1.b + res2.b + _f.Carry;
+								res2.b += _f.Carry;
+								res3.b=res1.b + res2.b;
 								*op2.reg8=res3.b;
 								goto aggFlagAB;
 								break;
 							case 3:       // SBB
-								res3.b=res1.b - res2.b - _f.Carry;
+								res2.b += _f.Carry;
+								res3.b=res1.b - res2.b;
 								*op2.reg8=res3.b;
 								goto aggFlagSB;
 								break;
@@ -2439,8 +2472,7 @@ aggFlagDecW:
 						if(Pipe1 & 2) 			// sign extend  BOH verificare come va sotto... 2024
 							op1.mem = (int16_t)(int8_t)Pipe2.b.h;
 						else
-  						op1.mem=Pipe2.xm.w;   // 
-//        MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
+  						op1.mem=Pipe2.xm.w;   //        MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
 						res2.x=op1.mem;
 						switch(Pipe2.reg) {
 			        case 0:       // ADD
@@ -2459,12 +2491,14 @@ aggFlagDecW:
 								goto aggFlagWZC;
 								break;
 			        case 2:       // ADC
-								res3.x = res1.x + res2.x + _f.Carry;
+								res2.x += _f.Carry;
+								res3.x = res1.x + res2.x;
 								*op2.reg16=res3.x;
 								goto aggFlagAW;
 								break;
 			        case 3:       // SBB
-								res3.x = res1.x - res2.x - _f.Carry;
+								res2.x += _f.Carry;
+								res3.x = res1.x - res2.x;
 								*op2.reg16=res3.x;
 								goto aggFlagSW;
 								break;
@@ -2521,11 +2555,10 @@ aggFlagDecW:
             break;
           case 3:
 						GET_REGISTER_8_16_2
-// 2025             op2.reg8= Pipe2.b.l & 0x4 ? &regs.r[Pipe2.b.l & 0x3].b.h : &regs.r[Pipe2.b.l & 0x3].b.l;
             if(!(Pipe1 & 1)) {
               res1.b=*op2.reg8;
               res2.b=*op1.reg8;
-              res3.b=res1.b & res2.b;
+              res3.b= res1.b & res2.b;
 							goto aggFlagBZC;
 							}
 						else {
@@ -2556,13 +2589,11 @@ aggFlagDecW:
           case 3:
 						GET_REGISTER_8_16_2
             if(!(Pipe1 & 1)) {
-//2025              op2.reg8= Pipe2.b.l & 0x4 ? &regs.r[Pipe2.b.l & 0x3].b.h : &regs.r[Pipe2.b.l & 0x3].b.l;
               res1.b=*op2.reg8;
               *op2.reg8=*op1.reg8;
               *op1.reg8=res1.b;
 							}
 						else {
-//2025              op2.reg16= &regs.r[Pipe2.rm].x;
               res1.x=*op2.reg16;
               *op2.reg16=*op1.reg16;
               *op1.reg16=res1.x;
@@ -2614,9 +2645,9 @@ aggFlagDecW:
 			case 0x8c:        // MOV rm16,SREG
 				_ip++;
 #ifdef EXT_80286
-				op1.reg16= &segs.r[(Pipe2.reg].x;
+				op1.reg16= &segs.r[Pipe2.reg].x;
 #else
-				op1.reg16= &segs.r[(Pipe2.b.l >> 3) & 0x3].x;
+				op1.reg16= &segs.r[Pipe2.reg & 0x3].x;
 #endif
        
 				COMPUTE_RM_OFS
@@ -2647,9 +2678,9 @@ aggFlagDecW:
 			case 0x8e:        // MOV SREG,rm16
         _ip++;
 #ifdef EXT_80286
-				op1.reg16= &segs.r[(Pipe2.reg].x;
+				op1.reg16= &segs.r[Pipe2.reg].x;
 #else
-				op1.reg16= &segs.r[(Pipe2.b.l >> 3) & 0x3].x;
+				op1.reg16= &segs.r[Pipe2.reg & 0x3].x;
 #endif
        
 				COMPUTE_RM_OFS
@@ -2667,12 +2698,13 @@ aggFlagDecW:
         
 			case 0x8f:      // POP imm
         _ip++;
+        // i 3 bit "reg" qua sempre 0! 
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
 						POP_STACK(res3.x);
 						PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
             break;
-          case 3:
+          case 3:			// 
             op2.reg16= &regs.r[Pipe2.rm].x;
 						POP_STACK(*op2.reg16);
             break;
@@ -2726,57 +2758,42 @@ aggFlagDecW:
         
    		case 0x9d:        // POPF
 				POP_STACK(_f.x);		// 
+				goto fix_flags;
 				break;
 
 			case 0x9e:      // SAHF
-				_f.x = _ah | (_f.x & 0xff00);
+				_f.x = (_f.x & 0xff00) | _ah;
+
+fix_flags:
+				_f.unused=1; _f.unused2=_f.unused3=_f.unused4=0;			// beh..
 				break;
         
 			case 0x9f:      // LAHF
 				_ah=_f.x & 0x00ff;
 				break;
 
- 			case 0xa0:      // MOV [ofs]
+ 			case 0xa0:      // MOV al,[ofs]
+ 			case 0xa1:      // MOV ,al
+ 			case 0xa2:      // MOV ax,
+ 			case 0xa3:      // MOV ,ax
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
           segOverride=0;
           }
         else
           theDs=&_ds;
-				_al=GetValue(MAKE20BITS(*theDs,Pipe2.x.l));
-        _ip+=2;
-				break;
-        
- 			case 0xa1:      // MOV
-        if(segOverride) {
-          theDs=&segs.r[segOverride-1].x;
-          segOverride=0;
-          }
-        else
-          theDs=&_ds;
-				_ax=GetShortValue(MAKE20BITS(*theDs,Pipe2.x.l));
-        _ip+=2;
-				break;
-
- 			case 0xa2:      // MOV
-        if(segOverride) {
-          theDs=&segs.r[segOverride-1].x;
-          segOverride=0;
-          }
-        else
-          theDs=&_ds;
-				PutValue(MAKE20BITS(*theDs,Pipe2.x.l),_al);
-        _ip+=2;
-				break;
-        
- 			case 0xa3:      // MOV
-        if(segOverride) {
-          theDs=&segs.r[segOverride-1].x;
-          segOverride=0;
-          }
-        else
-          theDs=&_ds;
-				PutShortValue(MAKE20BITS(*theDs,Pipe2.x.l),_ax);
+				if(!(Pipe1 & 2)) {
+					if(Pipe1 & 1)
+						_ax=GetShortValue(MAKE20BITS(*theDs,Pipe2.x.l));
+					else
+						_al=GetValue(MAKE20BITS(*theDs,Pipe2.x.l));
+					}
+				else {        
+					if(Pipe1 & 1)
+						PutShortValue(MAKE20BITS(*theDs,Pipe2.x.l),_ax);
+					else
+						PutValue(MAKE20BITS(*theDs,Pipe2.x.l),_al);
+					}
         _ip+=2;
 				break;
         
@@ -2814,6 +2831,8 @@ aggFlagDecW:
         else
           theDs=&_ds;
 				PutShortValue(MAKE20BITS(_es,_di),GetShortValue(MAKE20BITS(*theDs,_si)));
+#ifdef EXT_80386
+#endif
         if(_f.Dir) {
           _di-=2;   // anche 32bit??
           _si-=2;
@@ -2827,7 +2846,7 @@ aggFlagDecW:
 			case 0xa6:      // CMPSB
         if(inRep) {
 //          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
+          inRepStep=1;
           }
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
@@ -2850,7 +2869,7 @@ aggFlagDecW:
 			case 0xa7:      // CMPSW
         if(inRep) {
 //          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
+          inRepStep=1;
           }
         if(segOverride) {
           theDs=&segs.r[segOverride-1].x;
@@ -2858,6 +2877,8 @@ aggFlagDecW:
           }
         else
           theDs=&_ds;
+#ifdef EXT_80386
+#endif
 				res3.x= GetShortValue(MAKE20BITS(*theDs,_si)) - GetShortValue(MAKE20BITS(_es,_di));
         if(_f.Dir) {
           _di-=2;   // anche 32bit??
@@ -2886,7 +2907,7 @@ aggFlagDecW:
         // no override! da pdf 286
         if(inRep) {
           inRep=3;
-          inRepStep=segOverride ? 2 : 1;// lascio cmq
+          inRepStep=1;
           }
 				PutValue(MAKE20BITS(_es,_di),_al);
         if(_f.Dir)
@@ -2899,8 +2920,10 @@ aggFlagDecW:
         // idem
         if(inRep) {
           inRep=3;
-          inRepStep=segOverride ? 2 : 1;// lascio cmq
+          inRepStep=1;
           }
+#ifdef EXT_80386
+#endif
 				PutShortValue(MAKE20BITS(_es,_di),_ax);
         if(_f.Dir)
           _di-=2;   // anche 32bit??
@@ -2937,6 +2960,8 @@ aggFlagDecW:
           }
         else
           theDs=&_ds;
+#ifdef EXT_80386
+#endif
 				_ax=GetShortValue(MAKE20BITS(*theDs,_si));
         if(_f.Dir)
           _si-=2;   // anche 32bit??
@@ -2948,7 +2973,7 @@ aggFlagDecW:
         // però uno può infilarci il prefisso cmq, quindi v. inRep
         if(inRep) {
 //          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
+          inRepStep=1;
           }
 				res1.b= _al;
         res2.b= GetValue(MAKE20BITS(_es,_di));
@@ -2963,11 +2988,13 @@ aggFlagDecW:
 			case 0xaf:      // SCASW
         if(inRep) {
 //          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
+          inRepStep=1;
           }
 				res1.x= _ax;
         res2.x= GetShortValue(MAKE20BITS(_es,_di));
 				res3.x= res1.x - res2.x;
+#ifdef EXT_80386
+#endif
         if(_f.Dir)
           _di-=2;   // anche 32bit??
         else
@@ -2983,7 +3010,6 @@ aggFlagDecW:
       case 0xb5:
       case 0xb6:
       case 0xb7:
-//#define WORKING_REG Pipe1 & 0x4 ? regs.r[Pipe1 & 0x3].b.h : regs.r[Pipe1 & 0x3].b.l
         if(Pipe1 & 0x4)
           regs.r[Pipe1 & 0x3].b.h=Pipe2.b.l;
         else
@@ -3007,28 +3033,22 @@ aggFlagDecW:
 			case 0xc0:      // RCL, RCR, SHL ecc
 // usare         immofs ??
   			_ip++;
-        
+				i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+				res2.b &= 31;		// non va dentro la macro...
+#endif
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
-            
 						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione è variabile... MIGLIORARE!
 						res3.b=res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
 						ROTATE_SHIFT8
 						PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
             break;
           case 3:
-            op2.reg8= Pipe2.b.l & 0x4 ? &regs.r[Pipe2.b.l & 0x3].b.h : &regs.r[Pipe2.b.l & 0x3].b.l;
+            op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
 						op1.mem=Pipe2.b.h;
     				_ip++;      // imm8
 						res3.b=res1.b=*op2.reg8;
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
 						ROTATE_SHIFT8
 						*op2.reg8=res3.b;
 						break;
@@ -3040,30 +3060,24 @@ aggFlagDecW:
 			case 0xc1:
 // usare         immofs ??
 				_ip++;
-        
+				i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+				res2.b &= 31;		// non va dentro la macro...
+#endif
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
-            
 						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione è variabile... migliorare!
 						res3.x=res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
-						ROTATE_SHIFT8
+						ROTATE_SHIFT16
 						PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
 						if(Pipe2.reg>=4 && i)		// solo SAL/SHL/SHR/SAR
 							goto aggFlagBZ;
             break;
           case 3:
-            op2.reg16= &regs.r[Pipe2.rm].x;
+            op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;
 						op1.mem=Pipe2.b.h;
     				_ip++;      // imm8
 						res3.x=res1.x=*op2.reg16;
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
 						ROTATE_SHIFT16
 						*op2.reg16=res3.x;
 						if(Pipe2.reg>=4 && i)		// solo SAL/SHL/SHR/SAR
@@ -3109,12 +3123,10 @@ aggFlagDecW:
  			case 0xc7:				//MOV imm16
         GetMorePipe(MAKE20BITS(_cs,_ip-1));   // andrebbe fatto solo se necessario... RISISTEMARE!
 				_ip++;
-        
+        // i 3 bit "reg" qua sempre 0! 
 				COMPUTE_RM_OFS
-					GET_MEM_OPER            
-//            if(immofs>3)
-//              GetMorePipe(MAKE20BITS(_cs,_ip-1));
-            if(!(Pipe1 & 1)) {
+					GET_MEM_OPER
+					  if(!(Pipe1 & 1)) {
               _ip++;
               op1.mem=Pipe2.bd[immofs];
               PutValue(MAKE20BITS(*theDs,op2.mem),(uint8_t)op1.mem);
@@ -3125,17 +3137,17 @@ aggFlagDecW:
               PutShortValue(MAKE20BITS(*theDs,op2.mem),op1.mem);
 							}
             break;
-          case 3:		// non è chiaro se c'è qua...
+          case 3:		// 
+						GET_REGISTER_8_16_2
             if(!(Pipe1 & 1)) {
-	            op1.reg8= Pipe2.b.l & 0x4 ? &regs.r[Pipe2.b.l & 0x3].b.h : &regs.r[Pipe2.b.l & 0x3].b.l;
-              op2.mem=Pipe2.bd[immofs];
-              *op2.reg8=(uint8_t)op2.mem;
+              op1.mem=Pipe2.bd[immofs];
+              *op2.reg8=(uint8_t)op1.mem;
 							}
 						else {
-							op1.reg16= &regs.r[Pipe2.rm].x;
-							GetPipe(MAKE20BITS(_cs,_ip++));		// mi sposto avanti per il 6°byte; //verificare...
-              op2.mem=MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
-              *op2.reg16=op2.mem;
+							GetMorePipe(MAKE20BITS(_cs,_ip-3));	
+							_ip++;
+              op1.mem=MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
+              *op2.reg16=op1.mem;
               }
             break;
           }
@@ -3205,7 +3217,7 @@ Return32:
         THEN #SS; FI;*/
 #endif
         i=Pipe2.b.l;
-        
+
 				_ip++;
 
 do_irq:
@@ -3241,12 +3253,15 @@ do_irq:
 				break;
 
 			case 0xcf:        // IRET
+          if(_sp>=6) {		// fare controllo
+            }
+          else {
+// tecnicamente è un eccezione, non trap...            _f.Trap=1;
+            }
+					;
 				POP_STACK(_ip);
 				POP_STACK(_cs);
 				POP_STACK(_f.x);
-
-//				inRepSaved=2;
-
 				break;
 
 			case 0xd0:      // RCL, RCR ecc 8
@@ -3256,23 +3271,19 @@ do_irq:
 					op1.mem=_cl;
 				else
 					op1.mem=1;
+				i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+				res2.b &= 31;		// non va dentro la macro...
+#endif
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
 						res1.b=res3.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
 						ROTATE_SHIFT8
 						PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
             break;
           case 3:
-            op2.reg8= Pipe2.b.l & 0x4 ? &regs.r[Pipe2.b.l & 0x3].b.h : &regs.r[Pipe2.b.l & 0x3].b.l;
+            op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
 						res1.b=res3.b=*op2.reg8;
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
 						ROTATE_SHIFT8 
 						*op2.reg8=res3.b;
 						break;
@@ -3288,23 +3299,19 @@ do_irq:
 					op1.mem=_cl;
 				else
 					op1.mem=1;
+				i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+				res2.b &= 31;		// non va dentro la macro...
+#endif
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
 						res1.x=res3.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
 						ROTATE_SHIFT16
 						PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
             break;
           case 3:
-            op2.reg16= &regs.r[Pipe2.rm].x;
+            op2.reg16= &regs.r[Pipe2.rm & 0x7].x;
 						res1.x=res3.x=*op2.reg16;
-						i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
 						ROTATE_SHIFT16
 						*op2.reg16=res3.x;
 						break;
@@ -3584,16 +3591,40 @@ Trap:
 				break;
 
 			case 0xf2:				//REPNZ/REPNE; entrambi vengono mutati in 3 nelle istruzioni che non usano Z
-        inRep=0x102;
-				inEI++;		// forse ne va uno di troppo alla fine, ma ok...
+        if(_cx) {			// 0 salta tutto!
+					inRep=0x102;
+					inEI++;		// forse ne fa uno di troppo alla fine, ma ok...
+					}
+				else {
+			    Pipe1=GetPipe(MAKE20BITS(_cs,_ip));
+					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
+#ifdef EXT_80386
+						|| Pipe1==0x64 || Pipe1==0x65
+#endif
+						)
+						_ip++;
+					_ip++;
+					}
 				break;
 
 			case 0xf3:				//REPZ/REPE
-        inRep=0x101;
-				inEI++;
+        if(_cx) {			// 0 salta tutto!
+					inRep=0x101;
+					inEI++;
+					}
+				else {
+			    Pipe1=GetPipe(MAKE20BITS(_cs,_ip));
+					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
+#ifdef EXT_80386
+						|| Pipe1==0x64 || Pipe1==0x65
+#endif
+						)
+						_ip++;
+					_ip++;
+					}
 				break;
 
-			case 0xf4:
+			case 0xf4:				// HLT
 			  CPUPins |= DoHalt;
 				break;
 
@@ -3603,6 +3634,7 @@ Trap:
 
 			case 0xf6:        // altre MUL ecc //	; mul on V20 does not affect the zero flag,   but on an 8088 the zero flag is used
 			case 0xf7:
+				GetMorePipe(MAKE20BITS(_cs,_ip-1));		// fare solo se necessario!
 				_ip++;
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
@@ -3610,10 +3642,9 @@ Trap:
               res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
 							switch(Pipe2.reg) {
 								case 0:       // TEST
-								case 1:       // TEST forse....
-    							GetPipe(MAKE20BITS(_cs,_ip-2));		// mi sposto per il 6°byte; //migliorare...
+//								case 1:       // TEST forse....
                   _ip++;
-        					res1.b = Pipe2.b.h;
+        					res1.b = Pipe2.bd[immofs];
 									res3.b = res1.b & res2.b;
 									goto aggFlagBZC;
 									break;
@@ -3647,6 +3678,7 @@ Trap:
 										res3.b = (uint16_t)_ax / res2.b;
 										_ah = _ax % res2.b;			// non è bello ma...
 										_al = res3.b;
+//if(Temporary > 0xFF) Exception(DE); //divide error
 										}
 									else {
 divide0:
@@ -3659,7 +3691,8 @@ divide0:
 										res3.b = (int16_t)_ax / (int8_t)res2.b;
 										_ah =  (int16_t)_ax % (int8_t)res2.b;
 										_al = res3.b;
-										}
+//if(Temporary > 0x7F || Temporary < 0x80) Exception(DE); //f a positive result is greater than 7FH or a negative result is less than 80H
+											}
 									else
 										goto divide0;
 									break;
@@ -3669,10 +3702,10 @@ divide0:
               res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
 							switch(Pipe2.reg) {
 								case 0:       // TEST
-								case 1:       // TEST forse....
-    							GetPipe(MAKE20BITS(_cs,_ip-2));		// mi sposto per il 6°byte; //migliorare...
+	//							case 1:       // TEST forse....
+//									GetMorePipe(MAKE20BITS(_cs,_ip-4));	
                   _ip+=2;
-        					op1.mem = Pipe2.xm.w;
+        					res1.x = MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
 									res3.x = res1.x & res2.x;
 									goto aggFlagWZC;
 									break;
@@ -3684,8 +3717,8 @@ divide0:
 									res1.x=0;
 									res3.x = res1.x-res2.x;			// 
 									PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
-                  //The CF flag set to 0 if the source operand is 0; otherwise it is set to 1. The OF, SF, ZF, AF, and PF flags are set according to the result. 
 									goto aggFlagSW;
+                  //The CF flag set to 0 if the source operand is 0; otherwise it is set to 1. The OF, SF, ZF, AF, and PF flags are set according to the result. 
 									break;
 								case 4:       // MUL16
                   op1.reg16= &_ax;
@@ -3708,16 +3741,18 @@ divide0:
 										res3.x = ((uint32_t)MAKELONG(_ax,_dx)) / res2.x;
 										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non è bello ma...
 			              _ax = res3.x;
+//if(Temporary > 0xFFFF) Exception(DE); //divide error
 										}
 									else
 										goto divide0;
 									break;
 								case 7:       // IDIV16
-									if(res2.b) {
+									if(res2.x) {
 										res3.x = ((int32_t)MAKELONG(_ax,_dx)) / (int16_t)res2.x;
 										_dx = ((int32_t)MAKELONG(_ax,_dx)) % (int16_t)res2.x;
 			              _ax = res3.x;
-										}
+//if(Temporary > 0x7FFF || Temporary < 0x8000) Exception(DE); //f a positive result is greater than 7FFFH or a negative result is less than 8000H
+											}
 									else
 										goto divide0;
 									break;
@@ -3730,7 +3765,7 @@ divide0:
               res2.b=*op2.reg8;
 							switch(Pipe2.reg) {
 								case 0:       // TEST
-								case 1:       // TEST forse....
+	//							case 1:       // TEST forse....
                   _ip++;
         					op1.mem = Pipe2.b.h;
                   res1.b=(uint8_t)op1.mem;
@@ -3754,16 +3789,14 @@ divide0:
         					op1.reg8= &_al;
                   res1.b=*op1.reg8;
 									res3.x = (uint16_t)res1.b*res2.b;
-									_al=LOBYTE(res3.x);			// 
-									_ah=HIBYTE(res3.x);			// 
+									_ax=res3.x;			// 
 									_f.Carry=_f.Ovf= !!_ah;
 									break;
 								case 5:       // IMUL8
         					op1.reg8= &_al;
                   res1.b=*op1.reg8;
 									res3.x = (int16_t)(int8_t)res1.b*(int8_t)res2.b;
-									_al=LOBYTE(res3.x);			// 
-									_ah=HIBYTE(res3.x);			// 
+									_ax=res3.x;			// 
 									_f.Carry=_f.Ovf= !!_ah;
 									break;
         // DIV NON aggiorna flag!
@@ -3772,6 +3805,7 @@ divide0:
 										res3.b = _ax / res2.b;
 										_ah = _ax % res2.b;			// non è bello ma...
 										_al = res3.b;
+//if(Temporary > 0xFF) Exception(DE); //divide error
 										}
 									else
 										goto divide0;
@@ -3781,7 +3815,8 @@ divide0:
 										res3.b = ((int16_t)_ax) / (int8_t)res2.b;
 										_ah =  ((int16_t)_ax) % (int8_t)res2.b;
 										_al = res3.b;
-										}
+//if(Temporary > 0x7F || Temporary < 0x80) Exception(DE); //f a positive result is greater than 7FH or a negative result is less than 80H
+											}
 									else
 										goto divide0;
 									break;
@@ -3791,7 +3826,7 @@ divide0:
               res2.x=*op2.reg16;
 							switch(Pipe2.reg) {
 								case 0:       // TEST
-								case 1:       // TEST forse....
+//								case 1:       // TEST forse....
                   _ip+=2;
         					op1.mem = Pipe2.xm.w;
                   res1.x=op1.mem;
@@ -3833,6 +3868,7 @@ divide0:
 										res3.x = MAKELONG(_ax,_dx) / res2.x;
 										_dx = MAKELONG(_ax,_dx) % res2.x;			// non è bello ma...
 										_ax = res3.x;
+//if(Temporary > 0xFFFF) Exception(DE); //divide error
 										}
 									else
 										goto divide0;
@@ -3842,6 +3878,7 @@ divide0:
 										res3.x = (int32_t)MAKELONG(_ax,_dx) / (int16_t)res2.x;
 										_dx =  (int32_t)MAKELONG(_ax,_dx) % (int16_t)res2.x;
 										_ax = res3.x;
+//if(Temporary > 0x7FFF || Temporary < 0x8000) Exception(DE); //f a positive result is greater than 7FFFH or a negative result is less than 8000H
 										}
 									else
 										goto divide0;
@@ -3912,22 +3949,22 @@ aggFlagDecB:
 								case 0:       // INC
 									res2.x = 1;
 									res3.x = res1.x+res2.x;
-									PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
+									PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
 									goto aggFlagIncW;
 									break;
 								case 1:       // DEC
 									res2.x = 1;
-									res3.b = res1.x-res2.x;
-									PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
+									res3.x = res1.x-res2.x;
+									PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
 									goto aggFlagDecW;
 									break;
-								case 2:			// CALL DWORD PTR
-									PUSH_STACK(_ip   /*+2*/);
+								case 2:			// CALL (D)WORD PTR
+									PUSH_STACK(_ip);
 									_ip=res1.x;
 									break;
-								case 3:			// CALL FAR DWORD PTR
+								case 3:			// LCALL (FAR) (D)WORD PTR
 									PUSH_STACK(_cs);
-									PUSH_STACK((_ip   /*+2*/));
+									PUSH_STACK(_ip);
 									_ip=res1.x;
 									_cs=GetShortValue(MAKE20BITS(*theDs,op2.mem+2));
 									break;
@@ -3938,65 +3975,64 @@ aggFlagDecB:
 									_ip=res1.x;
 									_cs=GetShortValue(MAKE20BITS(*theDs,op2.mem+2));
 									break;
-								case 6:       // PUSH
+								case 6:       // PUSH 
 									PUSH_STACK(res1.x);
 									break;
 								}
               }
             break;
           case 3:
+						GET_REGISTER_8_16_2 
 						if(!(Pipe1 & 1)) {
-	            op1.reg8= Pipe2.b.l & 0x4 ? &regs.r[Pipe2.b.l & 0x3].b.h : &regs.r[Pipe2.b.l & 0x3].b.l;
-              res1.b=*op1.reg8;
+              res1.b=*op2.reg8;
 							switch(Pipe2.reg) {
 								case 0:       // INC
 									res2.b = 1;
 									res3.b = res1.b+res2.b;
-									*op1.reg8=res3.b;
+									*op2.reg8=res3.b;
 									goto aggFlagIncB;
 									break;
 								case 1:       // DEC
 									res2.b = 1;
 									res3.b = res1.b-res2.b;
-									*op1.reg8=res3.b;
+									*op2.reg8=res3.b;
 									goto aggFlagDecB;
 									break;
 								}
 							} 
 						else {
-	            op1.reg16= &regs.r[Pipe2.rm].x;
-              res1.x=*op1.reg16;
+              res1.x=*op2.reg16;
 							switch(Pipe2.reg) {
 								case 0:       // INC
 									res2.x = 1;
 									res3.x = res1.x+res2.x;
-									*op1.reg16=res3.x;
+									*op2.reg16=res3.x;
 									goto aggFlagIncW;
 									break;
 								case 1:       // DEC
 									res2.x = 1;
 									res3.x = res1.x-res2.x;
-									*op1.reg16=res3.x;
+									*op2.reg16=res3.x;
 									goto aggFlagDecW;
 									break;
-								case 2:			// CALL DWORD PTR
-									PUSH_STACK(_ip+2);
+								case 2:			// CALL (D)WORD PTR 
+									PUSH_STACK(_ip);
 									_ip=res1.x;
 									break;
 								case 3:			// CALL FAR DWORD32 PTR
 									PUSH_STACK(_cs);
 									PUSH_STACK((_ip   /*+2*/));
 									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-									_cs=*op1.reg16+2;
+									_cs=*op2.reg16+2;
 									break;
 								case 4:       // JMP DWORD PTR jmp [100]
 									_ip=res1.x;
 									break;
 								case 5:       // JMP FAR DWORD PTR
 									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-									_cs=*op1.reg16+2;
+									_cs=*op2.reg16+2;
 									break;
-								case 6:       // PUSH
+								case 6:       // PUSH non sembra esistere idem
 									PUSH_STACK(res1.x);
 									break;
 								}
@@ -4028,7 +4064,7 @@ aggFlagDecB:
 		if(CPUPins & DoHalt) {
 			if(!(CPUPins & (DoNMI | DoIRQ))) {
 				_ip--;
-				continue;		// esegue cmq IRQ...
+				continue;		// NON esegue cmq IRQ! risveglia solo
 				}
 			}
    
@@ -4049,7 +4085,7 @@ aggFlagDecB:
 			_cs=GetShortValue(2*4+2);
 			_f.Trap=0; _f.IF=0;
 skipnmi:
-			;
+				;
 			}
 //		if((CPUPins & DoIRQ) && !inEI    /*&& !inRep && !segOverride*/) {
 		if((CPUPins & DoIRQ)) {		// andrebbe fatto su edge cmq...
@@ -4066,8 +4102,8 @@ skipnmi:
 				_cs=GetShortValue(((uint16_t)ExtIRQNum /*bus dati*/ *4) +2);
         ExtIRQNum=0;
 				}
-skipirq: ;
-;
+skipirq: 
+				;
 			}
 
     if(inEI)

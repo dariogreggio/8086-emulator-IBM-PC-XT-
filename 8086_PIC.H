@@ -50,9 +50,24 @@
 #endif
 #endif
 
-//#define ROM_BASIC 1    //non va, verificare versione ecc 21/7/24 // https://github.com/jeffpar/pcjs/tree/gh-pages/machines/pcx86/ibm/5150/rom/basic/
-#define RAM_DOS 1
 
+#define CGA 1
+//#define MDA 1
+//#define VGA 1
+
+//#define PCAT 1
+
+#define ROM_BASIC 1    //
+
+#define RAM_DOS 1
+#define MS_DOS_VERSION 2			// occhio INT_1E nei bios! per #settori, anche non cambia nulla...
+
+
+#define CPU_CLOCK_DIVIDER 500000L			// così va più o meno come il PIC, su PC greggiod
+#define RAM_SIZE 0x70000L
+#define RAM_START 0L
+#define ROM_SIZE 8192				// BIOS
+#define ROM_END 0x100000L
 
 extern const uint8_t bios_rom[];
 extern const uint8_t MBR[512];
@@ -72,8 +87,8 @@ extern const uint8_t commandcom[];
 
 #define US_TO_CT_TICKS  (CPU_CT_HZ/1000000UL)    // uS to CoreTimer Ticks
     
-#define VERNUML 91
-#define VERNUMH 0
+#define VERNUML 00
+#define VERNUMH 1
 
 
 typedef char BOOL;
@@ -96,12 +111,6 @@ typedef uint16_t GFX_COLOR;
 #define FALSE 0
 
 
-enum {
-  DoReset=1,
-  DoNMI=2,
-  DoIRQ=4,
-  DoHalt=8
-  };
 
 union __attribute__((__packed__)) PIPE {
 	uint32_t d;
@@ -148,6 +157,80 @@ union __attribute__((__packed__)) REG_8086 {
 #endif
     } b;
   };
+#ifndef EXT_80386
+	union __attribute__((__packed__)) REGISTERS {
+		BYTE b[16];
+	  union __attribute__((__packed__)) REG_8086 r[8];
+		};
+#else
+	union __attribute__((__packed__)) REGISTERS {
+		BYTE b[32];
+	  union __attribute__((__packed__)) REG_8086 r[8];
+		};
+#endif
+#ifndef EXT_80386
+	union __attribute__((__packed__)) REGISTERS16 {
+	  union __attribute__((__packed__)) REG_8086 r[4];
+		};
+#else
+	union __attribute__((__packed__)) REGISTERS32 {
+	  union __attribute__((__packed__)) REG_8086 r[6];
+		};
+#endif
+#ifdef EXT_80386
+	union SEGMENT_DESCRIPTOR {		// https://stackoverflow.com/questions/30253678/x86-segment-descriptor-layout-why-is-it-weird
+    uint64_t x;
+		struct {
+			unsigned int Limit: 16;
+			unsigned int Address: 16;
+			unsigned int AddressH: 8;
+			unsigned int Type: 4;
+			unsigned int System: 1;
+			unsigned int DPL: 2;
+			unsigned int P: 1;
+			unsigned int LimitH: 4;
+			unsigned int A: 1;
+			unsigned int unused: 1;
+			unsigned int DB: 1;
+			unsigned int G: 1;
+			unsigned int AddressU: 8;
+			};
+		};
+#endif
+
+	union __attribute__((__packed__)) REGISTRO_F {
+    uint16_t x;
+		struct __attribute__((__packed__)) {
+			unsigned int Carry: 1;
+			unsigned int unused: 1;		// 1 fisso
+			unsigned int Parity: 1;
+			unsigned int unused2: 1;
+			unsigned int Aux: 1;
+			unsigned int unused3: 1;
+			unsigned int Zero: 1;
+			unsigned int Sign: 1;
+			unsigned int Trap: 1;
+			unsigned int IF: 1;
+			unsigned int Dir: 1;
+			unsigned int Ovf: 1;
+#ifdef EXT_80286
+			unsigned int IOPL: 2;
+			unsigned int NestedTask: 1;
+#else
+			unsigned int unused3_: 3;
+#endif
+			unsigned int unused4: 1;
+#ifdef EXT_80386				// https://blog.naver.com/krquddnr37/220271675934?viewType=pc
+			unsigned int ResumeFlag: 1;
+			unsigned int VirtualMode: 1;
+			unsigned int AlignmentCheck: 1;
+			unsigned int VIF: 1;
+			unsigned int VIP: 1;
+			unsigned int ID: 1;
+			unsigned int unused5: 10;
+#endif
+      };
+		};
 union __attribute__((__packed__)) OPERAND {
   uint8_t *reg8;
   uint16_t *reg16;
@@ -167,12 +250,21 @@ union __attribute__((__packed__)) RESULT {
 #endif
   };
   
+  
+  
+enum __attribute__((__packed__)) {
+  DoReset=1,
+  DoNMI=2,
+  DoIRQ=4,
+  DoHalt=8
+  };
+  
+  
 volatile BYTE TIMIRQ,VIDIRQ,KBDIRQ,SERIRQ,RTCIRQ;
 extern volatile BYTE keysFeedPtr;
 
 
-#define MAKE20BITS(a,b) (((uint32_t)b) + (((uint32_t)a) << 4))
-
+#define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)a) << 4) + ((uint32_t)b)))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
 
 
 #define COMPUTE_RM_OFS \
@@ -182,6 +274,7 @@ extern volatile BYTE keysFeedPtr;
     case 1:\
       _ip++;\
     case 0:\
+      immofs=1;\
       switch(Pipe2.rm) {\
         case 0:\
           theDs=&_ds; op2.mem=_bx+_si; /*unsigned*/ \
@@ -210,32 +303,195 @@ extern volatile BYTE keysFeedPtr;
             theDs=&_ds;\
             op2.mem=Pipe2.xm.w;\
             _ip+=2;\
+            immofs+=2;\
             }\
           break;\
         case 7:\
           theDs=&_ds; op2.mem=_bx;\
           break;\
         }\
-        if(segOverride) {\
-            theDs=&segs.r[segOverride-1].x;\
-            segOverride=0;\
-            }
+      if(segOverride) {\
+        theDs=&segs.r[segOverride-1].x;\
+        segOverride=0;\
+        }
+
+#define GET_MEM_OPER \
+  switch(Pipe2.mod) {\
+		case 0:\
+			break;\
+		case 1:\
+			op2.mem+=(int16_t)(int8_t)Pipe2.b.h;\
+			immofs+=1;\
+			break;\
+		case 2:\
+			op2.mem+=(uint16_t)Pipe2.xm.w;/* pare unsigned... boh*/\
+			immofs+=2;\
+			break;\
+		case 3:/*gestito a parte*/\
+			break;\
+		}
 
 #define COMPUTE_RM \
 	_ip++;\
+	GET_REGISTER_8_16\
+	COMPUTE_RM_OFS\
+		GET_MEM_OPER
+
+#define GET_REGISTER_8_16 \
 	if(Pipe1 & 1)\
 		op1.reg16= &regs.r[Pipe2.reg].x;\
 	else\
-		op1.reg8= Pipe2.b.l & 0x20 ? &regs.r[Pipe2.reg & 3].b.h : &regs.r[Pipe2.reg & 0x3].b.l;\
-	COMPUTE_RM_OFS\
-      if(Pipe2.mod == 1)\
-        op2.mem+=(int8_t)Pipe2.b.h;\
-      else if(Pipe2.mod == 2)\
-        op2.mem+=Pipe2.xm.w;
+		op1.reg8= Pipe2.reg & 0x4 ? &regs.r[Pipe2.reg & 0x3].b.h : &regs.r[Pipe2.reg & 0x3].b.l;
+
+#define GET_REGISTER_8_16_2 \
+	if(Pipe1 & 1)\
+		op2.reg16= &regs.r[Pipe2.rm].x;\
+	else\
+	  op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
 
 
-#define PUSH_STACK(a) 	{ _sp-=2;	PutShortValue(MAKE20BITS(_ss,_sp),a); }
-#define POP_STACK(a) 	{ a=GetShortValue(MAKE20BITS(_ss,_sp));	_sp+=2; }
+#define PUSH_STACK(a) 	{ _sp-=2;	PutShortValue((uint32_t)MAKE20BITS(_ss,_sp),(uint16_t)a); }
+#define POP_STACK(a) 	{ a=GetShortValue((uint32_t)MAKE20BITS(_ss,_sp));	_sp+=2; }
+
+#define ROTATE_SHIFT8 \
+	switch(Pipe2.reg) {\
+		case 0:       /* ROL */\
+			while(res2.b--) {\
+				_f.Carry=res3.b & 0x80 ? 1 : 0;\
+				res3.b <<= 1;\
+				res3.b |= _f.Carry;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!_f.Carry != !!(res1.b & 0x80)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 1:       /* ROR*/\
+			while(res2.b--) {\
+				_f.Carry=res3.b & 1;\
+				res3.b >>= 1;\
+				if(_f.Carry)\
+					res3.b |= 0x80;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!(res1.b & 0x80) != !!(res1.b & 0x40)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 2:       /* RCL*/\
+			while(res2.b--) {\
+				_f1.Carry=_f.Carry;\
+				_f.Carry=res3.b & 0x80 ? 1 : 0;\
+				res3.b <<= 1;\
+				res3.b |= _f1.Carry;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!_f.Carry != !!(res1.b & 0x80)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 3:       /* RCR*/\
+			while(res2.b--) {\
+				_f1.Carry=_f.Carry;\
+				_f.Carry=res3.b & 1;\
+				res3.b >>= 1;\
+				if(_f1.Carry)\
+					res3.b |= 0x80;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!(res1.b & 0x80) != !!(res1.b & 0x40)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 4:       /* SHL/SAL*/\
+		case 6:       /* SAL/SHL ... bah mi sembrano identiche!*/\
+			while(res2.b--) {\
+				_f.Carry=res3.b & 0x80 ? 1 : 0;\
+				res3.b <<= 1;\
+				}\
+			if(i==1)\
+				_f.Ovf=(res3.b ^ res1.b) & 0x80 ? 1 : 0;		/* Ovf=0 se MSB uscente è = MSB entrante / il segno è preservato (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+			break;\
+		case 5:       /* SHR*/\
+			while(res2.b--) {\
+				_f.Carry=res3.b & 1;\
+				res3.b = ((uint8_t)res3.b) >> 1;\
+				}\
+			if(i==1)\
+				_f.Ovf=res1.b & 0x80 ? 1 : 0;		/* Ovf= MSB entrante (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+			break;\
+		case 7:       /* SAR*/\
+			while(res2.b--) {\
+				_f.Carry=res3.b & 1;\
+				res3.b = ((int8_t)res3.b) >> 1;\
+				}\
+			if(i==1)\
+				_f.Ovf=0;		/* Ovf=0 (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+			break;\
+		}
+
+
+#define ROTATE_SHIFT16 \
+	switch(Pipe2.reg) {	\
+		case 0:       /* ROL*/\
+			while(res2.b--) {\
+				_f.Carry=res3.x & 0x8000 ? 1 : 0;\
+				res3.x <<= 1;\
+				res3.x |= _f.Carry;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!_f.Carry != !!(res1.x & 0x8000)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 1:       /* ROR*/\
+			while(res2.b--) {\
+				_f.Carry=res3.x & 1;\
+				res3.x >>= 1;\
+				if(_f.Carry)\
+					res3.x |= 0x8000;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!(res1.x & 0x8000) != !!(res1.x & 0x4000)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 2:       /* RCL*/\
+			while(res2.b--) {\
+				_f1.Carry=_f.Carry;\
+				_f.Carry=res3.x & 0x8000 ? 1 : 0;\
+				res3.x <<= 1;\
+				res3.x |= _f1.Carry;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!_f.Carry != !!(res1.x & 0x8000)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 3:       /* RCR*/\
+			while(res2.b--) {\
+				_f1.Carry=_f.Carry;\
+				_f.Carry=res3.x & 1;\
+				res3.x >>= 1;\
+				if(_f1.Carry)\
+					res3.x |= 0x8000;\
+				}\
+			if(i==1)\
+				_f.Ovf=(!!(res1.x & 0x8000) != !!(res1.x & 0x4000)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			break;\
+		case 4:       /* SHL/SAL*/\
+		case 6:       /* SAL/SHL ... bah mi sembrano identiche!*/\
+			while(res2.b--) {\
+				_f.Carry=res3.x & 0x8000 ? 1 : 0;\
+				res3.x <<= 1;\
+				}\
+			if(i==1)\
+				_f.Ovf=(res3.x ^ res1.x) & 0x8000 ? 1 : 0;		/* Ovf=0 se MSB uscente è = MSB entrante / il segno è preservato (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+			break;\
+		case 5:       /* SHR*/\
+			while(res2.b--) {\
+				_f.Carry=res3.x & 1;\
+				res3.x = ((uint16_t)res3.x) >> 1;\
+				}\
+			if(i==1)\
+				_f.Ovf=res1.x & 0x8000 ? 1 : 0;		/* Ovf= MSB entrante (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+			break;\
+		case 7:       /* SAR*/\
+			while(res2.b--) {\
+				_f.Carry=res3.x & 1;\
+				res3.x = ((int16_t)res3.x) >> 1;\
+				}\
+			if(i==1)\
+				_f.Ovf=0;		/* Ovf=0 (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+			break;\
+		}
+
 
 
 #ifdef ST7735
@@ -294,8 +550,11 @@ void UART_Init(uint32_t);
 void putsUART1(unsigned int *buffer);
 
 int decodeKBD(int, long, BOOL);
+uint8_t GetPipe(uint32_t t);
+uint8_t GetMorePipe(uint32_t t);
 uint8_t GetValue(uint32_t);
 uint8_t InValue(uint16_t);
+uint16_t InShortValue(uint16_t);
 uint16_t InIntValue(uint16_t);
 uint16_t GetShortValue(uint32_t);
 uint32_t GetIntValue(uint32_t);

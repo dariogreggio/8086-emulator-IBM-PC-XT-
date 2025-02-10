@@ -8,12 +8,6 @@
 //v. per Ovf metodo usato su 68000 senza byte alto... provare
 // la cosa di inEI... chissà... e anche in Z80; però SERVE su segment override!! (ovvio; dice anche che i primi 8088 avevano questo bug, vedi CPU TEST in BIOS https://cosmodoc.org/topics/processor-detection/ )  
 
-// (ok con BIOS migliore, per minibios serve la patch [#warning NO lo fa ancora 14/7, rivedere i clear 8259
-//  Più o meno ora va tutto [, anche se dopo la schermata sembra piantarsi in eccezione (a volte) .. credo sia ancora un problema di interrupt e hw]
-//   [ora VA! 21/7/24, non esce la scritta "press setup" ma direi ok, verificare bios se si vuole (ora il miniBIOS si blocca dopo il test memoria... 16/7/24
-//   [ORA VA!! c'era altro bug istruzioni 20/7/24 (e con ottimizzazioni 1 e 2 si schianta... sembra aspettare la tastiera o altro, credo ancora problemi hw
-//   [ OK 20/7/24 [no! v. irq timer (in debug va ma in release riporta 0K RAM e System Error 03, senza schiantarsi...
-
 
 #include <stdio.h>
 #include <ctype.h>
@@ -88,65 +82,43 @@ volatile BYTE VIDIRQ=0;
 #define SIGN_16() (!!(res3.x & 0x8000))
 #define ZERO_16() (!res3.x)
 #define AUX_ADD_8() (((res1.b & 0xf) + (res2.b & 0xf)) & 0xf0 ? 1 : 0)
-/*1-carry out from bit 7 on addition or borrow into bit 7 on subtraction
-	0-otherwise*/
-#define AUX_ADD_16() (((res1.b & 0xf) + (res2.b & 0xf)) & 0xf0 ? 1 : 0)		// SEMPRE byte basso
-/*AUX flag: 1-carry out from bit 3 on addition or borrow into bit 3 on subtraction
-	0-otherwise*/
 #define AUX_SUB_8() (((res1.b & 0xf) - (res2.b & 0xf)) & 0xf0 ? 1 : 0)
 /*AUX flag: 1-carry out from bit 3 on addition or borrow into bit 3 on subtraction
 	0-otherwise*/
-#define AUX_SUB_16() (((res1.b & 0xf) - (res2.b & 0xf)) & 0xf0 ? 1 : 0)   // SEMPRE byte basso
-/*1-carry out from bit 7 on addition or borrow into bit 7 on subtraction
-	0-otherwise*/
-#if 0
-#define CARRY_ADD_8() (res3.x & 0xff00 ? 1 : 0)
-#define OVF_ADD_8() (!!(res3.x & 0xff00) != !!((res3.b & 0x80) ^ (res1.b & 0x80) ^ (res2.b & 0x80)))
-//        _f.Ovf = (res1.b & 0x40 + res2.b & 0x40) != (res1.b & 0x80 + res2.b & 0x80);
-#define OVF_ADD_8() (!!(((res1.b & 0x40) + (res2.b & 0x40)) & 0x80) != !!(((res1.x & 0x80) + (res2.x & 0x80)) & 0x100))
-//        _f.Ovf = !!_f.Carry != !!((res3.b & res1.b & res2.b) & 0x80);
-//				_f.Ovf = ((res1.b ^ res2.b) & 0x80) ? 1 : 0;		
-        /*The OVERFLOW flag is the XOR of the carry coming into the sign bit (if
-any) with the carry going out of the sign bit (if any).  Overflow happens
-if the carry in does not equal the carry out.*/
-#define CARRY_ADD_16() (res3.d & 0xff0000 ? 1 : 0)
-#define OVF_ADD_16() (!!(res3.d & 0xffff00) != !!((res3.x & 0x8000) ^ (res1.x & 0x8000) ^ (res2.x & 0x8000)))
-//        _f.Ovf = (res1.x & 0x4000 + res2.x & 0x4000) != (res1.x & 0x8000 + res2.x & 0x8000);
-#define OVF_ADD_16() (!!(((res1.x & 0x4000) + (res2.x & 0x4000)) & 0x8000) != !!(((res1.d & 0x8000) + (res2.d & 0x8000)) & 0x10000))
-//        _f.Ovf = !!_f.Carry != !!((res3.x & res1.x & res2.x) & 0x8000);
-//				_f.Ovf = ((res1.x ^ res2.x) & 0x8000) ? 1 : 0;		
-        /*The OVERFLOW flag is the XOR of the carry coming into the sign bit (if any) with the carry going out of the sign bit (if any).  Overflow happens
-if the carry in does not equal the carry out.*/
-		// per overflow  https://stackoverflow.com/questions/8034566/overflow-and-carry-flags-on-z80
-#define CARRY_SUB_8() (res3.x & 0xff00 ? 1 : 0)
-#define OVF_SUB_8() (!!(res3.x & 0xff00) != !!((res3.b & 0x80) ^ (res1.b & 0x80) ^ (res2.b & 0x80)))
-//#define OVF_SUB_8() ((res1.b & 0x40 + res2.b & 0x40) != (res1.b & 0x80 + res2.b & 0x80))
-#define OVF_SUB_8() (!!(((res1.b & 0x40) + (res2.b & 0x40)) & 0x80) != !!(((res1.x & 0x80) + (res2.x & 0x80)) & 0x100))
-//        _f.Ovf = !!_f.Carry != !!((res3.b & res1.b & res2.b) & 0x80);
-//				_f.Ovf = ((res1.b ^ res2.b) & 0x80) ? 1 : 0;		
-        /*The OVERFLOW flag is the XOR of the carry coming into the sign bit (if any) with the carry going out of the sign bit (if any).  Overflow happens
-if the carry in does not equal the carry out.*/
-#define CARRY_SUB_16() (res3.d & 0xff0000 ? 1 : 0)
-#define OVF_SUB_16() (!!(res3.d & 0xffff0000) != !!((res3.x & 0x8000) ^ (res1.x & 0x8000) ^ (res2.x & 0x8000)))
-//        _f.Ovf = (res1.x & 0x4000 + res2.x & 0x4000) != (res1.x & 0x8000 + res2.x & 0x8000);
-#define OVF_SUB_16() (!!(((res1.x & 0x4000) + (res2.x & 0x4000)) & 0x8000) != !!(((res1.d & 0x8000) + (res2.d & 0x8000)) & 0x10000))
-//        _f.Ovf = !!_f.Carry != !!((res3.x & res1.x & res2.x) & 0x8000);
-//				_f.Ovf = ((res1.x ^ res2.x) & 0x8000) ? 1 : 0;		
-        /*The OVERFLOW flag is the XOR of the carry coming into the sign bit (if any) with the carry going out of the sign bit (if any).  Overflow happens
-if the carry in does not equal the carry out.*/
-		// per overflow  https://stackoverflow.com/questions/8034566/overflow-and-carry-flags-on-z80
-#endif
 
-/*// da Makushi 68000 o come cazzo si chiama :D
+/*// da Makushi 68000 o come cazzo si chiama :D  + vari PD...
 // res2 è Source e res1 è Dest ossia quindi res3=Result  OCCHIO QUA*/
+	// https://github.com/kxkx5150/CPU-8086-cpp/blob/main/src/Intel8086.cpp
+	// https://github.com/zsteve/hard86/blob/master/src/emulator/emulator_engine/src/flags.c#L105
 #define CARRY_ADD_8()  (!!(((res2.b & res1.b) | (~res3.b & (res2.b | res1.b))) & 0x80))		// ((S & D) | (~R & (S | D)))
+//#define CARRY_ADD_8()  (!!(res3.b < res1.b))
+//#define CARRY_ADD_8()  ((((uint16_t)res1.b+res2.b) >> 8 ? 1 : 0))
+#define CARRY_ADC_8()  (_f.Carry ? (res3.b <= res1.b) : (res3.b < res1.b))		// carry == 1 ? res <= dst : res < dst
+//#define CARRY_ADC_8()  ((((uint16_t)res1.b+res2.b+_f.Carry) >> 8 ? 1 : 0))
 #define OVF_ADD_8()    (!!(((res2.b ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
+#define OVF_ADC_8()    (!!(((res2.b ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
 #define CARRY_ADD_16() (!!(((res2.x & res1.x) | (~res3.x & (res2.x | res1.x))) & 0x8000))
+//#define CARRY_ADD_16() (!!(res3.x < res1.x))
+//#define CARRY_ADD_16() ((((uint32_t)res1.x+res2.x) >> 16 ? 1 : 0))
+#define CARRY_ADC_16() (_f.Carry ? (res3.x <= res1.x) : (res3.x < res1.x))
+//#define CARRY_ADC_16() ((((uint32_t)res1.x+res2.x+_f.Carry) >> 16 ? 1 : 0))
 #define OVF_ADD_16()   (!!(((res2.x ^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
+#define OVF_ADC_16()   (!!(((res2.x ^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
 #define CARRY_SUB_8()  (!!(((res2.b & res3.b) | (~res1.b & (res2.b | res3.b))) & 0x80))		// ((S & R) | (~D & (S | R)))
+//#define CARRY_SUB_8()  (!!(res1.b < res2.b))
+//#define CARRY_SUB_8() ((((uint16_t)res1.b-res2.b) >> 8 ? 1 : 0))
+#define CARRY_SBB_8()  (_f.Carry ? (res1.b <= res2.b) : (res1.b < res2.b))		// carry > 0 ? dst <= src : dst < src
+//#define CARRY_SBB_8() ((((uint16_t)res1.b-res2.b-_f.Carry) >> 8 ? 1 : 0))
 #define OVF_SUB_8()    (!!(((res2.b ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
+#define OVF_SBB_8()    (!!(((res2.b ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
 #define CARRY_SUB_16() (!!(((res2.x & res3.x) | (~res1.x & (res2.x | res3.x))) & 0x8000))
+//#define CARRY_SUB_16() (!!(res1.x < res2.x))
+//#define CARRY_SUB_16() ((((uint32_t)res1.x-res2.x) >> 16 ? 1 : 0))
+#define CARRY_SBB_16() (_f.Carry ? (res1.x <= res2.x) : (res1.x < res2.x))
+//#define CARRY_SBB_16() ((((uint32_t)res1.x-res2.x-_f.Carry) >> 16 ? 1 : 0))
 #define OVF_SUB_16()   (!!(((res2.x ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
+#define OVF_SBB_16()   (!!(((res2.x ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
+
 
 int Emulate(int mode) {
   // in termini di memoria usata, tenere locali le variabili è molto meglio...
@@ -794,16 +766,16 @@ aggFlagABA:    // aux, zero, sign, parity
 aggFlagBZ:    // zero, sign, parity
 				_f.Zero=ZERO_8();
 				_f.Sign=SIGN_8();
+
 aggParity:
         {
-        BYTE par,parn;
-        parn=res3.b;
-        par= parn >> 1;			// Microchip AN774; https://stackoverflow.com/questions/17350906/computing-the-parity
-        par ^= parn;
-        parn= par >> 2;
-        par ^= parn;
-        parn= par >> 4;
-        par ^= parn;
+        BYTE par;
+        par= res3.b >> 1;			// Microchip AN774; https://stackoverflow.com/questions/17350906/computing-the-parity
+        par ^= res3.b;
+        res3.b= par >> 2;
+        par ^= res3.b;
+        res3.b= par >> 4;
+        par ^= res3.b;
         _f.Parity=par & 1 ? 0 : 1;		// invertito qua pd £$%&/
         }
 				break;
@@ -818,8 +790,9 @@ aggParity:
 aggFlagAW:     // carry, ovf, aux, zero, sign, parity
 				_f.Carry=CARRY_ADD_16();
         _f.Ovf = OVF_ADD_16();
+
 aggFlagAWA:    // aux, zero, sign, parity
-        _f.Aux = AUX_ADD_16();
+        _f.Aux = AUX_ADD_8();
         
 aggFlagWZ:    // zero, sign, parity
 				_f.Zero=ZERO_16();
@@ -1268,31 +1241,39 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-                res2.b=*op1.reg8+_f.Carry;
-								res3.b = res1.b+res2.b;      
+                res2.b=*op1.reg8;
+								res3.b = res1.b+res2.b+_f.Carry;
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
-                goto aggFlagAB;
+
+aggFlagABC:
+								_f.Carry=CARRY_ADC_8();
+								_f.Ovf = OVF_ADC_8();
+								goto aggFlagABA;
                 break;
               case 1:
                 res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-                res2.x=*op1.reg16+_f.Carry;
-                res3.x = res1.x+res2.x;
+                res2.x=*op1.reg16;
+                res3.x = res1.x+res2.x+_f.Carry;
                 PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
-                goto aggFlagAW;
+
+aggFlagAWC:
+								_f.Carry=CARRY_ADC_16();
+								_f.Ovf = OVF_ADC_16();
+                goto aggFlagAWA;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
-								res3.b = res1.b+res2.b;      
+                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
+								res3.b = res1.b+res2.b+_f.Carry;      
                 *op1.reg8 = res3.b;
-                goto aggFlagAB;
+                goto aggFlagABC;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
-                res3.x = res1.x+res2.x;
+                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
+                res3.x = res1.x+res2.x+_f.Carry;
                 *op1.reg16 = res3.x;
-                goto aggFlagAW;
+                goto aggFlagAWC;
                 break;
               }
             break;
@@ -1301,31 +1282,31 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=*op2.reg8;
-                res2.b=*op1.reg8+_f.Carry;
-								res3.b = res1.b+res2.b;      
+                res2.b=*op1.reg8;
+								res3.b = res1.b+res2.b+_f.Carry;      
                 *op2.reg8=res3.b;
-                goto aggFlagAB;
+                goto aggFlagABC;
                 break;
               case 1:
                 res1.x=*op2.reg16;
-                res2.x=*op1.reg16+_f.Carry;
-                res3.x = res1.x+res2.x;
+                res2.x=*op1.reg16;
+                res3.x = res1.x+res2.x+_f.Carry;
                 *op2.reg16=res3.x;
-                goto aggFlagAW;
+                goto aggFlagAWC;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=*op2.reg8+_f.Carry;
-								res3.b = res1.b+res2.b;      
+                res2.b=*op2.reg8;
+								res3.b = res1.b+res2.b+_f.Carry;      
                 *op1.reg8=res3.b;
-                goto aggFlagAB;
+                goto aggFlagABC;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=*op2.reg16+_f.Carry;
-                res3.x = res1.x+res2.x;
+                res2.x=*op2.reg16;
+                res3.x = res1.x+res2.x+_f.Carry;
                 *op1.reg16=res3.x;
-                goto aggFlagAW;
+                goto aggFlagAWC;
                 break;
               }
             break;
@@ -1334,20 +1315,20 @@ aggFlagWZC:
 
 			case 0x14:        // ADC
         res1.b=_al;
-        res2.b=Pipe2.b.l+_f.Carry;
-				res3.b = res1.b+res2.b;
+        res2.b=Pipe2.b.l;
+				res3.b = res1.b+res2.b+_f.Carry;
         _al = res3.b;
 				_ip++;
-        goto aggFlagAB;
+        goto aggFlagABC;
 				break;
 
 			case 0x15:        // ADC
         res1.x=_ax;
-        res2.x=Pipe2.x.l+_f.Carry;
-				res3.x = res1.x+res2.x;   
+        res2.x=Pipe2.x.l;
+				res3.x = res1.x+res2.x+_f.Carry;   
         _ax = res3.x;
 				_ip+=2;
-        goto aggFlagAW;
+        goto aggFlagAWC;
 				break;
 
 			case 0x18:        // SBB
@@ -1358,31 +1339,39 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
-                res2.b=*op1.reg8+_f.Carry;
-								res3.b = res1.b-res2.b;
+                res2.b=*op1.reg8;
+								res3.b = res1.b-res2.b-_f.Carry;
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
-                goto aggFlagSB;
+
+aggFlagSBB:
+								_f.Carry=CARRY_SBB_8();
+								_f.Ovf = OVF_SBB_8();
+                goto aggFlagSBA;
                 break;
               case 1:
                 res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
-                res2.x=*op1.reg16+_f.Carry;
-                res3.x = res1.x-res2.x;
+                res2.x=*op1.reg16;
+                res3.x = res1.x-res2.x-_f.Carry;
                 PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
-                goto aggFlagSW;
+
+aggFlagSWB:
+								_f.Carry=CARRY_SBB_16();
+								_f.Ovf = OVF_SBB_16();
+                goto aggFlagSWA;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
-								res3.b = res1.b-res2.b;      
+                res2.b=GetValue(MAKE20BITS(*theDs,op2.mem));
+								res3.b = res1.b-res2.b-_f.Carry;      
                 *op1.reg8 = res3.b;
-                goto aggFlagSB;
+                goto aggFlagSBB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem))+_f.Carry;
-                res3.x = res1.x-res2.x;
+                res2.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
+                res3.x = res1.x-res2.x-_f.Carry;
                 *op1.reg16 = res3.x;
-                goto aggFlagSW;
+                goto aggFlagSWB;
                 break;
               }
             break;
@@ -1391,31 +1380,31 @@ aggFlagWZC:
             switch(Pipe1 & 0x3) {
               case 0:
                 res1.b=*op2.reg8;
-                res2.b=*op1.reg8+_f.Carry;
-								res3.b = res1.b-res2.b;      
+                res2.b=*op1.reg8;
+								res3.b = res1.b-res2.b-_f.Carry;      
                 *op2.reg8=res3.b;
-                goto aggFlagSB;
+                goto aggFlagSBB;
                 break;
               case 1:
                 res1.x=*op2.reg16;
-                res2.x=*op1.reg16+_f.Carry;
-                res3.x = res1.x-res2.x;
+                res2.x=*op1.reg16;
+                res3.x = res1.x-res2.x-_f.Carry;
                 *op2.reg16=res3.x;
-                goto aggFlagSW;
+                goto aggFlagSWB;
                 break;
               case 2:
                 res1.b=*op1.reg8;
-                res2.b=*op2.reg8+_f.Carry;
-								res3.b = res1.b-res2.b;      
+                res2.b=*op2.reg8;
+								res3.b = res1.b-res2.b-_f.Carry;      
                 *op1.reg8=res3.b;
-                goto aggFlagSB;
+                goto aggFlagSBB;
                 break;
               case 3:
                 res1.x=*op1.reg16;
-                res2.x=*op2.reg16+_f.Carry;
-                res3.x = res1.x-res2.x;
+                res2.x=*op2.reg16;
+                res3.x = res1.x-res2.x-_f.Carry;
                 *op1.reg16=res3.x;
-                goto aggFlagSW;
+                goto aggFlagSWB;
                 break;
               }
             break;
@@ -1424,20 +1413,20 @@ aggFlagWZC:
 
 			case 0x1c:        // SBB
         res1.b=_al;
-        res2.b=Pipe2.b.l+_f.Carry;
-				res3.b = res1.b-res2.b;      
+        res2.b=Pipe2.b.l;
+				res3.b = res1.b-res2.b-_f.Carry;      
         _al = res3.b;
 				_ip++;
-        goto aggFlagSB;
+        goto aggFlagSBB;
 				break;
 
 			case 0x1d:        // SBB
         res1.x=_ax;
-        res2.x=Pipe2.x.l+_f.Carry;
-				res3.x = res1.x-res2.x;   
+        res2.x=Pipe2.x.l;
+				res3.x = res1.x-res2.x-_f.Carry;   
         _ax = res3.x;
 				_ip+=2;
-        goto aggFlagSW;
+        goto aggFlagSWB;
 				break;
 
 			case 0x20:        // AND
@@ -1655,7 +1644,7 @@ aggFlagSW:     // carry, ovf, aux, zero, sign, parity
         _f.Ovf = OVF_SUB_16();
 
 aggFlagSWA:    // aux, zero, sign, parity
-        _f.Aux = AUX_SUB_16();
+        _f.Aux = AUX_SUB_8();
         goto aggFlagWZ;
 				break;
 
@@ -1902,8 +1891,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 			case 0x47:
         op2.reg16 = &regs.r[Pipe1 & 0x7].x;
 				res1.x = *op2.reg16;
-				res2.x = 1;
-				res3.x = res1.x+res2.x;
+				res3.x = res1.x+1;
 				*op2.reg16 = res3.x;
 
 aggFlagIncW:
@@ -1921,8 +1909,7 @@ aggFlagIncW:
 			case 0x4f:
         op2.reg16 = &regs.r[Pipe1 & 0x7].x;
 				res1.x = *op2.reg16;
-				res2.x = 1;
-				res3.x = res1.x-res2.x;
+				res3.x = res1.x-1;
 				*op2.reg16 = res3.x;
 
 aggFlagDecW:
@@ -2103,7 +2090,7 @@ aggFlagDecW:
 				GetPipe(MAKE20BITS(_cs,_ip++));		// mi sposto ancora avanti!
 				COMPUTE_RM_OFS
             if((Pipe2.b.l & 0xc0) == 0x40) {
-              op2.mem+=(int8_t)Pipe2.b.l;
+              op2.mem+=(int16_t)(int8_t)Pipe2.b.l;
               op3.mem=Pipe2.b.h;
 							}
             else if((Pipe2.b.l & 0xc0) == 0x80) {
@@ -2195,97 +2182,99 @@ aggFlagDecW:
 			case 0x70:    // JO
 				_ip++;
 				if(_f.Ovf)
+
+jmp_short:
 					_ip+=(int8_t)Pipe2.b.l;
 				break;
 
 			case 0x71:    // JNO
 				_ip++;
 				if(!_f.Ovf)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x72:    // JB, JC, JNAE
 				_ip++;
 				if(_f.Carry)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x73:    // JAE, JNB, JNC
 				_ip++;
 				if(!_f.Carry)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x74:      // JE, JZ
 				_ip++;
 				if(_f.Zero)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x75:      // JNE, JNZ
 				_ip++;
 				if(!_f.Zero)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x76:    // JBE, JNA
 				_ip++;
 				if(_f.Zero || _f.Carry)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x77:      // JA, JNBE
 				_ip++;
 				if(!_f.Zero && !_f.Carry)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x78:          // JS
 				_ip++;
 				if(_f.Sign)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x79:          // JNS
 				_ip++;
 				if(!_f.Sign)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
       case 0x7a:          // JP, JPE
 				_ip++;
 				if(_f.Parity)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
         
 			case 0x7b:          // JNP, JPO
 				_ip++;
 				if(!_f.Parity)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x7c:          // JL, JNGE
 				_ip++;
 				if(_f.Sign!=_f.Ovf)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x7d:
 				_ip++;
 				if(_f.Sign==_f.Ovf)     // JGE, JNL
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x7e:      // JLE, JNG
 				_ip++;
 				if(_f.Zero || _f.Sign!=_f.Ovf)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x7f:      // JG, JNLE
 				_ip++;
 				if(!_f.Zero && _f.Sign==_f.Ovf)
-					_ip+=(int8_t)Pipe2.b.l;
+					goto jmp_short;
 				break;
 
 			case 0x80:				// ADD ecc rm8, immediate8
@@ -2315,16 +2304,14 @@ aggFlagDecW:
 								goto aggFlagBZC;
 								break;
 							case 2:       // ADC
-								res2.b += _f.Carry;
-								res3.b=res1.b + res2.b;
+								res3.b=res1.b + res2.b+_f.Carry;
 		            PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
-								goto aggFlagAB;
+								goto aggFlagABC;
 								break;
 							case 3:       // SBB
-								res2.b += _f.Carry;
-								res3.b=res1.b - res2.b;
+								res3.b=res1.b - res2.b-_f.Carry;
 		            PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
-								goto aggFlagSB;
+								goto aggFlagSBB;
 								break;
 							case 4:       // AND
 								res3.b=res1.b & res2.b;
@@ -2372,16 +2359,14 @@ aggFlagDecW:
 								goto aggFlagWZC;
 								break;
 			        case 2:       // ADC
-								res2.x += _f.Carry;
-								res3.x = res1.x + res2.x;
+								res3.x = res1.x + res2.x+ _f.Carry;
 		            PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
-								goto aggFlagAW;
+								goto aggFlagAWC;
 								break;
 			        case 3:       // SBB
-								res2.x += _f.Carry;
-								res3.x = res1.x - res2.x;
+								res3.x = res1.x - res2.x-_f.Carry;
 		            PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
-								goto aggFlagSW;
+								goto aggFlagSWB;
 								break;
 			        case 4:       // AND
 								res3.x=res1.x & res2.x;
@@ -2419,7 +2404,7 @@ aggFlagDecW:
 					GET_REGISTER_8_16_2
 					if(!(Pipe1 & 1)) {
             res1.b=*op2.reg8;
-						op1.mem=Pipe2.b.h; // 
+						op1.mem=Pipe2.b.h;
 //Pipe2.bd[immofs];
 						res2.b=(uint8_t)op1.mem;
 						switch(Pipe2.reg) {
@@ -2434,16 +2419,14 @@ aggFlagDecW:
 								goto aggFlagBZC;
 								break;
 							case 2:       // ADC
-								res2.b += _f.Carry;
-								res3.b=res1.b + res2.b;
+								res3.b=res1.b + res2.b+_f.Carry;
 								*op2.reg8=res3.b;
-								goto aggFlagAB;
+								goto aggFlagABC;
 								break;
 							case 3:       // SBB
-								res2.b += _f.Carry;
-								res3.b=res1.b - res2.b;
+								res3.b=res1.b - res2.b-_f.Carry;
 								*op2.reg8=res3.b;
-								goto aggFlagSB;
+								goto aggFlagSBB;
 								break;
 							case 4:       // AND
 								res3.b=res1.b & res2.b;
@@ -2491,16 +2474,14 @@ aggFlagDecW:
 								goto aggFlagWZC;
 								break;
 			        case 2:       // ADC
-								res2.x += _f.Carry;
-								res3.x = res1.x + res2.x;
+								res3.x = res1.x + res2.x+_f.Carry;
 								*op2.reg16=res3.x;
-								goto aggFlagAW;
+								goto aggFlagAWC;
 								break;
 			        case 3:       // SBB
-								res2.x += _f.Carry;
-								res3.x = res1.x - res2.x;
+								res3.x = res1.x - res2.x-_f.Carry;
 								*op2.reg16=res3.x;
-								goto aggFlagSW;
+								goto aggFlagSWB;
 								break;
 			        case 4:       // AND
 								res3.x=res1.x & res2.x;
@@ -2515,7 +2496,7 @@ aggFlagDecW:
 			        case 5:       // SUB
 								res3.x = res1.x - res2.x;
 								*op2.reg16=res3.x;
-								goto aggFlagAW;
+								goto aggFlagSW;
 								break;
 			        case 6:       // XOR
 								res3.x=res1.x ^ res2.x;
@@ -3503,25 +3484,25 @@ do_irq:
 			case 0xe0:      // LOOPNZ/LOOPNE
 				_ip++;
         if(--_cx && !_f.Zero)
-          _ip+=(int8_t)Pipe2.b.l;
+ 					goto jmp_short;
 				break;
         
 			case 0xe1:      // LOOPZ/LOOPE
 				_ip++;
         if(--_cx && _f.Zero)
-          _ip+=(int8_t)Pipe2.b.l;
+          goto jmp_short;
 				break;
         
 			case 0xe2:      // LOOP
 				_ip++;
         if(--_cx)
-          _ip+=(int8_t)Pipe2.b.l;
+          goto jmp_short;
 				break;
 
 			case 0xe3:      // JCXZ
 				_ip++;
         if(!_cx)
-          _ip+=(int8_t)Pipe2.b.l;
+          goto jmp_short;
 				break;
 
 			case 0xe4:        // INB
@@ -3561,7 +3542,8 @@ do_irq:
 				break;
 
 			case 0xeb:      // JMP rel8
-				_ip+=(int8_t)Pipe2.b.l+1;
+				_ip++;
+				goto jmp_short;
 				break;
 			
 			case 0xec:        // INB
@@ -3596,14 +3578,13 @@ Trap:
 					inEI++;		// forse ne fa uno di troppo alla fine, ma ok...
 					}
 				else {
-			    Pipe1=GetPipe(MAKE20BITS(_cs,_ip));
+			    Pipe1=GetPipe(MAKE20BITS(_cs,_ip++));
 					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
 #ifdef EXT_80386
 						|| Pipe1==0x64 || Pipe1==0x65
 #endif
 						)
 						_ip++;
-					_ip++;
 					}
 				break;
 
@@ -3613,14 +3594,13 @@ Trap:
 					inEI++;
 					}
 				else {
-			    Pipe1=GetPipe(MAKE20BITS(_cs,_ip));
+			    Pipe1=GetPipe(MAKE20BITS(_cs,_ip++));
 					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
 #ifdef EXT_80386
 						|| Pipe1==0x64 || Pipe1==0x65
 #endif
 						)
 						_ip++;
-					_ip++;
 					}
 				break;
 
@@ -3643,6 +3623,7 @@ Trap:
 							switch(Pipe2.reg) {
 								case 0:       // TEST
 //								case 1:       // TEST forse....
+//									GetMorePipe(MAKE20BITS(_cs,_ip-4));	
                   _ip++;
         					res1.b = Pipe2.bd[immofs];
 									res3.b = res1.b & res2.b;
@@ -3662,14 +3643,14 @@ Trap:
 								case 4:       // MUL8
                   op1.reg8= &_al;
                   res1.b=*op1.reg8;
-									res3.x = (uint16_t)res1.b*res2.b;
+									res3.x = ((uint16_t)res1.b)*res2.b;
 									_ax=res3.x;			// non è bello ma...		
 									_f.Carry=_f.Ovf= !!_ah;
 									break;
 								case 5:       // IMUL8
                   op1.reg8= &_al;
                   res1.b=*op1.reg8;
-									res3.x = (int16_t)(int8_t)res1.b*(int8_t)res2.b;
+									res3.x = ((int16_t)(int8_t)res1.b)*(int8_t)res2.b;
 									_ax=res3.x;			// non è bello ma...		
 									_f.Carry=_f.Ovf= !!_ah;
 									break;
@@ -3688,8 +3669,8 @@ divide0:
 									break;
 								case 7:       // IDIV8
 									if(res2.b) {
-										res3.b = (int16_t)_ax / (int8_t)res2.b;
-										_ah =  (int16_t)_ax % (int8_t)res2.b;
+										res3.b = ((int16_t)_ax) / (int8_t)res2.b;
+										_ah =  ((int16_t)_ax) % (int8_t)res2.b;
 										_al = res3.b;
 //if(Temporary > 0x7F || Temporary < 0x80) Exception(DE); //f a positive result is greater than 7FH or a negative result is less than 80H
 											}
@@ -3723,7 +3704,7 @@ divide0:
 								case 4:       // MUL16
                   op1.reg16= &_ax;
                   res1.x=*op1.reg16;
-									res3.d = (uint32_t)res1.x*res2.x;
+									res3.d = ((uint32_t)res1.x)*res2.x;
 									_ax = LOWORD(res3.d);			// 
 									_dx = HIWORD(res3.d);			// non è bello ma...		
 									_f.Carry=_f.Ovf= !!_dx;
@@ -3731,7 +3712,7 @@ divide0:
 								case 5:       // IMUL16
                   op1.reg16= &_ax;
                   res1.x=*op1.reg16;
-									res3.d = (int32_t)res1.x*(int16_t)res2.x;
+									res3.d = ((int32_t)res1.x)*(int16_t)res2.x;
 									_ax = LOWORD(res3.d);			// 
 									_dx = HIWORD(res3.d);			// non è bello ma...		
 									_f.Carry=_f.Ovf= !!_dx;
@@ -3788,14 +3769,14 @@ divide0:
 								case 4:       // MUL8
         					op1.reg8= &_al;
                   res1.b=*op1.reg8;
-									res3.x = (uint16_t)res1.b*res2.b;
+									res3.x = ((uint16_t)res1.b)*res2.b;
 									_ax=res3.x;			// 
 									_f.Carry=_f.Ovf= !!_ah;
 									break;
 								case 5:       // IMUL8
         					op1.reg8= &_al;
                   res1.b=*op1.reg8;
-									res3.x = (int16_t)(int8_t)res1.b*(int8_t)res2.b;
+									res3.x = ((int16_t)(int8_t)res1.b)*(int8_t)res2.b;
 									_ax=res3.x;			// 
 									_f.Carry=_f.Ovf= !!_ah;
 									break;
@@ -3849,7 +3830,7 @@ divide0:
 								case 4:       // MUL16
         					op1.reg16= &_ax;
                   res1.x=*op1.reg16;
-									res3.d = (uint32_t)res1.x*res2.x;
+									res3.d = ((uint32_t)res1.x)*res2.x;
 									_ax=LOWORD(res3.d);			// 
 									_dx=HIWORD(res3.d);			// non è bello ma...		
 									_f.Carry=_f.Ovf= !!_dx;
@@ -3857,7 +3838,7 @@ divide0:
 								case 5:       // IMUL16
         					op1.reg16= &_ax;
                   res1.x=*op1.reg16;
-									res3.d = (int32_t)res1.x*(int16_t)res2.x;
+									res3.d = ((int32_t)res1.x)*(int16_t)res2.x;
 									_ax=LOWORD(res3.d);			// 
 									_dx=HIWORD(res3.d);			// non è bello ma...		
 									_f.Carry=_f.Ovf= !!_dx;
@@ -3865,8 +3846,8 @@ divide0:
         // DIV NON aggiorna flag!
 								case 6:       // DIV16
 									if(res2.x) {
-										res3.x = MAKELONG(_ax,_dx) / res2.x;
-										_dx = MAKELONG(_ax,_dx) % res2.x;			// non è bello ma...
+										res3.x = ((uint32_t)MAKELONG(_ax,_dx)) / res2.x;
+										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non è bello ma...
 										_ax = res3.x;
 //if(Temporary > 0xFFFF) Exception(DE); //divide error
 										}
@@ -3875,8 +3856,8 @@ divide0:
 									break;
 								case 7:       // IDIV16
 									if(res2.x) {
-										res3.x = (int32_t)MAKELONG(_ax,_dx) / (int16_t)res2.x;
-										_dx =  (int32_t)MAKELONG(_ax,_dx) % (int16_t)res2.x;
+										res3.x = ((int32_t)MAKELONG(_ax,_dx)) / (int16_t)res2.x;
+										_dx =  ((int32_t)MAKELONG(_ax,_dx)) % (int16_t)res2.x;
 										_ax = res3.x;
 //if(Temporary > 0x7FFF || Temporary < 0x8000) Exception(DE); //f a positive result is greater than 7FFFH or a negative result is less than 8000H
 										}

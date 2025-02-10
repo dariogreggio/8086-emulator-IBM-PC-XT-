@@ -59,9 +59,10 @@
 
 #define ROM_BASIC 1    //
 
-#define RAM_DOS 1
+//#define RAM_DOS 1
 #define MS_DOS_VERSION 2			// occhio INT_1E nei bios! per #settori, anche non cambia nulla...
 
+#define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (per qualche motivo microsoft NON va su windows 2... non viene visto al boot
 
 #define CPU_CLOCK_DIVIDER 500000L			// così va più o meno come il PIC, su PC greggiod
 #define RAM_SIZE 0x70000L
@@ -264,7 +265,7 @@ volatile BYTE TIMIRQ,VIDIRQ,KBDIRQ,SERIRQ,RTCIRQ;
 extern volatile BYTE keysFeedPtr;
 
 
-#define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)a) << 4) + ((uint32_t)b)))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
+#define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)a) << 4) + ((uint16_t)b)))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
 
 
 #define COMPUTE_RM_OFS \
@@ -324,7 +325,7 @@ extern volatile BYTE keysFeedPtr;
 			immofs+=1;\
 			break;\
 		case 2:\
-			op2.mem+=(uint16_t)Pipe2.xm.w;/* pare unsigned... boh*/\
+			op2.mem+=Pipe2.xm.w;\
 			immofs+=2;\
 			break;\
 		case 3:/*gestito a parte*/\

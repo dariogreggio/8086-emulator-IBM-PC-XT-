@@ -96,28 +96,28 @@ volatile BYTE VIDIRQ=0;
 #define CARRY_ADC_8()  (_f.Carry ? (res3.b <= res1.b) : (res3.b < res1.b))		// carry == 1 ? res <= dst : res < dst
 //#define CARRY_ADC_8()  ((((uint16_t)res1.b+res2.b+_f.Carry) >> 8 ? 1 : 0))
 #define OVF_ADD_8()    (!!(((res2.b ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
-#define OVF_ADC_8()    (!!(((res2.b ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
+#define OVF_ADC_8()    (!!((((res2.b+_f.Carry) ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
 #define CARRY_ADD_16() (!!(((res2.x & res1.x) | (~res3.x & (res2.x | res1.x))) & 0x8000))
 //#define CARRY_ADD_16() (!!(res3.x < res1.x))
 //#define CARRY_ADD_16() ((((uint32_t)res1.x+res2.x) >> 16 ? 1 : 0))
 #define CARRY_ADC_16() (_f.Carry ? (res3.x <= res1.x) : (res3.x < res1.x))
 //#define CARRY_ADC_16() ((((uint32_t)res1.x+res2.x+_f.Carry) >> 16 ? 1 : 0))
 #define OVF_ADD_16()   (!!(((res2.x ^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
-#define OVF_ADC_16()   (!!(((res2.x ^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
+#define OVF_ADC_16()   (!!((((res2.x+_f.Carry)^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
 #define CARRY_SUB_8()  (!!(((res2.b & res3.b) | (~res1.b & (res2.b | res3.b))) & 0x80))		// ((S & R) | (~D & (S | R)))
 //#define CARRY_SUB_8()  (!!(res1.b < res2.b))
 //#define CARRY_SUB_8() ((((uint16_t)res1.b-res2.b) >> 8 ? 1 : 0))
 #define CARRY_SBB_8()  (_f.Carry ? (res1.b <= res2.b) : (res1.b < res2.b))		// carry > 0 ? dst <= src : dst < src
 //#define CARRY_SBB_8() ((((uint16_t)res1.b-res2.b-_f.Carry) >> 8 ? 1 : 0))
 #define OVF_SUB_8()    (!!(((res2.b ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
-#define OVF_SBB_8()    (!!(((res2.b ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
+#define OVF_SBB_8()    (!!((((res2.b+_f.Carry) ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
 #define CARRY_SUB_16() (!!(((res2.x & res3.x) | (~res1.x & (res2.x | res3.x))) & 0x8000))
 //#define CARRY_SUB_16() (!!(res1.x < res2.x))
 //#define CARRY_SUB_16() ((((uint32_t)res1.x-res2.x) >> 16 ? 1 : 0))
 #define CARRY_SBB_16() (_f.Carry ? (res1.x <= res2.x) : (res1.x < res2.x))
 //#define CARRY_SBB_16() ((((uint32_t)res1.x-res2.x-_f.Carry) >> 16 ? 1 : 0))
 #define OVF_SUB_16()   (!!(((res2.x ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
-#define OVF_SBB_16()   (!!(((res2.x ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
+#define OVF_SBB_16()   (!!((((res2.x+_f.Carry) ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
 
 
 int Emulate(int mode) {
@@ -757,8 +757,8 @@ fineRep:
 				_ip++;
 				
 aggFlagAB:     // carry, ovf, aux, zero, sign, parity
-				_f.Carry=CARRY_ADD_8();
         _f.Ovf = OVF_ADD_8();
+				_f.Carry=CARRY_ADD_8();
         
 aggFlagABA:    // aux, zero, sign, parity
         _f.Aux = AUX_ADD_8();
@@ -788,8 +788,8 @@ aggParity:
 				_ip+=2;
         
 aggFlagAW:     // carry, ovf, aux, zero, sign, parity
-				_f.Carry=CARRY_ADD_16();
         _f.Ovf = OVF_ADD_16();
+				_f.Carry=CARRY_ADD_16();
 
 aggFlagAWA:    // aux, zero, sign, parity
         _f.Aux = AUX_ADD_8();
@@ -1246,8 +1246,8 @@ aggFlagWZC:
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
 
 aggFlagABC:
-								_f.Carry=CARRY_ADC_8();
 								_f.Ovf = OVF_ADC_8();
+								_f.Carry=CARRY_ADC_8();
 								goto aggFlagABA;
                 break;
               case 1:
@@ -1257,8 +1257,8 @@ aggFlagABC:
                 PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
 
 aggFlagAWC:
-								_f.Carry=CARRY_ADC_16();
 								_f.Ovf = OVF_ADC_16();
+								_f.Carry=CARRY_ADC_16();
                 goto aggFlagAWA;
                 break;
               case 2:
@@ -1344,8 +1344,8 @@ aggFlagAWC:
                 PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
 
 aggFlagSBB:
-								_f.Carry=CARRY_SBB_8();
 								_f.Ovf = OVF_SBB_8();
+								_f.Carry=CARRY_SBB_8();
                 goto aggFlagSBA;
                 break;
               case 1:
@@ -1355,8 +1355,8 @@ aggFlagSBB:
                 PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
 
 aggFlagSWB:
-								_f.Carry=CARRY_SBB_16();
 								_f.Ovf = OVF_SBB_16();
+								_f.Carry=CARRY_SBB_16();
                 goto aggFlagSWA;
                 break;
               case 2:
@@ -1624,8 +1624,8 @@ aggFlagSWB:
 				_ip++;
 
 aggFlagSB:     // carry, ovf, aux, zero, sign, parity
-				_f.Carry=CARRY_SUB_8();
         _f.Ovf = OVF_SUB_8();
+				_f.Carry=CARRY_SUB_8();
         
 aggFlagSBA:    // aux, zero, sign, parity
         _f.Aux = AUX_SUB_8();
@@ -1640,8 +1640,8 @@ aggFlagSBA:    // aux, zero, sign, parity
 				_ip+=2;
         
 aggFlagSW:     // carry, ovf, aux, zero, sign, parity
-				_f.Carry=CARRY_SUB_16();
         _f.Ovf = OVF_SUB_16();
+				_f.Carry=CARRY_SUB_16();
 
 aggFlagSWA:    // aux, zero, sign, parity
         _f.Aux = AUX_SUB_8();
@@ -3014,13 +3014,13 @@ fix_flags:
 			case 0xc0:      // RCL, RCR, SHL ecc
 // usare         immofs ??
   			_ip++;
-				i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-				res2.b &= 31;		// non va dentro la macro...
-#endif
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
 						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione è variabile... MIGLIORARE!
+						i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+						res2.b &= 31;		// non va dentro la macro...
+#endif
 						res3.b=res1.b=GetValue(MAKE20BITS(*theDs,op2.mem));
 						ROTATE_SHIFT8
 						PutValue(MAKE20BITS(*theDs,op2.mem),res3.b);
@@ -3028,6 +3028,10 @@ fix_flags:
           case 3:
             op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
 						op1.mem=Pipe2.b.h;
+						i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+						res2.b &= 31;		// non va dentro la macro...
+#endif
     				_ip++;      // imm8
 						res3.b=res1.b=*op2.reg8;
 						ROTATE_SHIFT8
@@ -3041,13 +3045,13 @@ fix_flags:
 			case 0xc1:
 // usare         immofs ??
 				_ip++;
-				i=res2.b=(uint8_t)op1.mem;
-#ifdef EXT_80286
-				res2.b &= 31;		// non va dentro la macro...
-#endif
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
 						op1.mem=GetPipe(MAKE20BITS(_cs,_ip++));		// la posizione è variabile... migliorare!
+						i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+						res2.b &= 31;		// non va dentro la macro...
+#endif
 						res3.x=res1.x=GetShortValue(MAKE20BITS(*theDs,op2.mem));
 						ROTATE_SHIFT16
 						PutShortValue(MAKE20BITS(*theDs,op2.mem),res3.x);
@@ -3057,6 +3061,10 @@ fix_flags:
           case 3:
             op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;
 						op1.mem=Pipe2.b.h;
+						i=res2.b=(uint8_t)op1.mem;
+#ifdef EXT_80286
+						res2.b &= 31;		// non va dentro la macro...
+#endif
     				_ip++;      // imm8
 						res3.x=res1.x=*op2.reg16;
 						ROTATE_SHIFT16

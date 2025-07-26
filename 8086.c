@@ -52,6 +52,10 @@ extern uint8_t MachineFlags,MachineFlags2;
 extern uint16_t i8253TimerR[],i8253TimerW[];
 extern uint8_t i8253RegR[],i8253RegW[],i8253Mode[];
 extern uint8_t i8255RegR[];
+extern uint8_t i8237RegR[],i8237RegW[],i8237Reg2R[],i8237Reg2W[];
+extern uint8_t i8237Mode[],i8237Mode2[];
+extern uint16_t i8237DMAAddr[],i8237DMALen[],i8237DMAAddr2[],i8237DMALen2[];
+extern uint16_t i8237DMACurAddr[],i8237DMACurLen[],i8237DMACurAddr2[],i8237DMACurLen2[];
 extern uint8_t floppyTimer;
 extern uint8_t ExtIRQNum;
 extern uint16_t VICRaster;
@@ -60,7 +64,7 @@ BYTE Pipe1;
 union PIPE Pipe2;
 
 volatile BYTE VIDIRQ=0;
-
+extern uint8_t LCDdirty;
 
 
 
@@ -184,6 +188,7 @@ int Emulate(int mode) {
   BYTE immofs;
   register uint16_t i;
 	int c=0;
+  uint8_t screenDivider=0;
 	uint8_t timerDivider=0;
 
 
@@ -206,7 +211,12 @@ int Emulate(int mode) {
 	do {
 
 		c++;
-    if(!(c & 0x3f)) {   //~64uS
+#ifdef USING_SIMULATOR
+#define VIDEO_DIVIDER 0x0000000f
+#else
+#define VIDEO_DIVIDER 0x0000007f
+#endif
+    if(!(c & VIDEO_DIVIDER)) {   //~64uS
   	  CGAreg[0xa] ^= 0b0001;  //retrace H (patch...
       if(!(c & 0xffff)) {
         ClrWdt();
@@ -238,22 +248,42 @@ int Emulate(int mode) {
 			printf("37-38: %02x %02x\n",*(p1+0x37),*(p1+0x38));
 			}*/
     if(VIDIRQ) {
-      UpdateScreen(VICRaster,VICRaster+8 /*MIN_RASTER,MAX_RASTER*/);
-      VICRaster+=8;					 	 // [raster pos count, 200 al sec... v. C64]
-      if(VICRaster >= MAX_RASTER) {		 // 
-        VICRaster=MIN_RASTER; 
-        LED2 ^= 1;      // circa 3.5mS per 8 righe, lo faccio ogni 25mS = ~625mS 13/7/24
+#ifndef USING_SIMULATOR
+      if(!screenDivider) {
+        // usare LCDdirty...
+        UpdateScreen(VICRaster,VICRaster+8 /*MIN_RASTER,MAX_RASTER*/);
+        VICRaster+=8;					 	 // [raster pos count, 200 al sec... v. C64]
+        if(VICRaster >= MAX_RASTER) {		 // 
+          VICRaster=MIN_RASTER; 
+          screenDivider++;
+          }
+        }
+#endif
+      else {
+        VICRaster+=32;					 	 // più veloce qua, 7 passate
+        if(VICRaster >= MAX_RASTER) {		 // 
+          VICRaster=MIN_RASTER; 
+          LED2 ^= 1;      // VIDIRQ attivato come flag qua, ogni 10mS => 60mS qua
+          screenDivider++;
+          screenDivider %= 4;
+          }
         }
       VIDIRQ=0;
           
-      if(!SW1)        // test tastiera, me ne frego del repeat/rientro :)
-        keysFeedPtr=254;
-      if(!SW2)        // 
-        CPUPins |= DoReset;
+      if(!SW1) {       // test tastiera, me ne frego del repeat/rientro :)
+        if(keysFeedPtr==255)      // debounce...
+          keysFeedPtr=254;
+        }
+      if(!SW2) {        // 
+        __delay_ms(100); ClrWdt();
+        CPUPins=DoReset;
+        }
+    
+      manageTouchScreen();
       }
 
 //questa parte equivale a INTA sequenza ecc  http://www.icet.ac.in/Uploads/Downloads/3_mod3.pdf
-    if(i8259IRR & 0x1) {
+    if((i8259IRR & 0x1) && !(i8259IMR & 0x1)) {
       CPUPins |= DoIRQ;
 // [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
       ExtIRQNum=8;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
@@ -261,21 +291,28 @@ int Emulate(int mode) {
 			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR &= ~0x1;
       }
-    if(i8259IRR & 0x2) {
+    if((i8259IRR & 0x2) && !(i8259IMR & 0x2)) {
       CPUPins |= DoIRQ;
       ExtIRQNum=9;      // IRQ 9 Keyboard
 			i8259ISR |= 2;	i8259IRR &= ~2;
 			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR &= ~0x2;
       }
-    if(i8259IRR & 0x10) {
+    if((i8259IRR & 0x10) && !(i8259IMR & 0x10)) {
       CPUPins |= DoIRQ;
       ExtIRQNum=0x0c;      // IRQ 12 COM1
 			i8259ISR |= 0x10;	i8259IRR &= ~0x10;
 			if(i8259ICW[3] & 0b00000010)		// AutoEOI
 	      i8259ISR &= ~0x10;
       }
-    if(i8259IRR & 0x40) {
+    if((i8259IRR & 0x20) && !(i8259IMR & 0x20)) {
+      CPUPins |= DoIRQ;
+      ExtIRQNum=13;      // IRQ 5 Hard disc
+			i8259ISR |= 0x20;	i8259IRR &= ~0x20;
+			if(i8259ICW[3] & 0b00000010)		// AutoEOI
+	      i8259ISR &= ~0x20;
+      }
+    if((i8259IRR & 0x40) && !(i8259IMR & 0x40)) {
       CPUPins |= DoIRQ;
       ExtIRQNum=14;      // IRQ 6 Floppy disc
 			i8259ISR |= 0x40;	i8259IRR &= ~0x40;
@@ -283,7 +320,7 @@ int Emulate(int mode) {
 	      i8259ISR &= ~0x40;
       }
 #ifdef PCAT
-    if(i8259IRR2 & 0x1) {
+    if((i8259IRR2 & 0x1) && !(i8259IMR2 & 0x1)) {
       CPUPins |= DoIRQ;
       ExtIRQNum=0x70;      // IRQ RTC
 			i8259ISR2 |= 1;	i8259IRR2 &= ~1;
@@ -319,7 +356,8 @@ int Emulate(int mode) {
 #endif
 			}
 
-		if(++timerDivider >= 3*1) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci
+		if(++timerDivider >= 3*1) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
+      // rimesso 3 per DTCBIOS... provare altri!!
 			timerDivider=0;
 			// https://stanislavs.org/helppc/8253.html   http://wiki.osdev.org/Programmable_Interval_Timer#Mode_0_-_Interrupt_On_Terminal_Count
 			// devono andare a ~1.1MHz qua
@@ -332,10 +370,8 @@ int Emulate(int mode) {
 						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
 						i8253Mode[0] |= 0b10000000;          // OUT=1
-						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
-							i8259IRR |= 1;
-							}
+						i8259IRR |= 1;
 						}
 					else {
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
@@ -347,10 +383,8 @@ int Emulate(int mode) {
 						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
 						i8253Mode[0] |= 0b10000000;          // OUT=1
-						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
-							i8259IRR |= 1;
-							}
+						i8259IRR |= 1;
 						}
 					else {
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
@@ -362,10 +396,8 @@ int Emulate(int mode) {
 					i8253TimerR[0]--;
 					if(i8253TimerR[0]==1) {
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
-						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
-							i8259IRR |= 1;
-							}
+						i8259IRR |= 1;
 						}
 					else if(!i8253TimerR[0]) {
 						i8253Mode[0] |= 0b10000000;          // OUT=1
@@ -380,7 +412,7 @@ int Emulate(int mode) {
 					if(!i8253TimerR[0]) {
 						i8253Mode[0] ^= 0b10000000;          // OUT=!OUT
 						// IRQ solo sul fronte discesa...
-						if(!(i8253Mode[0] & 0b10000000) && !(i8259IMR & 1)) {
+						if(!(i8253Mode[0] & 0b10000000)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
 							}
@@ -396,10 +428,8 @@ int Emulate(int mode) {
 						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
-						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
-							i8259IRR |= 1;
-							}
+						i8259IRR |= 1;
 						}
 					else {
 						i8253TimerR[0]--;
@@ -412,10 +442,8 @@ int Emulate(int mode) {
 						if(i8253Mode[0] & 0b01000000)          // reloaded
 							;
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
-						if(!(i8259IMR & 1)) {
 					//      TIMIRQ=1;  //
-							i8259IRR |= 1;
-							}
+						i8259IRR |= 1;
 						}
 					else {
 						i8253TimerR[0]--;
@@ -577,13 +605,46 @@ int Emulate(int mode) {
 /* boh se servisse..			if(floppyTimer) {
 				floppyTimer--;
 				if(!floppyTimer) {
-//					if(!(i8259IMR & 0x40)) 
 //						i8259IRR |= 0x40;		// simulo IRQ...
 					}
 				}*/
 
 			}
 
+		if(!(i8237RegW[8] & 0b00000001)) {		// controller enable
+			// canale 0 = RAM refresh (ignoro gli altri, v. floppy ecc in loco!
+			switch(i8237Mode[0] & 0b00001100) {		// DMA mode
+				case 0b00000000:			// verify
+					break;
+				case 0b00001000:			// write
+					break;
+				case 0b00000100:			// read
+					break;
+				}
+			i8237RegR[13] /* = */; // ultimo byte trasferito :)
+			switch(i8237Mode[0] & 0b11000000) {		// DMA mode
+				case 0b00000000:			// demand
+					break;
+				case 0b11000000:			// cascade
+					break;
+				case 0b10000000:			// single
+				case 0b01000000:			// block
+					if(i8237Mode[0] & 0b00100000)
+						i8237DMACurAddr[0]++;
+					else
+						i8237DMACurAddr[0]++;
+					i8237DMACurLen[0]--;
+					if(!i8237DMACurLen[0]) {
+						i8237RegR[8] |= 0b00000001;		// TC 0
+						if(i8237Mode[0] & 0b00010000) {
+							i8237DMACurAddr[0]=i8237DMAAddr[0];
+							i8237DMACurLen[0]=i8237DMALen[0];
+							}
+						}
+					break;
+				}
+			}
+    
 
 //printf("Pipe1: %02x, Pipe2w: %04x, Pipe2b1: %02x,%02x\n",Pipe1,Pipe2.word,Pipe2.bytes.byte1,Pipe2.bytes.byte2);
 // http://ref.x86asm.net/coder32.html#two-byte
@@ -895,6 +956,16 @@ FFFF:000F                Top of 8086 / 88 address space*/
             Nop();
             break;
             
+#ifdef EXT_V20
+					case  19H, 0C5H, IMM4	; TEST1 BP, IMM4
+            break;
+					case  1DH, 0C5H, IMM4	; SET1  BP, IMM4
+            break;
+					case  1FH, 0C5H, IMM4	; NOT1  BP, IMM4
+            break;
+					case  1BH, 0C5H, IMM4	; CLR1  BP, IMM4
+            break;
+#endif
 
 #ifdef EXT_80286
           case 0x0:      // LLDT/LTR/SLDT/SMSW/VERW

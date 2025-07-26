@@ -58,6 +58,7 @@
 //#define PCAT 1
 
 #define ROM_BASIC 1    //
+//#define ROM_HD_BASE 0xc8000			 PRIMA di option/ROM_START2 !
 
 //#define RAM_DOS 1
 #define MS_DOS_VERSION 2			// occhio INT_1E nei bios! per #settori, anche non cambia nulla...
@@ -65,17 +66,20 @@
 #define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (per qualche motivo microsoft NON va su windows 2... non viene visto al boot
 
 #define CPU_CLOCK_DIVIDER 500000L			// così va più o meno come il PIC, su PC greggiod
-#define RAM_SIZE 0x70000L
+#define RAM_SIZE 0x74000L
 #define RAM_START 0L
 #define ROM_SIZE 8192				// BIOS
+#define ROM_SIZE2 2048			// BIOS opt
+#define ROM_START2 0xD0000			// (preferred, dice https://github.com/640-KB/GLaTICK/wiki/Option-ROM-How-to
 #define ROM_END 0x100000L
 
-extern const uint8_t bios_rom[];
-extern const uint8_t MBR[512];
+extern const uint8_t bios_rom[],bios_rom_opt[];
+extern const uint8_t HDbios[];
+//extern const uint8_t MBR[512];
 extern const uint8_t IBMBASIC[];
-extern const uint8_t msdossys[];
-extern const uint8_t iosys[];
-extern const uint8_t commandcom[];
+//extern const uint8_t msdossys[];
+//extern const uint8_t iosys[];
+//extern const uint8_t commandcom[];
     
 #define FCY 205000000ul    //Oscillator frequency; ricontrollato con baud rate, pare giusto così!
 #define FOSC 8000000ul
@@ -88,7 +92,7 @@ extern const uint8_t commandcom[];
 
 #define US_TO_CT_TICKS  (CPU_CT_HZ/1000000UL)    // uS to CoreTimer Ticks
     
-#define VERNUML 00
+#define VERNUML 1
 #define VERNUMH 1
 
 
@@ -547,6 +551,7 @@ extern volatile PIC32_RTCC_TIME currentTime;
 
 void Timer_Init(void);
 void PWM_Init(void);
+void ADC_Init(void);
 void UART_Init(uint32_t);
 void putsUART1(unsigned int *buffer);
 
@@ -566,6 +571,8 @@ void OutValue(uint16_t, uint8_t);
 void OutIntValue(uint16_t, uint16_t);
 int Emulate(int);
 void initHW(void);
+uint8_t to_bcd(uint8_t n);
+uint8_t from_bcd(uint8_t n);
 
 int UpdateScreen(int /*uint16_t*/,int /*uint16_t*/);
 extern const uint8_t CGAfont[8192];
@@ -625,7 +632,14 @@ void LCDWrite(const char *);
 #define	m_LCDWRBit  LATBbits.LATB4 		// per LCD parallelo ILI
 #define	m_LCDSTRBit LATBbits.LATB4        // non è chiaro... m_A3_out; in pratica è WRITE
 
-#define	m_LCDCSBit  LATBbits.LATB2
+#define	m_LCDCSBit  LATBbits.LATB2      // anche touch
+
+#define m_TouchX1   LATBbits.LATB2  //AN2     // https://www.hackster.io/calogerus/arduino-uno-2-4-tft-lcd-display-shield-touch-panel-ili9341-576b1b
+//#define m_TouchX2   PORTEbits.RE6  //AN16 ev.
+#define m_TouchX2   LATEbits.LATE6  //
+#define m_TouchY1   LATBbits.LATB3  //AN3
+//#define m_TouchY2   PORTEbits.RE7  //AN15 ev.
+#define m_TouchY2   LATEbits.LATE7  //
 
 #endif
 

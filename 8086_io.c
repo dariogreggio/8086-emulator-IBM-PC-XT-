@@ -48,11 +48,15 @@ uint8_t VGAram[640*480*(24/8)];
 uint8_t CGAreg[18];  // https://www.seasip.info/VintagePC/cga.html
 uint8_t MDAreg[18];  // https://www.seasip.info/VintagePC/mda.html
 //  http://www.oldskool.org/guides/oldonnew/resources/cgatech.txt
-uint8_t i8237RegR[16],i8237RegW[16],i8237Reg2R[16],i8237Reg2W[16],
-	i8237FF=0,i8237FF2=0,
-	i8237Mode[4],i8237Mode2[4];
-uint16_t i8237DMAAddr[4],i8237DMALen[4],i8237DMAAddr2[4],i8237DMALen2[4];
-uint16_t i8237DMACurAddr[4],i8237DMACurLen[4],i8237DMACurAddr2[4],i8237DMACurLen2[4];
+uint8_t i8237RegR[16],i8237RegW[16],i8237FF=0,i8237Mode[4];
+uint16_t i8237DMAAddr[4],i8237DMALen[4];
+uint16_t i8237DMACurAddr[4],i8237DMACurLen[4];
+#ifdef PCAT
+uint8_t i8237FF2=0,i8237Mode2[4];
+uint8_t i8237Reg2R[16],i8237Reg2W[16],
+uint16_t i8237DMAAddr2[4],i8237DMALen2[4];
+uint16_t i8237DMACurAddr2[4],i8237DMACurLen2[4];
+#endif
 uint8_t DMApage[8];
 uint8_t i8259RegR[2],i8259RegW[2],i8259ICW[4],i8259ICWSel,i8259IMR,i8259IRR,i8259ISR
 #ifdef PCAT
@@ -118,6 +122,7 @@ uint32_t getDiscSector(uint8_t);
 uint8_t *encodeDiscSector(uint8_t);
 uint8_t *encodeHDiscSector(uint8_t);
 
+extern BYTE CPUDivider;
 BYTE mouseState=255;
 BYTE COMDataEmuFifo[5];
 BYTE COMDataEmuFifoCnt;
@@ -130,12 +135,32 @@ extern union PIPE Pipe2;
 
 
 
-uint8_t GetValue(uint32_t t) {
+#if defined(EXT_80186) || defined(EXT_NECV20)
+#define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)(a)) << 4) + ((uint16_t)(b))))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
+#else
+#define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)(a)) << 4) + ((uint16_t)(b))))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
+#endif
+// su 8088 NON incrementa segmento se offset è FFFF ... 
+
+uint8_t GetValue(uint16_t seg,uint16_t ofs) {
 	register uint8_t i;
+	uint32_t t;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+#else
+	t=MAKE20BITS(seg,ofs);
+#endif
+
 
 	if(t >= (ROM_END-ROM_SIZE)) {
 		i=bios_rom[t-(ROM_END-ROM_SIZE)];
 		}
+#ifdef ROM_BASIC
+	else if(t >= 0xF6000) {
+		i=IBMBASIC[t-0xF6000];
+		}
+#endif
 #ifdef ROM_SIZE2
 	else if(t >= ROM_START2 && t<(ROM_START2+ROM_SIZE2)) {
 		i=bios_rom_opt[t-ROM_START2];
@@ -144,11 +169,6 @@ uint8_t GetValue(uint32_t t) {
 #ifdef ROM_HD_BASE
 	else if(t >= ROM_HD_BASE) {
 		i=HDbios[t-ROM_HD_BASE];
-		}
-#endif
-#ifdef ROM_BASIC
-	else if(t >= 0xF6000) {
-		i=IBMBASIC[t-0xF6000];
 		}
 #endif
 #ifdef CGA_BASE
@@ -346,7 +366,7 @@ uint8_t InValue(uint16_t t) {
 
 					i8255RegR[0]=i8042RegR[0];
           i=i8042RegR[0];
-					i8042RegR[0]=Keyboard[0]=0;		// si svuota! GLAbios...
+//					i8042RegR[0]=Keyboard[0]=0;		// si svuota! GLAbios...
           break;
         case 1:     // (machine flags... (da V20)
 //					i8255RegR[1]=MachineFlags;
@@ -383,8 +403,11 @@ uint8_t InValue(uint16_t t) {
           break;
         }
       break;
+      
     case 7:        //   70-7F CMOS RAM/RTC (Real Time Clock  MC146818)
 			// https://web.archive.org/web/20160314084340/https://www.bioscentral.com/misc/cmosmap.htm
+			// anche (TD3300, superXT) Port 070h
+			// Controls the wait state for board RAM, ROM, I/O and also bus RAM and I/O. See (page B-1, B-2) from the UX-12 manual.
       t &= 0x1;
       switch(t) {
         case 0:
@@ -402,7 +425,9 @@ uint8_t InValue(uint16_t t) {
             case 4:
               i146818RegR[1]=currentTime.hour;
               break;
-              // 6 è day of week...
+            case 6:              // 6 è day of week...
+              i146818RegR[1]=currentDate.weekday;
+              break;
             case 7:
               i146818RegR[1]=currentDate.mday;
               break;
@@ -468,6 +493,13 @@ uint8_t InValue(uint16_t t) {
 				}
       break;
 
+    case 0x9:        // SuperXT TD3300A
+			//Controls the clock speed using the following:
+			//If port 90h == 1, send 2 (0010b) for Normal -> Turbo
+			//If port 90h == 0, send 3 (0011b) for Turbo -> Normal
+//			CPUDivider;		// finire!
+			break;
+
   // https://www.intel.com/content/www/us/en/support/articles/000005500/boards-and-kits.html
     case 0xa:        // PIC 8259 controller #2 su AT; porta machine setting su XT (occhio a volte non leggibile)
 #ifdef PCAT
@@ -482,6 +514,12 @@ i=t;  //DEBUG
 
 			break;
 
+    case 0xe:        // TD3300A , SuperXT
+			//Controls the bank switching for the on-board upper memory, as mentioned in this post.
+			// if port 0Eh == 0, addresses 2000:0000-9000:FFFF are mapped to the low contiguous RAM
+			// if port 0Eh == 1, addresses 2000:0000-9000:FFFF are mapped to the upper RAM (if installed)
+			break;
+    
     case 0xf:        // F0 = coprocessor
       break;
   // 108 diag display opp. 80 !
@@ -1787,6 +1825,7 @@ floppyTrack[disk]++;
             }
           else {
 //            i=ReadUART1();
+#ifdef MOUSE_TYPE
 						i=COMDataEmuFifo[COMDataEmuFifoCnt++];
 #if MOUSE_TYPE==1
 						COMDataEmuFifoCnt %= 3;		// 3 byte per mouse microsoft seriale
@@ -1802,6 +1841,7 @@ floppyTrack[disk]++;
     //					if(i8250Reg[1] & 0b00000001)			// se IRQ attivo ??
 								i8259IRR |= 0x10;
 							}
+#endif
             }
           break;
         case 1+8:
@@ -1840,6 +1880,13 @@ floppyTrack[disk]++;
   //          i=i8250Regalt[2];
             }
           else {
+#ifdef MOUSE_TYPE
+						if(COMDataEmuFifoCnt || (mouseState == 255))
+              i8250Reg[5] |= 1;
+            else
+              i8250Reg[5] &= ~1;
+
+#else
 /*            if(DataRdyUART1())
               i8250Reg[5] |= 1;
             else
@@ -1864,6 +1911,7 @@ floppyTrack[disk]++;
               i8250Reg[5] |= 0b01000000;
             else
               i8250Reg[5] &= ~0b01000000;*/
+#endif
             i=i8250Reg[5];
             }
           break;
@@ -1890,63 +1938,97 @@ return MAKEWORD(InValue(t),InValue(t+1));			// per ora, v. cmq GLABios
 	return i;
 	}
 
-uint16_t GetShortValue(uint32_t t) {
-	register uint16_t i;
+uint16_t GetShortValue(uint16_t seg,uint16_t ofs) {
+	register union DWORD_BYTES i;
+	uint32_t t,t1;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+	t1=MAKE20BITS(seg,ofs+1);
+#else
+	t=MAKE20BITS(seg,ofs);
+	t1=t+1;
+#endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
 		t-=ROM_END-ROM_SIZE;
-		i=MAKEWORD(bios_rom[t],bios_rom[t+1]);
+		t1-=ROM_END-ROM_SIZE;
+		i.b.l=bios_rom[t];
+		i.b.h=bios_rom[t1];
 		}
 #ifdef ROM_BASIC
-	else if(t >= 0xF6000) {
+	else if(seg >= (0xF6000 >> 4)) {
 		t-=0xF6000;
-		i=MAKEWORD(IBMBASIC[t],IBMBASIC[t+1]);
+		t1-=0xF6000;
+		i.b.l=IBMBASIC[t];
+		i.b.h=IBMBASIC[t1];
 		}
 #endif
 #ifdef ROM_SIZE2
-	else if(t >= ROM_START2 && t<(ROM_START2+ROM_SIZE2)) {
+	else if(seg >= (ROM_START2 >> 4) && seg<((ROM_START2+ROM_SIZE2) >> 4)) {
 		t-=ROM_START2;
-		i=MAKEWORD(bios_rom_opt[t],bios_rom_opt[t+1]);
+		t1-=ROM_START2;
+		i.b.l=bios_rom_opt[t];
+		i.b.h=bios_rom_opt[t1];
 		}
 #endif
 #ifdef ROM_HD_BASE
-	else if(t >= ROM_HD_BASE) {
+	else if(seg >= (ROM_HD_BASE >> 4)) {
 		t-=ROM_HD_BASE;
-		i=MAKEWORD(HDbios[t],HDbios[t+1]);
+		t1-=ROM_HD_BASE;
+		i.b.l=HDbios[t];
+		i.b.h=HDbios[t1];
 		}
 #endif
 #ifdef CGA_BASE
-	else if(t >= CGA_BASE && t < CGA_BASE+CGA_SIZE) {
+	else if(seg >= (CGA_BASE >> 4) && seg < (CGA_BASE+CGA_SIZE >> 4)) {
 		t-=CGA_BASE;
-		i=MAKEWORD(CGAram[t],CGAram[t+1]);
+		t1-=CGA_BASE;
+		i.b.l=CGAram[t];
+		i.b.h=CGAram[t1];
     }
 #endif
 #ifdef VGA
-	else if(t >= VGA_BIOS_BASE && t < VGA_BIOS_BASE+32768) {
+	else if(seg >= (VGA_BIOS_BASE >> 4) && seg < (VGA_BIOS_BASE+32768 >> 4)) {
 		t-=VGA_BIOS_BASE;
-		i=MAKEWORD(VGABios[t],VGABios[t+1]);
+		t1-=VGA_BIOS_BASE;
+		i.b.l=VGABios[t];
+		i.b.h=VGABios[t1];
     }
 #endif
 #ifdef RAM_DOS
-	else if(t >= 0x7c000 && t < 0x80000) {
-		i=MAKEWORD(disk_ram[t-0x7c000],disk_ram[t-0x7c000+1]);
+	else if(seg >= (0x7c000 >> 4) && seg < (0x80000 >> 4)) {
+		t-=0x7c000;
+		t1-=0x7c000;
+		i.b.l=disk_ram[t-0x7c000];
+		i.b.h=disk_ram[t1-0x7c000];
 		}
 //		i=iosys[t-0x7c000];
 #endif
-	else if(t < RAM_SIZE) {
-		i=MAKEWORD(ram_seg[t],ram_seg[t+1]);
+	else if(seg < (RAM_SIZE >> 4)) {
+		i.b.l=ram_seg[t];
+		i.b.h=ram_seg[t1];
 		}
 // else _f.Trap=1?? v. anche eccezione PIC
 	else
-		i=UNIMPLEMENTED_MEMORY_VALUE;
+		i.w.l=UNIMPLEMENTED_MEMORY_VALUE;
   
-	return i;
+	return i.w.l;
 	}
 
 
 #ifdef EXT_80386
-uint32_t GetIntValue(uint32_t t) {
+uint32_t GetIntValue(uint16_t seg,uint32_t ofs) {
 	register uint32_t i;
+	uint32_t t,t1;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+	t1=MAKE20BITS(seg,ofs+1);
+#else
+	t=MAKE20BITS(seg,ofs);
+	t1=t+1;
+#endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
 		t-=ROM_END-ROM_SIZE;
@@ -1956,6 +2038,12 @@ uint32_t GetIntValue(uint32_t t) {
 	else if(t >= ROM_START2 && t<(ROM_START2+ROM_SIZE2)) {
 		t-=ROM_START2;
 		i=MAKELONG(MAKEWORD(bios_rom_opt[t],bios_rom_opt[t+1]),MAKEWORD(bios_rom_opt[t+2],bios_rom_opt[t+3]));
+		}
+#endif
+#ifdef ROM_HD_BASE
+	else if(t >= ROM_HD_BASE) {
+		t-=ROM_HD_BASE;
+		i=MAKELONG(MAKEWORD(HDbios[t],HDbios[t+1]),MAKEWORD(HDbios[t+2],HDbios[t+3]));
 		}
 #endif
 #ifdef CGA_BASE
@@ -1979,7 +2067,16 @@ uint32_t GetIntValue(uint32_t t) {
 	}
 #endif
 
-uint8_t GetPipe(uint32_t t) {
+uint8_t GetPipe(uint16_t seg,uint16_t ofs) {
+	uint32_t t,t1;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+	t1=MAKE20BITS(seg,ofs+1);
+#else
+	t=MAKE20BITS(seg,ofs);
+	t1=t+1;
+#endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
 		t-=(ROM_END-ROM_SIZE);
@@ -2056,7 +2153,16 @@ uint8_t GetPipe(uint32_t t) {
 	return Pipe1;
 	}
 
-uint8_t GetMorePipe(uint32_t t) {
+uint8_t GetMorePipe(uint16_t seg,uint16_t ofs) {
+	uint32_t t,t1;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+	t1=MAKE20BITS(seg,ofs+1);
+#else
+	t=MAKE20BITS(seg,ofs);
+	t1=t+1;
+#endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
 		t-=(ROM_END-ROM_SIZE -4);
@@ -2093,7 +2199,7 @@ uint8_t GetMorePipe(uint32_t t) {
 #endif
 #ifdef VGA
 	else if(t >= VGA_BIOS_BASE && t < VGA_BIOS_BASE+32768) {
-		t-=VGA_BIOS_BASE;
+		t-=(VGA_BIOS_BASE-4);
 		Pipe2.bd[3]=VGABios[t++];
 		Pipe2.bd[4]=VGABios[t++];
 		Pipe2.bd[5]=VGABios[t];
@@ -2113,8 +2219,14 @@ uint8_t GetMorePipe(uint32_t t) {
 	return Pipe1;
 	}
 
-void PutValue(uint32_t t,uint8_t t1) {
-	register uint16_t i;
+void PutValue(uint16_t seg,uint16_t ofs,uint8_t t1) {
+	uint32_t t;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+#else
+	t=MAKE20BITS(seg,ofs);
+#endif
 
 // printf("rom_seg: %04x, p: %04x\n",rom_seg,p);
 #ifdef RAM_DOS
@@ -2135,28 +2247,37 @@ void PutValue(uint32_t t,uint8_t t1) {
 // else _f.Trap=1?? v. anche eccezione PIC
 	}
 
-void PutShortValue(uint32_t t,uint16_t t1) {
-	register uint16_t i;
+void PutShortValue(uint16_t seg,uint16_t ofs,uint16_t t2) {
+	uint32_t t,t1;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+	t1=MAKE20BITS(seg,ofs+1);
+#else
+	t=MAKE20BITS(seg,ofs);
+	t1=t+1;
+#endif
 
 // printf("rom_seg: %04x, p: %04x\n",rom_seg,p);
 
 #ifdef RAM_DOS
 	if(t >= 0x7c000 && t < 0x80000) {
-		disk_ram[t-0x7c000]=t1;
+		disk_ram[t-0x7c000]=t2;
 		} else 
 #endif
 #ifdef CGA_BASE
 	if(t>=CGA_BASE && t<(CGA_BASE+CGA_SIZE)) {
 		t-=CGA_BASE;
-		CGAram[t++]=LOBYTE(t1);
-		CGAram[t]=HIBYTE(t1);
+		t1-=CGA_BASE;
+		CGAram[t]=LOBYTE(t2);
+		CGAram[t1]=HIBYTE(t2);
     LCDdirty=TRUE;
     }
 	else 
 #endif
-		if(t < RAM_SIZE) {
-	  ram_seg[t++]=LOBYTE(t1);
-	  ram_seg[t]=HIBYTE(t1);
+	if(t < RAM_SIZE) {
+	  ram_seg[t]=LOBYTE(t2);
+	  ram_seg[t1]=HIBYTE(t2);
 		}
 // else _f.Trap=1?? v. anche eccezione PIC
 
@@ -2164,8 +2285,17 @@ void PutShortValue(uint32_t t,uint16_t t1) {
 
 
 #ifdef EXT_80386
-void PutIntValue(uint32_t t,uint32_t t1) {
+void PutIntValue(uint16_t seg,uint32_t ofs,uint32_t t1) {
 	register uint16_t i;
+	uint32_t t,t1;
+
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+	t=MAKE20BITS(seg,ofs);
+	t1=MAKE20BITS(seg,ofs+1);
+#else
+	t=MAKE20BITS(seg,ofs);
+	t1=t+1;
+#endif
 
 // printf("rom_seg: %04x, p: %04x\n",rom_seg,p);
 
@@ -2176,6 +2306,7 @@ void PutIntValue(uint32_t t,uint32_t t1) {
 		CGAram[t++]=HIBYTE(LOWORD(t1));
 		CGAram[t++]=LOBYTE(HIWORD(t1));
 		CGAram[t]=HIBYTE(HIWORD(t1));
+    LCDdirty=TRUE;
     }
 	else 
 #endif
@@ -2196,7 +2327,6 @@ void OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_
     case 0:        // 00-1f DMA 8237 controller (usa il 2 per il floppy
     case 1:				// solo PS2 dice!
       t &= 0xf;
-      i8237RegR[t]=i8237RegW[t]=t1;
 			switch(t) {
 				case 0:
 				case 2:
@@ -2207,8 +2337,10 @@ void OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_
 						i8237DMAAddr[t]=(i8237DMAAddr[t] & 0xff00) | t1;
 					else
 						i8237DMAAddr[t]=(i8237DMAAddr[t] & 0xff) | ((uint16_t)t1 << 8);
+					i8237DMACurAddr[t]=i8237DMAAddr[t];
 					i8237FF++;
 					i8237FF &= 1;
+		      i8237RegR[t]=i8237RegW[t]=t1;
 					break;
 				case 1:
 				case 3:
@@ -2219,10 +2351,13 @@ void OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_
 						i8237DMALen[t]=(i8237DMALen[t] & 0xff00) | t1;
 					else
 						i8237DMALen[t]=(i8237DMALen[t] & 0xff) | ((uint16_t)t1 << 8);
+					i8237DMACurLen[t]=i8237DMALen[t];
 					i8237FF++;
 					i8237FF &= 1;
+		      i8237RegR[t]=i8237RegW[t]=t1;
 					break;
 				case 0x8:			// Command (reg.8
+		      i8237RegR[8]=i8237RegW[8]=t1;
 					break;
 				case 0xa:			// set/clear Mask
 					if(t1 & 0b00000100)
@@ -2230,22 +2365,30 @@ void OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_
 					else
 						i8237RegW[15] &= ~(1 << (t1 & 0b00000011));
 					i8237RegR[15]=i8237RegW[15];
+		      i8237RegR[0xa]=i8237RegW[0xa]=t1;
 					break;
 				case 0xb:			// Mode
 					i8237Mode[t1 & 0b00000011]= t1 & 0b11111100;
 					i8237DMACurAddr[t1 & 0b00000011]=i8237DMAAddr[t1 & 0b00000011];			// bah credo, qua
 					i8237DMACurLen[t1 & 0b00000011]=i8237DMALen[t1 & 0b00000011];
+		      i8237RegR[0xb]=i8237RegW[0xb]=t1;
 					break;
 				case 0xc:			// clear Byte Pointer Flip-Flop
 					i8237FF=0;
+		      i8237RegR[0xc]=i8237RegW[0xc]=t1;
 					break;
 				case 0xd:			// Reset
 					memset(i8237RegR,0,sizeof(i8237RegR));
 					memset(i8237RegW,0,sizeof(i8237RegW));
 					i8237RegR[15]=i8237RegW[15] = 0b00001111;
+					i8237RegR[8]=0b00000000;
+		      i8237RegR[0xd]=i8237RegW[0xd]=t1;
 					break;
 				case 0xf:			//  Masks
 					i8237RegR[15]=i8237RegW[15] = (t1 & 0b00001111);
+					break;
+				default:
+		      i8237RegR[t]=i8237RegW[t]=t1;
 					break;
 				}
 
@@ -2522,6 +2665,7 @@ out 60, 45
 						}
 					if(t1 & 0b10000000) {		// ack kbd		patch glabios/5160
 						KBStatus &= ~0b00000001;			// output done
+						i8042RegR[0]=Keyboard[0]=0;		// si svuota! (GLAbios, gloriouscow
 						}
 
           break;
@@ -2603,6 +2747,8 @@ kb_setirq:
     case 7:        //   70-7F CMOS RAM/RTC (Real Time Clock  MC146818)
       // SECONDO PCXTBIOS, il clock è a 240 o 2c0 o 340 ed è mappato con tutti i registri... pare!
 			// https://web.archive.org/web/20160314084340/https://www.bioscentral.com/misc/cmosmap.htm
+			// anche (TD3300, superXT) Port 070h
+			// Controls the wait state for board RAM, ROM, I/O and also bus RAM and I/O. See (page B-1, B-2) from the UX-12 manual.
       t &= 0x1;
       switch(t) {
         case 0:
@@ -2698,6 +2844,13 @@ writeRegRTC:
 				}
       break;
 
+    case 0x9:        // SuperXT TD3300A
+			//Controls the clock speed using the following:
+			//If port 90h == 1, send 2 (0010b) for Normal -> Turbo
+			//If port 90h == 0, send 3 (0011b) for Turbo -> Normal
+			CPUDivider=2000000L/CPU_CLOCK_DIVIDER;		// finire!
+			break;
+
     case 0xa:        // PIC 8259 controller #2 su AT; machine settings su XT
 #ifdef PCAT
       t &= 0x1;
@@ -2724,6 +2877,12 @@ writeRegRTC:
 
 			break;
 
+    case 0xe:        // TD3300A , SuperXT
+			//Controls the bank switching for the on-board upper memory, as mentioned in this post.
+			// if port 0Eh == 0, addresses 2000:0000-9000:FFFF are mapped to the low contiguous RAM
+			// if port 0Eh == 1, addresses 2000:0000-9000:FFFF are mapped to the upper RAM (if installed)
+			break;
+    
     case 0xf:  // F0 = coprocessor
       break;
 
@@ -3244,9 +3403,11 @@ void initHW(void) {
   memset(i8237RegR,0,sizeof(i8237RegR));
   memset(i8237RegW,0,sizeof(i8237RegW));
 	i8237RegR[15]=i8237RegW[15] = 0b00001111;
+#ifdef PCAT
   memset(i8237Reg2R,0,sizeof(i8237Reg2R));
   memset(i8237Reg2W,0,sizeof(i8237Reg2W));
 	i8237Reg2R[15]=i8237Reg2W[15] = 0b00001111;
+#endif
 	memset(DMApage,0,sizeof(DMApage));
   i8259RegR[0]=i8259RegW[0]=0x00; i8259RegR[1]=i8259RegW[1]=0xff; i8259IMR=0xff; i8259ISR=i8259IRR=0;
 	memset(i8259ICW,0,sizeof(i8259ICW));
@@ -3304,12 +3465,15 @@ void initHW(void) {
 	if(!(i146818RAM[11] & 0b00000100)) {			// sarebbe b2 del registro 11 ma al boot non c'è...
 /*    currentTime.hour=to_bcd(currentTime.hour);
     currentTime.min=to_bcd(currentTime.min);
-    currentTime.sec=to_bcd(currentTime.sec);
-    i146818RAM[0x32] = to_bcd((((WORD)currentDate.year)+1900) / 100);		// secolo
-    currentDate.year=to_bcd(currentDate.year % 100);			// anno, e v. secolo in RAM[32], GLATick
+    currentTime.sec=to_bcd(currentTime.sec);*/
+    
+    i146818RAM[0x32] = 0x19; //to_bcd((((WORD)currentDate.year)+1900) / 100);		// secolo NON c'è in PICC_DATE :)
+  #warning GLATICK dà clock error.... boh 7/8/25    provare 19!
+    
+/*    currentDate.year=to_bcd(currentDate.year % 100);			// anno, e v. secolo in RAM[32], GLATick
     currentDate.mon=to_bcd(currentDate.mon  +1);
     currentDate.mday=to_bcd(currentDate.mday);
- * qua forse sono già BCD... veriricare */
+ * qua sono già BCD... v init in main */
     }
 
   

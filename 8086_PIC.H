@@ -51,6 +51,19 @@
 #endif
 
 
+
+//#define EXT_80186
+//#define EXT_NECV20
+#if !defined(EXT_80186) && !defined(EXT_NECV20)
+#define UNDOCUMENTED_8086			//GLORIOUSCOW	 per cose non standard ma verificate sul campo da lui :D
+#endif
+
+
+#undef EXT_80286
+#undef EXT_80386
+#undef EXT_80486
+//#define EXT_80x87
+
 #define CGA 1
 //#define MDA 1
 //#define VGA 1
@@ -61,7 +74,7 @@
 //#define ROM_HD_BASE 0xc8000			 PRIMA di option/ROM_START2 !
 
 //#define RAM_DOS 1
-#define MS_DOS_VERSION 2			// occhio INT_1E nei bios! per #settori, anche non cambia nulla...
+#define MS_DOS_VERSION 3			// occhio INT_1E nei bios! per #settori, anche non cambia nulla...
 
 #define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (per qualche motivo microsoft NON va su windows 2... non viene visto al boot
 
@@ -92,7 +105,7 @@ extern const uint8_t IBMBASIC[];
 
 #define US_TO_CT_TICKS  (CPU_CT_HZ/1000000UL)    // uS to CoreTimer Ticks
     
-#define VERNUML 1
+#define VERNUML 2
 #define VERNUMH 1
 
 
@@ -143,7 +156,21 @@ union __attribute__((__packed__)) PIPE {
         unsigned int mod:2;
         };
 	};
-union __attribute__((__packed__)) REG_8086 {
+union DWORD_BYTES {
+	uint32_t d;
+	struct {
+		uint16_t l;
+		uint16_t h;
+		} w;
+	uint8_t bd[4];
+	struct {
+		uint8_t l;
+		uint8_t h;
+		uint8_t u;
+		uint8_t u2;
+		} b;
+	};
+union REG_8086 {
 #ifdef EXT_80386
 	struct __attribute__((__packed__)) {
 		uint16_t l;
@@ -224,7 +251,11 @@ union __attribute__((__packed__)) REG_8086 {
 #else
 			unsigned int unused3_: 3;
 #endif
+#ifdef EXT_NECV20
+			unsigned int MD: 1;
+#else
 			unsigned int unused4: 1;
+#endif
 #ifdef EXT_80386				// https://blog.naver.com/krquddnr37/220271675934?viewType=pc
 			unsigned int ResumeFlag: 1;
 			unsigned int VirtualMode: 1;
@@ -269,11 +300,12 @@ volatile BYTE TIMIRQ,VIDIRQ,KBDIRQ,SERIRQ,RTCIRQ;
 extern volatile BYTE keysFeedPtr;
 
 
-#define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)a) << 4) + ((uint16_t)b)))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
 
 
 #define COMPUTE_RM_OFS \
+	_ip++;\
   switch(Pipe2.mod) {\
+	/*bisognerebbe gestire il GetMorePipe() qua, dinamicamente*/\
     case 2:\
       _ip++;\
     case 1:\
@@ -337,7 +369,6 @@ extern volatile BYTE keysFeedPtr;
 		}
 
 #define COMPUTE_RM \
-	_ip++;\
 	GET_REGISTER_8_16\
 	COMPUTE_RM_OFS\
 		GET_MEM_OPER
@@ -355,8 +386,8 @@ extern volatile BYTE keysFeedPtr;
 	  op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
 
 
-#define PUSH_STACK(a) 	{ _sp-=2;	PutShortValue((uint32_t)MAKE20BITS(_ss,_sp),(uint16_t)a); }
-#define POP_STACK(a) 	{ a=GetShortValue((uint32_t)MAKE20BITS(_ss,_sp));	_sp+=2; }
+#define PUSH_STACK(a) 	{ _sp-=2;	PutShortValue(_ss,_sp,(uint16_t)a); }
+#define POP_STACK(a) 	{ a=GetShortValue(_ss,_sp);	_sp+=2; }
 
 #define ROTATE_SHIFT8 \
 	switch(Pipe2.reg) {\
@@ -366,8 +397,8 @@ extern volatile BYTE keysFeedPtr;
 				res3.b <<= 1;\
 				res3.b |= _f.Carry;\
 				}\
-			if(i==1)\
-				_f.Ovf=(!!_f.Carry != !!(res1.b & 0x80)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			if(i==1)/*gloriouscow lo fa comunque*/\
+				_f.Ovf=(!!_f.Carry != !!(res3.b & 0x80)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
 		case 1:       /* ROR*/\
 			while(res2.b--) {\
@@ -377,7 +408,7 @@ extern volatile BYTE keysFeedPtr;
 					res3.b |= 0x80;\
 				}\
 			if(i==1)\
-				_f.Ovf=(!!(res1.b & 0x80) != !!(res1.b & 0x40)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+				_f.Ovf=(!!(res3.b & 0x80) != !!(res3.b & 0x40)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
 		case 2:       /* RCL*/\
 			while(res2.b--) {\
@@ -387,7 +418,7 @@ extern volatile BYTE keysFeedPtr;
 				res3.b |= _f1.Carry;\
 				}\
 			if(i==1)\
-				_f.Ovf=(!!_f.Carry != !!(res1.b & 0x80)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+				_f.Ovf=(!!_f.Carry != !!(res3.b & 0x80)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
 		case 3:       /* RCR*/\
 			while(res2.b--) {\
@@ -398,10 +429,10 @@ extern volatile BYTE keysFeedPtr;
 					res3.b |= 0x80;\
 				}\
 			if(i==1)\
-				_f.Ovf=(!!(res1.b & 0x80) != !!(res1.b & 0x40)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+				_f.Ovf=(!!(res3.b & 0x80) != !!(res3.b & 0x40)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
+		case 6:       /* SAL/SHL ... bah mi sembrano identiche! ma sarebbe SETMO :D secondo unofficial */\
 		case 4:       /* SHL/SAL*/\
-		case 6:       /* SAL/SHL ... bah mi sembrano identiche!*/\
 			while(res2.b--) {\
 				_f.Carry=res3.b & 0x80 ? 1 : 0;\
 				res3.b <<= 1;\
@@ -426,6 +457,7 @@ extern volatile BYTE keysFeedPtr;
 				_f.Ovf=0;		/* Ovf=0 (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
 			break;\
 		}
+// _f.Aux=0;			// pare... da gloriouscow...
 
 
 #define ROTATE_SHIFT16 \
@@ -436,8 +468,8 @@ extern volatile BYTE keysFeedPtr;
 				res3.x <<= 1;\
 				res3.x |= _f.Carry;\
 				}\
-			if(i==1)\
-				_f.Ovf=(!!_f.Carry != !!(res1.x & 0x8000)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+			if(i==1)/*gloriouscow lo fa comunque*/\
+				_f.Ovf=(!!_f.Carry != !!(res3.x & 0x8000)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
 		case 1:       /* ROR*/\
 			while(res2.b--) {\
@@ -447,7 +479,7 @@ extern volatile BYTE keysFeedPtr;
 					res3.x |= 0x8000;\
 				}\
 			if(i==1)\
-				_f.Ovf=(!!(res1.x & 0x8000) != !!(res1.x & 0x4000)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+				_f.Ovf=(!!(res3.x & 0x8000) != !!(res3.x & 0x4000)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
 		case 2:       /* RCL*/\
 			while(res2.b--) {\
@@ -457,7 +489,7 @@ extern volatile BYTE keysFeedPtr;
 				res3.x |= _f1.Carry;\
 				}\
 			if(i==1)\
-				_f.Ovf=(!!_f.Carry != !!(res1.x & 0x8000)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB entrante (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+				_f.Ovf=(!!_f.Carry != !!(res3.x & 0x8000)) ? 1 : 0;		/* Ovf= Carry uscente XOR MSB uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
 		case 3:       /* RCR*/\
 			while(res2.b--) {\
@@ -468,10 +500,10 @@ extern volatile BYTE keysFeedPtr;
 					res3.x |= 0x8000;\
 				}\
 			if(i==1)\
-				_f.Ovf=(!!(res1.x & 0x8000) != !!(res1.x & 0x4000)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
+				_f.Ovf=(!!(res3.x & 0x8000) != !!(res3.x & 0x4000)) ? 1 : 0;		/* Ovf= B7 XOR B6 uscente (https://c9x.me/x86/html/file_module_x86_id_273.html*/\
 			break;\
+		case 6:       /* SAL/SHL ... bah mi sembrano identiche! dice che su 8088 sono undocumented SETMO SETMOC */\
 		case 4:       /* SHL/SAL*/\
-		case 6:       /* SAL/SHL ... bah mi sembrano identiche!*/\
 			while(res2.b--) {\
 				_f.Carry=res3.x & 0x8000 ? 1 : 0;\
 				res3.x <<= 1;\
@@ -496,6 +528,7 @@ extern volatile BYTE keysFeedPtr;
 				_f.Ovf=0;		/* Ovf=0 (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
 			break;\
 		}
+// _f.Aux=0;			// pare... da gloriouscow...
 
 
 
@@ -556,19 +589,34 @@ void UART_Init(uint32_t);
 void putsUART1(unsigned int *buffer);
 
 int decodeKBD(int, long, BOOL);
-uint8_t GetPipe(uint32_t t);
-uint8_t GetMorePipe(uint32_t t);
-uint8_t GetValue(uint32_t);
-uint8_t InValue(uint16_t);
-uint16_t InShortValue(uint16_t);
-uint16_t InIntValue(uint16_t);
-uint16_t GetShortValue(uint32_t);
-uint32_t GetIntValue(uint32_t);
-void PutValue(uint32_t, uint8_t);
-void PutShortValue(uint32_t, uint16_t);
-void PutIntValue(uint32_t, uint32_t);
-void OutValue(uint16_t, uint8_t);
-void OutIntValue(uint16_t, uint16_t);
+#ifdef EXT_80386
+uint8_t  GetPipe(uint16_t,uint32_t);
+uint8_t  GetMorePipe(uint16_t,uint32_t);
+uint8_t  GetValue(uint16_t,uint32_t);
+uint16_t  GetShortValue(uint16_t,uint32_t);
+uint32_t  GetIntValue(uint16_t,uint32_t);
+uint8_t  InValue(uint16_t);
+uint16_t  InShortValue(uint16_t);
+uint16_t  InIntValue(uint16_t);
+void  PutValue(uint16_t,uint32_t, uint8_t);
+void  PutShortValue(uint16_t,uint32_t, uint16_t);
+void  PutIntValue(uint16_t,uint32_t, uint32_t);
+void  OutValue(uint16_t, uint8_t);
+void  OutShortValue(uint16_t, uint16_t);
+void  OutIntValue(uint32_t, uint16_t);
+#else
+uint8_t  GetPipe(uint16_t,uint16_t);
+uint8_t  GetMorePipe(uint16_t,uint16_t);
+uint8_t  GetValue(uint16_t,uint16_t);
+uint16_t  GetShortValue(uint16_t,uint16_t);
+uint8_t  InValue(uint16_t);
+uint16_t  InShortValue(uint16_t);
+void  PutValue(uint16_t,uint16_t, uint8_t);
+void  PutShortValue(uint16_t,uint16_t, uint16_t);
+void  OutValue(uint16_t, uint8_t);
+void  OutShortValue(uint16_t, uint16_t);
+#endif
+
 int Emulate(int);
 void initHW(void);
 uint8_t to_bcd(uint8_t n);

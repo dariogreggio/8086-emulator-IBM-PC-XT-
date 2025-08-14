@@ -99,7 +99,7 @@
 
 
 const char CopyrightString[]= {'P','C','/','X','T',' ','E','m','u','l','a','t','o','r',' ','v',
-	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '2','6','/','0','7','/','2','5', 0 };
+	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '1','4','/','0','8','/','2','5', 0 };
 
 const char Copyr1[]="(C) Dario's Automation 2019-2025 - G.Dar\xd\xa\x0";
 
@@ -130,8 +130,8 @@ extern BYTE COMDataEmuFifoCnt;
 extern volatile BYTE VIDIRQ /*TIMIRQ,KBDIRQ,SERIRQ,RTCIRQ,FDCIRQ*/;
 uint16_t VICRaster;
 
-volatile PIC32_RTCC_DATE currentDate={1,1,90};
-volatile PIC32_RTCC_TIME currentTime={0,0,0};
+volatile PIC32_RTCC_DATE currentDate={1 /*mon*/,1,1,0x90};    // BCD!
+volatile PIC32_RTCC_TIME currentTime={0,0,0};   // BCD
 const BYTE dayOfMonth[12]={31,28,31,30,31,30,31,31,30,31,30,31};
 
 
@@ -142,7 +142,7 @@ const WORD cgaColors[3][4]={ {BLACK,CYAN,MAGENTA,WHITE},
 const WORD extCGAColors[16]={BLACK,GREEN,BLUE,CYAN,BURLYWOOD /*CRIMSON*/,DARKGRAY,MAGENTA,BRIGHTMAGENTA /*VIOLET*/,
 	GRAY128,LIGHTGREEN,LIGHTGRAY,BRIGHTCYAN,LIGHTRED,YELLOW,PINK,WHITE};
 const WORD textColors[16]={BLACK,BLUE,GREEN,CYAN, RED,MAGENTA,YELLOW,LIGHTGRAY,
-	GRAY128,LIGHTBLUE,LIGHTGREEN,BRIGHTCYAN, LIGHTRED,BRIGHTMAGENTA,LIGHTYELLOW,WHITE};
+	GRAY128,BRIGHTBLUE,BRIGHTGREEN,BRIGHTCYAN, BRIGHTRED,BRIGHTMAGENTA,BRIGHTYELLOW,WHITE};
 
 
 #ifdef ST7735
@@ -957,7 +957,7 @@ int main(void) {
   CPUPins |= DoReset;
 #ifdef USING_SIMULATOR
   puts("boot emulator");
-   	ColdReset=0;    Emulate(0);
+   	ColdReset=1;    Emulate(0);
 #endif
 
 //#ifndef __DEBUG
@@ -997,7 +997,7 @@ int main(void) {
 
 	initHW();
 
-	ColdReset=0;
+	ColdReset=1;
 
   Emulate(0);
 
@@ -1734,7 +1734,7 @@ BYTE whichKeysFeed=0;
 char keysFeed[32]={0};
 volatile BYTE keysFeedPtr=255;
 const char *keysFeed1=" \r";     // per BASIC!
-const char *keysFeed2="2/18/2025\r\r";     // 
+const char *keysFeed2="8/14/2025\r\r";     // 
 const char *keysFeed3="DIR\r";     // 
 //const char *keysFeed1="  A\r";     // 
 //const char *keysFeed1="  A\x81\xa1\xa2:\r";     // space per BASIC su Bios "nuovo"
@@ -1744,6 +1744,7 @@ const char *keysFeed6="A:\r";
 const char *keysFeed7="CHKDSK \r";
 const char *keysFeed8="SCREEN 1\r";
 const char *keysFeed9="LIST\r";
+const char *keysFeed10="SPEED\r";
 
 void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   //100Hz 2024
 // https://www.microchip.com/forums/m842396.aspx per IRQ priority ecc
@@ -1766,54 +1767,54 @@ void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   /
     if(!(i146818RAM[11] & 0b10000000)) {    // SET
 #warning VERIFICARE se il bios ABILITA RTC!! e occhio PCXTbios che usa un diverso RTC...
       i146818RAM[10] |= 0b10000000;
-			if(!(i146818RAM[11] & B8(00000100))) 			// BCD mode
+			if(!(i146818RAM[11] & 0b00000100)) 			// BCD mode
 				currentTime.sec=from_bcd(currentTime.sec);
       currentTime.sec++;
 			n=currentTime.sec;
-			if(!(i146818RAM[11] & B8(00000100))) 	
+			if(!(i146818RAM[11] & 0b00000100)) 	
 				currentTime.sec=to_bcd(currentTime.sec);
       if(n >= 60) {
         currentTime.sec=0;
-				if(!(i146818RAM[11] & B8(00000100))) 			// BCD mode
+				if(!(i146818RAM[11] & 0b00000100)) 			// BCD mode
 					currentTime.min=from_bcd(currentTime.min);
         currentTime.min++;
 				n=currentTime.min;
-				if(!(i146818RAM[11] & B8(00000100))) 	
+				if(!(i146818RAM[11] & 0b00000100)) 	
 					currentTime.min=to_bcd(currentTime.min);
         if(n >= 60) {
           currentTime.min=0;
-					if(!(i146818RAM[11] & B8(00000100))) 			// BCD mode
+					if(!(i146818RAM[11] & 0b00000100)) 			// BCD mode
 						currentTime.hour=from_bcd(currentTime.hour);
           currentTime.hour++;
 					n=currentTime.hour;
-					if(!(i146818RAM[11] & B8(00000100)))
+					if(!(i146818RAM[11] & 0b00000100))
 						currentTime.hour=to_bcd(currentTime.hour);
-          if( ((i146818RAM[11] & B8(00000010)) && n >= 24) || 
-            (!(i146818RAM[11] & B8(00000010)) && n >= 12) ) {
+          if( ((i146818RAM[11] & 0b00000010) && n >= 24) || 
+            (!(i146818RAM[11] & 0b00000010) && n >= 12) ) {
             currentTime.hour=0;
-						if(!(i146818RAM[11] & B8(00000100))) 			// BCD mode
+						if(!(i146818RAM[11] & 0b00000100)) 			// BCD mode
 							currentDate.mday=from_bcd(currentDate.mday);
             currentDate.mday++;
 						n=currentDate.mday;
-						if(!(i146818RAM[11] & B8(00000100)))
+						if(!(i146818RAM[11] & 0b00000100))
 							currentDate.mday=to_bcd(currentDate.mday);
             i=dayOfMonth[currentDate.mon-1];
             if((i==28) && !(currentDate.year % 4))
               i++;
             if(n > i) {		// (rimangono i secoli... GLATick li mette nella RAM[0x32] del RTC)
               currentDate.mday=0;
-							if(!(i146818RAM[11] & B8(00000100))) 			// BCD mode
+							if(!(i146818RAM[11] & 0b00000100)) 			// BCD mode
 								currentDate.mon=from_bcd(currentDate.mon);
               currentDate.mon++;
-							if(!(i146818RAM[11] & B8(00000100)))
+							if(!(i146818RAM[11] & 0b00000100))
 								currentDate.mon=to_bcd(currentDate.mon);
               if(n > 12) {		// 
                 currentDate.mon=1;
-								if(!(i146818RAM[11] & B8(00000100))) 			// BCD mode
+								if(!(i146818RAM[11] & 0b00000100)) 			// BCD mode
 									currentDate.year=from_bcd(currentDate.year);
                 currentDate.year++;
 								n=currentDate.year;
-								if(!(i146818RAM[11] & B8(00000100)))
+								if(!(i146818RAM[11] & 0b00000100))
 									currentDate.year=to_bcd(currentDate.year);
 								if(n>=100) {
 	                currentDate.year=0;
@@ -1885,9 +1886,12 @@ void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   /
 			case 8:
 				strcpy(keysFeed,keysFeed9);
 				break;
+			case 9:
+				strcpy(keysFeed,keysFeed10);
+				break;
       }
 		whichKeysFeed++;
-		if(whichKeysFeed>=9)
+		if(whichKeysFeed>=10)
 			whichKeysFeed=0;
 //    goto fine;
 		}
@@ -2090,6 +2094,9 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
 			i8250Reg[2] &= ~0b00000001;
 			if(i8250Reg[1] & 0b00000001)			// se IRQ attivo
         i8259IRR |= 0x10;
+
+      i8250Reg[5] |= 1;			// byte rx in COM cmq
+
       }
 		mouseState &= ~0b10000000;  // marker per COM
     

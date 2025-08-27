@@ -50,7 +50,7 @@ extern uint8_t i8237Mode[],i8237Mode2[],i8237Command,i8237Command2;
 extern uint8_t i8237RegR[],i8237RegW[],i8237Reg2R[],i8237Reg2W[];
 extern uint16_t i8237DMAAddr[],i8237DMALen[],i8237DMAAddr2[],i8237DMALen2[];
 extern uint16_t i8237DMACurAddr[],i8237DMACurLen[],i8237DMACurAddr2[],i8237DMACurLen2[];
-extern uint8_t floppyTimer;
+extern uint16_t floppyTimer;
 extern uint8_t ExtIRQNum;
 extern uint16_t VICRaster;
 
@@ -339,55 +339,69 @@ int Emulate(int mode) {
         CPUPins=DoReset;
         }
     
+#ifdef MOUSE_TYPE 
       manageTouchScreen();
+#endif
       }
 
 //questa parte equivale a INTA sequenza ecc  http://www.icet.ac.in/Uploads/Downloads/3_mod3.pdf
     if((i8259IRR & 0x1) && !(i8259IMR & 0x1)) {
-      CPUPins |= DoIRQ;
-// [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
-      ExtIRQNum=8;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
-			i8259ISR |= 1;	i8259IRR &= ~1;
-			if(i8259ICW[3] & 0b00000010)		// AutoEOI
-	      i8259ISR &= ~0x1;
+			if(_f.IF) {			// www.brokenthorn.com/Resources/OSDevPic.html  mah, controintuitivo!
+        CPUPins |= DoIRQ;
+  // [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
+        ExtIRQNum=8;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
+        i8259ISR |= 1;	i8259IRR &= ~1;
+        if(i8259ICW[3] & 0b00000010)		// AutoEOI
+          i8259ISR &= ~0x1;
+        }
       }
     if((i8259IRR & 0x2) && !(i8259IMR & 0x2)) {
-      CPUPins |= DoIRQ;
-      ExtIRQNum=9;      // IRQ 9 Keyboard
-			i8259ISR |= 2;	i8259IRR &= ~2;
-			if(i8259ICW[3] & 0b00000010)		// AutoEOI
-	      i8259ISR &= ~0x2;
+			if(_f.IF) {
+        CPUPins |= DoIRQ;
+        ExtIRQNum=9;      // IRQ 9 Keyboard
+        i8259ISR |= 2;	i8259IRR &= ~2;
+        if(i8259ICW[3] & 0b00000010)		// AutoEOI
+          i8259ISR &= ~0x2;
+        }
       }
     if((i8259IRR & 0x10) && !(i8259IMR & 0x10)) {
-      CPUPins |= DoIRQ;
-      ExtIRQNum=0x0c;      // IRQ 12 COM1
-			i8259ISR |= 0x10;	i8259IRR &= ~0x10;
-			if(i8259ICW[3] & 0b00000010)		// AutoEOI
-	      i8259ISR &= ~0x10;
+			if(_f.IF) {
+        CPUPins |= DoIRQ;
+        ExtIRQNum=0x0c;      // IRQ 12 COM1
+        i8259ISR |= 0x10;	i8259IRR &= ~0x10;
+        if(i8259ICW[3] & 0b00000010)		// AutoEOI
+          i8259ISR &= ~0x10;
+        }
       }
     if((i8259IRR & 0x20) && !(i8259IMR & 0x20)) {
-      CPUPins |= DoIRQ;
-      ExtIRQNum=13;      // IRQ 5 Hard disc
-			i8259ISR |= 0x20;	i8259IRR &= ~0x20;
-			if(i8259ICW[3] & 0b00000010)		// AutoEOI
-	      i8259ISR &= ~0x20;
+			if(_f.IF) {
+        CPUPins |= DoIRQ;
+        ExtIRQNum=13;      // IRQ 5 Hard disc
+        i8259ISR |= 0x20;	i8259IRR &= ~0x20;
+        if(i8259ICW[3] & 0b00000010)		// AutoEOI
+          i8259ISR &= ~0x20;
+        }
       }
     if((i8259IRR & 0x40) && !(i8259IMR & 0x40)) {
-      CPUPins |= DoIRQ;
-      ExtIRQNum=14;      // IRQ 6 Floppy disc
-			i8259ISR |= 0x40;	i8259IRR &= ~0x40;
-			if(i8259ICW[3] & 0b00000010)		// AutoEOI
-	      i8259ISR &= ~0x40;
+			if(_f.IF) {
+        CPUPins |= DoIRQ;
+        ExtIRQNum=14;      // IRQ 6 Floppy disc
+        i8259ISR |= 0x40;	i8259IRR &= ~0x40;
+        if(i8259ICW[3] & 0b00000010)		// AutoEOI
+          i8259ISR &= ~0x40;
+        }
       }
 #ifdef PCAT
     if((i8259IRR2 & 0x1) && !(i8259IMR2 & 0x1)) {
-      CPUPins |= DoIRQ;
-      ExtIRQNum=0x70;      // IRQ RTC
-			i8259ISR2 |= 1;	i8259IRR2 &= ~1;
-			if(i8259ICW[3] & 0b00000010)		// AutoEOI
-	      i8259ISR2 &= ~0x1;
+			if(_f.IF) {
+        CPUPins |= DoIRQ;
+        ExtIRQNum=0x70;      // IRQ RTC
+        i8259ISR2 |= 1;	i8259IRR2 &= ~1;
+        if(i8259ICW[3] & 0b00000010)		// AutoEOI
+          i8259ISR2 &= ~0x1;
       }
 #endif
+      
 		if(i8255RegR[2]/*MachineFlags*/ & 0b11000000)		//https://www.minuszerodegrees.net/5150/misc/5150_nmi_generation.jpg
 			CPUPins |= DoNMI;
 		// e sembra che cmq debba essere attivo in i8259Reg2R[0] OPPURE da b7 scritto a 0xA0! (pcxtbios
@@ -396,6 +410,9 @@ int Emulate(int mode) {
 			initHW();
 			_f.x=_f1.x=0;     // https://thestarman.pcministry.com/asm/debug/8086REGs.htm
 			_f.unused=1; _f.unused2=_f.unused3=0; 
+#ifdef EXT_80x87 
+			status8087=0; control8087=0;			// VERIFICARE!
+#endif
 #ifdef EXT_80286
       _ip=0xfff0;
       _cs=0x000f;
@@ -426,11 +443,10 @@ int Emulate(int mode) {
 			}
 
 rallenta:
-		if(++timerDivider >= 3 *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
-//sembra andare anche su PIC, 7/8/25   
-//#warning PROVARE!!! troppo lento il beep al boot di glabios
-      // rimesso 3 per ERSO/DTCBIOS... paiono tutti ok
-			// GLABios è il più critico dopo la modifica di "rallenta", funzia da 17 a 125 circa! 22 pare abbastanza preciso, per TIME e i secondi
+		if(++timerDivider >= 2          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
+      // OCCHIO con 3 non va più floppy dopo aver ritarato i timer!! 26/8/25
+      // Ma in effetti se consideriamo che ogni istruzione impiega da 3-4 a 100 cicli, diciamo max 20 http://aturing.umcs.maine.edu/~meadow/courses/cos335/80x86-Integer-Instruction-Set-Clocks.pdf
+      // e passiamo di qua dopo ognuna, allora il divisore quasi non ha senso... anzi andrebbe invertito!
 			timerDivider=0;
 			// https://stanislavs.org/helppc/8253.html   http://wiki.osdev.org/Programmable_Interval_Timer#Mode_0_-_Interrupt_On_Terminal_Count
 			// devono andare a ~1.1MHz qua
@@ -444,7 +460,7 @@ rallenta:
 							;
 						i8253Mode[0] |= 0b10000000;          // OUT=1
 					//      TIMIRQ=1;  //
-						i8259IRR |= 1;
+							i8259IRR |= 1;
 						}
 					else {
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
@@ -457,20 +473,20 @@ rallenta:
 							;
 						i8253Mode[0] |= 0b10000000;          // OUT=1
 					//      TIMIRQ=1;  //
-						i8259IRR |= 1;
+							i8259IRR |= 1;
 						}
 					else {
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
 						}
 					break;
 				case 2:
-				case 6:
+				case 6:		// boh
 					// free counter / rate generator
 					i8253TimerR[0]--;
 					if(i8253TimerR[0]==1) {
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
 					//      TIMIRQ=1;  //
-						i8259IRR |= 1;
+							i8259IRR |= 1;
 						}
 					else if(!i8253TimerR[0]) {
 						i8253Mode[0] |= 0b10000000;          // OUT=1
@@ -479,17 +495,19 @@ rallenta:
 						}
 					break;
 				case 3:
-				case 7:
+				case 7:		// boh
 					// free counter / square wave rate generator
-					i8253TimerR[0]--;
+					i8253TimerR[0]-=2;
 					if(!i8253TimerR[0]) {
 						i8253Mode[0] ^= 0b10000000;          // OUT=!OUT
-						// IRQ solo sul fronte discesa...
-						if(!(i8253Mode[0] & 0b10000000)) {
+						// IRQ solo sul fronte salita...
+						if((i8253Mode[0] & 0b10000000)) {
 					//      TIMIRQ=1;  //
 							i8259IRR |= 1;
 							}
 						i8253TimerR[0]=i8253TimerW[0];
+						if(i8253TimerR[0] & 1)
+							i8253TimerR[0]--;
 						}
 					else {
 						// 
@@ -502,7 +520,7 @@ rallenta:
 							;
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
 					//      TIMIRQ=1;  //
-						i8259IRR |= 1;
+							i8259IRR |= 1;
 						}
 					else {
 						i8253TimerR[0]--;
@@ -516,7 +534,7 @@ rallenta:
 							;
 						i8253Mode[0] &= ~0b10000000;          // OUT=0
 					//      TIMIRQ=1;  //
-						i8259IRR |= 1;
+							i8259IRR |= 1;
 						}
 					else {
 						i8253TimerR[0]--;
@@ -566,10 +584,12 @@ rallenta:
 				case 3:
 				case 7:
 					// free counter / square wave rate generator
-					i8253TimerR[1]--;
+					i8253TimerR[1]-=2;
 					if(!i8253TimerR[1]) {
 						i8253Mode[1] ^= 0b10000000;          // OUT=!OUT
 						i8253TimerR[1]=i8253TimerW[1];
+						if(i8253TimerR[1] & 1)
+							i8253TimerR[1]--;
 						}
 					else {
 						// 
@@ -604,14 +624,16 @@ rallenta:
 				case 0:		// INTerrupt on terminal count
 					// (continous) output is low and goes high at counting end
 					i8253TimerR[2]--;
-					if(!i8253TimerR[2]) {
-						if(i8253Mode[2] & 0b01000000)          // reloaded
-							;
-						i8253Mode[2] |= 0b10000000;          // OUT=1
+//test	5150 cassette				i8253Mode[2] |= 0b10000000;
+					if(i8253Mode[2] & 0b01000000) {         // reloaded
+						if(!i8253TimerR[2]) {
+							i8253Mode[2] &= ~0b01000000;
+							i8253Mode[2] |= 0b10000000;          // OUT=1
 						}
 					else {
 						i8253Mode[2] &= ~0b10000000;          // OUT=0
 						}
+							}
 					break;
 				case 1:
 					// one-shot output is low and goes high at counting end (retriggerable)
@@ -641,10 +663,12 @@ rallenta:
 				case 3:
 				case 7:
 					// free counter / square wave rate generator
-					i8253TimerR[2]--;
+					i8253TimerR[2]-=2;
 					if(!i8253TimerR[2]) {
-						i8253Mode[2] |= 0b10000000;          // OUT=!OUT
+						i8253Mode[2] ^= 0b10000000;          // OUT=!OUT
 						i8253TimerR[2]=i8253TimerW[2];
+						if(i8253TimerR[2] & 1)
+							i8253TimerR[2]--;
 						}
 					else {
 						// 
@@ -675,13 +699,30 @@ rallenta:
 						}
 					break;
 				}
-/* boh se servisse..			if(floppyTimer) {
+			if(i8253Mode[2] & 0b10000000)
+				i8255RegR[2] |= 0b00100000;			// monitor timer ch 2...
+			else
+				i8255RegR[2] &= ~0b00100000;			// 
+#ifdef PC_IBM5150
+			if(i8253Mode[2] & 0b10000000)
+				i8255RegR[2] |= 0b00010000;			// loopback cassette
+			else
+				i8255RegR[2] &= ~0b00010000;			// 
+//				i8255RegR[2] |= 0b00010000;			// cassette...
+#endif
+#ifdef PC_IBM5160		// anche altri? boh
+/*			if(i8253Mode[2] & 0b10000000)
+				i8255RegR[2] |= 0b00010000;			// monitor speaker...
+			else
+				i8255RegR[2] &= ~0b00010000;			*/
+#endif
+
+			if(floppyTimer) {
 				floppyTimer--;
 				if(!floppyTimer) {
-//						i8259IRR |= 0x40;		// simulo IRQ...
+					i8259IRR |= 0x40;		// simulo IRQ...
 					}
-				}*/
-
+				}
 			}
 
 		if(!(i8237RegW[8] & 0b00000001)) {		// controller enable
@@ -695,26 +736,30 @@ rallenta:
 					break;
 				}
 			i8237RegR[13] /* = */; // ultimo byte trasferito :)
-			switch(i8237Mode[0] & 0b11000000) {		// DMA mode
-				case 0b00000000:			// demand
-					break;
-				case 0b11000000:			// cascade
-					break;
-				case 0b10000000:			// single
-				case 0b01000000:			// block
-					if(i8237Mode[0] & 0b00100000)
-						i8237DMACurAddr[0]++;
-					else
-						i8237DMACurAddr[0]++;
-					i8237DMACurLen[0]--;
-					if(!i8237DMACurLen[0]) {
-						i8237RegR[8] |= 0b00000001;		// TC 0
-						if(i8237Mode[0] & 0b00010000) {
-							i8237DMACurAddr[0]=i8237DMAAddr[0];
-							i8237DMACurLen[0]=i8237DMALen[0];
+			if(!(i8237RegW[15] & (1 << 0)))	{	// mask...
+				switch(i8237Mode[0] & 0b11000000) {		// DMA mode
+					case 0b00000000:			// demand
+						break;
+					case 0b11000000:			// cascade
+						break;
+					case 0b10000000:			// single
+					case 0b01000000:			// block
+//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
+						if(i8237Mode[0] & 0b00100000)
+							i8237DMACurAddr[0]--;
+						else
+							i8237DMACurAddr[0]++;
+						i8237DMACurLen[0]--;
+						if(!i8237DMACurLen[0]) {
+							i8237RegR[8] |= (1 << 0);		// TC 0
+							if(i8237Mode[0] & 0b00010000) {
+								i8237DMACurAddr[0]=i8237DMAAddr[0];
+								i8237DMACurLen[0]=i8237DMALen[0];
+								i8237RegR[8] &= ~((1 << 0) << 4);  // request done??... se confermato, mettere anchein floppy, HD
+								}
 							}
-						}
-					break;
+						break;
+					}
 				}
 			}
     
@@ -813,6 +858,7 @@ fineRep:
     
      LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte più veloci
                     // 500-1uS 22/7/24 con O2! [.9-2uS 16/7/24 senza ottimizzazioni (con O1 si pianta emulatore...
+     // 2025 dopo aggiunte varie, specie seg:ofs, siamo sui 1-1.5uS con O2
      
 #ifdef USING_SIMULATOR
 // fa cagare, lentissimo anche con baud rate alto     printf("CS:IP=%04X:%04X\n",_cs,_ip);
@@ -4382,30 +4428,37 @@ do_rcl16:
 			case 0xdd:
 			case 0xde:
 			case 0xdf:
-				COMPUTE_RM			// per non replicare la macro 8 volte...
-// ??					}
+				i=2;
 				switch(Pipe1 & 7) {
-
 					case 0:
 							status8087,control8087;
 						break;
 					case 1: 
 						switch(Pipe2.b.l) {
+							case 0xc0:    // FLD st(0)
+
+								break;
 							case 0xd0:    // FNOP
 								break;
-							case 0x3c:      // FNSTCW
-								_si=control8087;
-		//#warning NO! finire con tutti indirizzamenti...
-								break;
 							case 0xE0:    // FCHS
+// complement sign of st(0)
 								break;
 							case 0xE1:    // FABS
 								break;
 							case 0xE5:    // FXAM
 								break;
 							case 0xEE:    // FLDZ
+
+//Push +0.0 onto the FPU register stack.                
+
+  dataPtr8087;
+	R8087[8];
 								break;
 							case 0xE8:    // FLD1
+
+//								Push +1.0 onto the FPU register stack.
+  dataPtr8087;
+	R8087[8];
 								break;
 							case 0xE9:    // FLDL2T
 								break;
@@ -4439,6 +4492,13 @@ do_rcl16:
 								break;
 							case 0xFD:    // FSCALE
 								break;
+							default:      // FNSTCW
+		//(#warning NO! finire con tutti indirizzamenti...
+								res3.x=control8087;
+//								PutShortValue(*theDs,op2.mem,res3.x);
+//								_si=control8087;
+
+								break;
 							}
 							status8087,control8087;
 						break;
@@ -4450,10 +4510,20 @@ do_rcl16:
 							case 0xe0:      // FENI
 								break;
 							case 0xe1:      // FDISI
+
+// disabilita IRQ da 8087...
 								break;
 							case 0xe2:      // FCLEX
+status8087 &= 0x7f00;
+
 								break;
 							case 0xe3:      // FNINIT
+								i=0;
+status8087=0; 
+control8087=0x033f /*0x103f*/;
+res3.x=0;			// boh
+  dataPtr8087=0; instrPtr8087=0;
+
 								break;
 							}
 							status8087,control8087;
@@ -4462,15 +4532,64 @@ do_rcl16:
 							status8087,control8087;
 						break;
 					case 5:
-							status8087,control8087;
+						// FSTSW
+						_ax=status8087;
+res3.d=MAKELONG(_ax,0);			// boh, finire
+i=4;
+//								PutShortValue(*theDs,op2.mem,res3.x);
 						break;
 					case 6:
+						switch(Pipe2.b.l) {
+							case 0xF9:    // Divide ST(1) by ST(0), store result in ST(1), and pop the register stack.
+								break;
+							case 0xD9:    // FCOMPP
+								break;
+							default:
+								break;
+							}
+						// FADD FDIV ecc...
+						//DE F9 Divide ST(1) by ST(0), store result in ST(1), and pop the register stack.
+						// DE D9 FCOMPP
 							status8087,control8087;
 						break;
 					case 7:
-							status8087,control8087;
+						switch(Pipe2.b.l) {
+							case 0xe0:      // FNSTSW AX
+								_ax=status8087;
+res3.x=_ax;
+//								PutShortValue(*theDs,op2.mem,res3.x);
+								break;
+							}
+						status8087,control8087;
 						break;
-						}
+					}
+
+				COMPUTE_RM			// (per non replicare la macro 8 volte...
+						switch(i) {
+							case 2:
+								PutShortValue(*theDs,op2.mem,res3.x);
+								break;
+							case 4:
+								PutShortValue(*theDs,op2.mem,LOWORD(res3.x));
+// si schianta!!! boh...								PutShortValue(*theDs,op2.mem+2,HIWORD(res3.x));
+								break;
+							default:
+								break;
+							}
+						break;
+          case 3:
+						GET_REGISTER_8_16_2
+						switch(i) {
+							case 2:
+		            *op2.reg16=res3.x;
+								break;
+							case 4:
+								// ??
+								break;
+							default:
+								break;
+							}
+						break;
 					}
         break;
           
@@ -5319,17 +5438,17 @@ skipnmi:
 		if(CPUPins & DoIRQ) {		// andrebbe fatto su edge cmq...
 			if(inEI) 
 				goto skipirq;
-			if(_f.IF) {
+//			if(_f.IF) { v.sopra
         CPUPins &= ~(DoIRQ | DoHalt);
 
 				PUSH_STACK(_f.x);
 				PUSH_STACK(_cs);
 				PUSH_STACK(_ip);
 				_f.Trap=0; _f.IF=0;	_f.Aux=0;
-				_ip=GetShortValue(0,(uint16_t)ExtIRQNum /*bus dati*/ *4);   // https://sw0rdm4n.wordpress.com/2014/09/09/old-knowledge-of-x86-architecture-8086-interrupt-mechanism/
+				_ip=GetShortValue(0,/* (i8259ICW[1] << 11) | */ (uint16_t)ExtIRQNum /*bus dati*/ *4);   // https://sw0rdm4n.wordpress.com/2014/09/09/old-knowledge-of-x86-architecture-8086-interrupt-mechanism/
 				_cs=GetShortValue(0,((uint16_t)ExtIRQNum /*bus dati*/ *4) +2);
         ExtIRQNum=0;
-				}
+//				}
 skipirq: 
 				;
 			}

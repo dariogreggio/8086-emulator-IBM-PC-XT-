@@ -72,11 +72,16 @@
 
 #define ROM_BASIC 1    //
 //#define ROM_HD_BASE 0xc8000			 PRIMA di option/ROM_START2 !
+//#define PC_IBM5150 1
+//#define PC_IBM5160 1
 
 //#define RAM_DOS 1
 #define MS_DOS_VERSION 3			// occhio INT_1E nei bios! per #settori, anche non cambia nulla...
 
-#define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (per qualche motivo microsoft NON va su windows 2... non viene visto al boot
+//#define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (per qualche motivo microsoft NON va su windows 2... non viene visto al boot
+// ora sembra andare, ma a volte disturba la tastiera... credo sia troppo sensibile a VCC/USB e a posizione touch
+#warning ##################  verificare tastiera che salta dopo mouse (o timer troppo veloci??
+
 
 #define CPU_CLOCK_DIVIDER 500000L			// così va più o meno come il PIC, su PC greggiod
 #define RAM_SIZE 0x74000L
@@ -682,10 +687,10 @@ void LCDWrite(const char *);
 
 #define	m_LCDCSBit  LATBbits.LATB2      // anche touch
 
-#define m_TouchX1   LATBbits.LATB2  //AN2     // https://www.hackster.io/calogerus/arduino-uno-2-4-tft-lcd-display-shield-touch-panel-ili9341-576b1b
+#define m_TouchX1   LATBbits.LATB3  //AN3     // https://www.hackster.io/calogerus/arduino-uno-2-4-tft-lcd-display-shield-touch-panel-ili9341-576b1b
 //#define m_TouchX2   PORTEbits.RE6  //AN16 ev.
 #define m_TouchX2   LATEbits.LATE6  //
-#define m_TouchY1   LATBbits.LATB3  //AN3
+#define m_TouchY1   LATBbits.LATB2  //AN2
 //#define m_TouchY2   PORTEbits.RE7  //AN15 ev.
 #define m_TouchY2   LATEbits.LATE7  //
 

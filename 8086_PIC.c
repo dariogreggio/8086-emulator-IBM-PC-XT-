@@ -99,7 +99,7 @@
 
 
 const char CopyrightString[]= {'P','C','/','X','T',' ','E','m','u','l','a','t','o','r',' ','v',
-	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '1','4','/','0','8','/','2','5', 0 };
+	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '2','7','/','0','8','/','2','5', 0 };
 
 const char Copyr1[]="(C) Dario's Automation 2019-2025 - G.Dar\xd\xa\x0";
 
@@ -510,7 +510,8 @@ int UpdateScreen(int rowIni, int rowFin) {
 	register BYTE *p,*p1;
  	int px,py;
   static BYTE cursorState=0,cursorDivider=0;
-  
+
+#ifdef CGA  
   if(rowIni==0)
     CGAreg[0xa] &= ~0b1000; // CGA not in retrace V
   else if(rowFin>=VERT_SIZE-8)
@@ -807,7 +808,316 @@ plot_cursor:
 
       }
     }
+#endif
+  
+#ifdef VGA  
+  if(rowIni==0)
+    CGAreg[0xa] &= ~0b1000; // CGA not in retrace V
+  else if(rowFin>=VERT_SIZE-8)
+    CGAreg[0xa] |= 0b1000; // CGA in retrace V
+  
+	i=VGAcrtcReg[8];
 
+	vmode = VGAcrtcReg[0x5];
+//	vmode = CGAreg[8] /* 8 | 1*/;		// http://www.antonis.de/qbebooks/gwbasman/screens.html per test modi screen gwbasic
+	vmode=8;
+  
+  if(vmode & 8) {     // enable video
+    if(VGAgraphReg[6] & 1 /*vmode & 2*/) {     // graphic mode
+      if(!(CGAreg[8] & 16)) {     // lores graph (320x200x4)
+        if(CGAreg[9] & 16)      // bright foreground
+          ;
+        START_WRITE();
+        if(rowIni==0) {
+		      color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
+          setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+          for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+            for(px=0; px<160; px++) {         // 320 pixel
+              writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              }
+            }
+          }
+        setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
+        p1=CGAram + (rowIni*80);
+        // OCCHIO CHE PRIMA CI SON TUTTE LE RIGHE PARI E POI LE DISPARI!
+        if(CGAreg[8] & 4)      // disable color ovvero palette #3
+          color=2;     // quale palette
+        else
+          color=CGAreg[9] & 32 ? 1 : 0;     // quale palette
+        if(CGAreg[9] & 16)      // high intensity foreground color...
+					;
+        for(py=rowIni; py<rowFin; py++) {    // 
+					p1=(BYTE*)&CGAram[0] + (((py ))*20) ;		// TROVARE layout memoria!
+          for(px=0; px<80; px++) {         // 320 pixel (80byte) 
+            ch=*p1++;
+            writedata16(cgaColors[color][ch >> 6]);
+            writedata16(cgaColors[color][(ch >> 4) & 3]);
+            writedata16(cgaColors[color][(ch >> 2) & 3]);
+            writedata16(cgaColors[color][(ch >> 0) & 3]);
+            }
+          ClrWdt();
+          }
+        if(rowIni>=VERT_SIZE-8) {
+          color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
+          setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+          for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+            for(px=0; px<160; px++) {         // 320 pixel
+              writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              }
+            }
+          }
+        END_WRITE();
+        }
+      else {                  // hires graph (640x200x1)
+	      color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE... VERIFICARE 2024 (non c'era...
+//        (CGAreg[9] & 0xf)      // colori per overscan/background/hires color
+        if(!(CGAreg[8] & 16)) {     // modo 160x200 16 colori   
+          START_WRITE();
+          if(rowIni==0) {
+            setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+              for(px=0; px<160; px++) {         // 320 pixel
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+                }
+              }
+            }
+          setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
+        // OCCHIO CHE PRIMA CI SON TUTTE LE RIGHE PARI E POI LE DISPARI!
+          for(py=rowIni; py<rowFin; py++) {    // 
+						p1=(BYTE*)&CGAram[0] + (((py ))*80) ;		// TROVARE layout memoria!
+            for(px=0; px<80; px++) {         // 160 pixel (80byte) 
+              ch=*p1++;
+              writedata16x2(textColors[ch >> 4],textColors[ch >> 4]);
+              writedata16x2(textColors[ch & 0xf],textColors[ch & 0xf]);    // 160 -> 320
+              }
+            ClrWdt();
+            }
+          if(rowIni>=VERT_SIZE-8) {
+            color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
+            setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+              for(px=0; px<160; px++) {         // 320 pixel
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+                }
+              }
+            }
+          END_WRITE();
+          }
+        else {
+          if(CGAreg[9] & 4)      // disable color ovvero palette #3 QUA NON SI CAPISCE COSA DOVREBBE FARE!
+            color=15;
+          else
+            color=CGAreg[9] & 15;
+          START_WRITE();
+          if(rowIni==0) {
+            setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+              for(px=0; px<160; px++) {         // 320 pixel
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+                }
+              }
+            }
+          setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
+          for(py=rowIni; py<rowFin; py++) {    // 
+						p1=(BYTE*)&CGAram[0] + (((py ))*(HORIZ_SIZE/8)) ;		// TROVARE layout memoria!
+            for(px=0; px<80; px++) {         // 640 pixel (80byte) diventano 320
+              ch=*p1++;
+              if(ch & 0x80)
+                writedata16(textColors[color]);
+              else
+                writedata16(textColors[0]);
+              if(ch & 0x20)
+                writedata16(textColors[color]);
+              else
+                writedata16(textColors[0]);
+              if(ch & 0x8)
+                writedata16(textColors[color]);
+              else
+                writedata16(textColors[0]);
+              if(ch & 0x2)
+                writedata16(textColors[color]);
+              else
+                writedata16(textColors[0]);
+              }
+            ClrWdt();
+            }
+          if(rowIni>=VERT_SIZE-8) {
+            color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
+            setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+              for(px=0; px<160; px++) {         // 320 pixel
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+                }
+              }
+            }
+          END_WRITE();
+          }
+        }
+      }
+    else {                // text mode (da qualche parte potrebbe esserci la Pagina selezionata...
+      START_WRITE();
+      color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
+      if(rowIni==0) {
+        setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+        for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+          for(px=0; px<160; px++) {         // 320 pixel
+            writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+            }
+          }
+        }
+      setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
+      for(py=rowIni/8; py<rowFin/8; py++) {    // 
+        if(VGAcrtcReg[0x2] == 80) {     // 80x25
+          for(i=0; i<16; i+=2) {         // 16 righe -> 8
+						p1=(BYTE*)&CGAram[0] + (py*80*2)   + 2*MAKEWORD(i6845RegW[13],i6845RegW[12]) /* display start addr*/;    // char/colore
+//#warning            era 80?? 2024 ah ma tanto rowini è 0...
+            for(px=0; px<80; px++) {         // 80 char (80byte) diventano 320 pixel
+              ch=*p1++;
+//              p=(BYTE *)&VGAfont_16[((WORD)ch)*16+i];  // TROVARLI IN qualche registro! sono nella ROM BIOS VGA
+              p=(BYTE *)&VGABios[0x2526 + ((WORD)ch)*16+i];  // TROVARLI IN qualche registro! 
+              ch=*p;
+              color=*p1++;   // il colore segue il char
+              if(ch & 0x40)   // difficile scegliere quali 2 pixel prendere.. !
+                writedata16(textColors[color & 0xf]);
+              else
+                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
+              if(ch & 0x10)   // difficile scegliere quali 2 pixel prendere.. !
+                writedata16(textColors[color & 0xf]);
+              else
+                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
+              if(ch & 0x4)   // difficile scegliere quali 2 pixel prendere.. !
+                writedata16(textColors[color & 0xf]);
+              else
+                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
+              if(ch & 0x1)   // difficile scegliere quali 2 pixel prendere.. !
+                writedata16(textColors[color & 0xf]);
+              else
+                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
+              }
+            }
+          }
+        else {     // 40x25
+          for(i=0; i<16; i+=2) {         // 16 righe -> 8
+  					p1=(BYTE*)&CGAram[0] + (py*40*2)   + 2*MAKEWORD(i6845RegW[13],i6845RegW[12]) /* display start addr*/;    // char/colore
+            for(px=0; px<40; px++) {         // 40 char (40byte) diventano 320 pixel
+              ch=*p1++;
+              p=(BYTE *)&VGAfont_16[((WORD)ch)*16+i];  // TROVARLI IN qualche registro! sono nella ROM BIOS VGA
+              ch=*p;
+              color=*p1++;   // il colore segue il char
+              if(ch & 0x80)   // 8 pixel
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);    // GESTIRE BLINK!
+              if(ch & 0x40)
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);    // 
+              if(ch & 0x20)
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+              if(ch & 0x10)
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+              if(ch & 0x8)
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+              if(ch & 0x4)
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+              if(ch & 0x2)
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+              if(ch & 0x1)
+                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+              else
+                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+              }
+            }
+          }
+        ClrWdt();
+        }
+
+      if(rowIni==VERT_SIZE-8) {
+        color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
+        setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+        for(py=0; py<VERT_OFFSCREEN; py++) {    // 
+          for(px=0; px<160; px++) {         // 320 pixel
+            writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+            }
+          }
+        }
+      END_WRITE();
+
+      i=MAKEWORD(VGAcrtcReg[15],VGAcrtcReg[14] & 0x3f);    // coord cursore, abs
+      row1=(VGAcrtcReg[0x2] == 80) ? (i/80)*16 : (i/40)*16;
+      if(row1>=rowIni && row1<rowFin) {
+        BYTE cy1,cy2;
+				row1--;			// è la pos della prima riga in alto del char contenente il cursore
+        switch((VGAcrtcReg[10] & 0x20)) {		// questo è solo enable! lampeggio??
+          case 0:
+					// secondo GLABios, in CGA il cursore lampeggia sempre indipendentemente da questo valore... me ne frego!!
+plot_cursor:
+  // test          i6845RegW[10]=5;i6845RegW[11]=7;
+            cy1= (VGAcrtcReg[10] & 31);    // 0..31
+            cy2= (VGAcrtcReg[11] & 31);
+            if(cy2 && cy1<=cy2) do {
+              if(VGAcrtcReg[0x2] == 80) {     // 80x25
+                color=7;    // fisso :)
+                START_WRITE();
+//								pVideoRAM=(BYTE*)&VideoRAM[0]+((row1)+cy1)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+((i % 80)*4)+(HORIZ_OFFSCREEN/2);
+                setAddrWindow((i % 80)*4+(HORIZ_OFFSCREEN/2),1+ /* ?? boh*/ cy1+ row1 +VERT_OFFSCREEN,4,cy2-cy1);   // altezza e posizione fissa, gestire da i6845RegW[10,11]
+                writedata16x2(textColors[color],textColors[color]);
+                writedata16x2(textColors[color],textColors[color]);
+                END_WRITE();
+                }
+              else {
+                color=7;    // fisso :)
+                START_WRITE();
+  //							pVideoRAM=(BYTE*)&VideoRAM[0]+((row1)+cy1)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+((i % 40)*8)+(HORIZ_OFFSCREEN/2);
+              setAddrWindow((i % 40)*8+(HORIZ_OFFSCREEN/2),1+ /* ?? boh*/ cy1+ row1 +VERT_OFFSCREEN,8,cy2-cy1);
+                writedata16x2(textColors[color],textColors[color]);
+                writedata16x2(textColors[color],textColors[color]);
+                writedata16x2(textColors[color],textColors[color]);
+                writedata16x2(textColors[color],textColors[color]);
+                END_WRITE();
+                }
+							cy1++;
+							} while(cy1<=cy2);
+            break;
+          case 0x20:    // no cursor!
+            break;
+          case 0x40:
+            cursorDivider++;
+            if(cursorDivider>=2) {
+              cursorDivider=0;
+              cursorState=!cursorState;
+              }
+            if(cursorState) {
+              goto plot_cursor;
+              }
+            break;
+          case 0x60:
+            cursorDivider++;
+            if(cursorDivider>=1) {
+              cursorDivider=0;
+              cursorState=!cursorState;
+              }
+            if(cursorState) {
+              goto plot_cursor;
+              }
+            break;
+          }
+        }
+
+      }
+    }
+#endif
+  
 	}
 #endif
 
@@ -1183,9 +1493,6 @@ void PWM_Init(void) {
 
 void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
 
-  
-  // FINIRE !!
-  
   ADCCON1=0;    // AICPMPEN=0, siamo sopra 2.5V
   CFGCONbits.IOANCPEN=0;    // idem; questo credo voglia SYSLOCK
   ADCCON2=0;
@@ -1216,17 +1523,15 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
   ADCTRG1=0;
   ADCTRG2=0;
   ADCTRG3=0;
-  ADCTRG1bits.TRGSRC2 = 0b00011; // Set AN2 to trigger from scan trigger
   ADCTRG1bits.TRGSRC3 = 0b00011; // Set AN3 to trigger from scan trigger
-  // 46 ecc usano SEMPRE scan implicito, mentre per AN8 vedere che fare
   
   // I PRIMI 12 POSSONO OVVERO DEVONO USARE gli ADC dedicati! e anche se si usano
   // poi gli SCAN, per quelli >12, bisogna usarli entrambi (e quindi TRGSRC passa a STRIG ossia "common")
 
-  ADCIMCON1bits.DIFF0 = 0; // single ended, unsigned
-  ADCIMCON1bits.SIGN0 = 0; // 
-  ADCIMCON1bits.DIFF6 = 0; // 
-  ADCIMCON1bits.SIGN6 = 0; // 
+  ADCIMCON1bits.DIFF3 = 0; // single ended, unsigned
+  ADCIMCON1bits.SIGN3 = 0; // 
+  ADCIMCON2bits.DIFF16 = 0; // 
+  ADCIMCON2bits.SIGN16 = 0; // 
   ADCCON1bits.SELRES = 0b10; // ADC7 resolution is 10 bits
   ADCCON1bits.STRGSRC = 1; // Select scan trigger.
 
@@ -1242,17 +1547,14 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
   ADCCON3bits.ADCSEL = 0;   //0=periph clock 3; 1=SYSCLK
   ADCCON3bits.CONCLKDIV = 4; // 25MHz, sotto è poi diviso 2 per il canale, = max 50MHz come da doc
 
-  ADC2TIMEbits.SELRES=0b10;        // 10 bits
-  ADC2TIMEbits.ADCDIV=4;       // 
-  ADC2TIMEbits.SAMC=5;        // 
   ADC3TIMEbits.SELRES=0b10;        // 10 bits
   ADC3TIMEbits.ADCDIV=4;       // 
   ADC3TIMEbits.SAMC=5;        //   
   
   ADCCSS1 = 0; // Clear all bits
   ADCCSS2 = 0;
-  ADCCSS1bits.CSS0 = 1; // AN0 (Class 1) set for scan
-  ADCCSS1bits.CSS6 = 1; // AN6 (Class 2) set for scan
+  ADCCSS1bits.CSS3 = 1; // AN3 (Class 1) set for scan
+  ADCCSS1bits.CSS16 = 1; // AN16 (Class 2) set for scan
 
   ADC0CFG=DEVADC0;
   ADC1CFG=DEVADC1;
@@ -1273,14 +1575,11 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
   // Enable clock to the module.
   ADCANCONbits.ANEN7 = 1;
   ADCCON3bits.DIGEN7 = 1;
-  ADCANCONbits.ANEN2 = 1;
-  ADCCON3bits.DIGEN2 = 1;
   ADCANCONbits.ANEN3 = 1;
   ADCCON3bits.DIGEN3 = 1;
   
 #ifndef USING_SIMULATOR
-  while(!ADCANCONbits.WKRDY2); // Wait until ADC is ready
-  while(!ADCANCONbits.WKRDY3); // 
+  while(!ADCANCONbits.WKRDY3); // Wait until ADC is ready
   while(!ADCANCONbits.WKRDY7); // 
 #endif
   
@@ -1291,69 +1590,35 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
 BYTE readADC(BYTE n) { // http://ww1.microchip.com/downloads/en/DeviceDoc/70005213f.pdf
   WORD retval;
   
-  ANSELBbits.ANSB2 = 0;
-  ANSELBbits.ANSB3 = 0;
-  ANSELEbits.ANSE6 = 0;
-  ANSELEbits.ANSE7 = 0;
-  switch(n) {
-    case 2:     //AD2
-      ANSELBbits.ANSB3 = 1;
-      break;
-    case 3:     //AD3
-      ANSELBbits.ANSB3 = 1;
-      break;
-    case 15:     //RE7
-      ANSELEbits.ANSE7 = 1;
-      break;
-    case 16:     //RE6
-      ANSELEbits.ANSE6 = 1;
-      break;
-    default:
-      break;
-    }
 
-	__delay_us(30);
+	__delay_us(10);
   
   ADCCON3bits.GSWTRG = 1; // Start software trigger
 
   switch(n) {
-    case 2:
-      ANSELBbits.ANSB2 = 1;
-      while(!ADCDSTAT1bits.ARDY2)    // Wait for the conversion to complete
-        ClrWdt();
-      ADCDATA3;
-      ADCDATA15;
-      ADCDATA16;
-      retval=ADCDATA0;
-      break;
-    case 3:
-      ANSELBbits.ANSB3 = 1;
+    case 1:
       while(!ADCDSTAT1bits.ARDY3)    // Wait for the conversion to complete
         ClrWdt();
-      ADCDATA2;
-      ADCDATA15;
       ADCDATA16;
       retval=ADCDATA3;
+      break;
+    case 0:
+      while(!ADCDSTAT1bits.ARDY16)    // Wait for the conversion to complete
+        ClrWdt();
+      ADCDATA3;
+      retval=ADCDATA16;
     // PARE che quando mandi il trigger, lui converte TUTTI i canali abilitati,
     // per cui se non pulisco "l'altro" mi becco un RDY e una lettura precedente...
     // forse COSI' funzionerebbe, PROVARE      while(ADCCON2bits.EOSRDY == 0) // Wait until the measurement run
-      break;
-    case 15:
-      break;
-    case 16:
       break;
     default:
       break;
     }
   
-  ANSELBbits.ANSB2 = 0;
-  ANSELBbits.ANSB3 = 0;
-  ANSELEbits.ANSE6 = 0;
-  ANSELEbits.ANSE7 = 0;
-  
+ 
 //    IFS0bits.AD1IF=0;
     
-  return retval >> 0;   // 12 -> 10 bit
+  return retval >> 2;   // 12->10 bit
   }
 
 void UART_Init(uint32_t baudRate) {
@@ -1674,46 +1939,67 @@ int emulateKBD(BYTE ch) {
   if(!ch) {
 		i=xlat_key(ch);
 		if(i) {
-			if(KBCommand & 0b01000000) {//  XT opp AT translation, 1=XT
+#ifndef PCAT
+			Keyboard[0]=i | 0x80;
+  
+			if(!(KBCommand & 0b10000000) && (KBCommand & 0b01000000)) {     //..e se enabled e non reset...
+				KBStatus |= 0b00000001;			// output available
+			//    KBDIRQ=1;
+				i8259IRR |= 0b00000010;
+				}
+			}
+#else
+			if(KBCommand & 0b01000000) {//  XT opp AT translation, 1=XT  MA NON è CHIARO, forse non su XT ma solo su AT con 8042!
 				Keyboard[0]=i | 0x80;
 				}
 			else {
 				Keyboard[0] = 0xe0;
 				Keyboard[1] = i;
 				}
-
 			KBStatus |= 0b00000001;			// output available
 			KBStatus &= ~0b00001000;		// data
   
 	//#ifndef _DEBUG
 			if(!(KBStatus & 0b00010000)) {   // se attiva...
-				if(KBCommand & 0b00000001) {     //..e se interrupt attivi...
+				if((KBCommand & 0b00000001)) {     //..e se interrupt attivi...
 			//    KBDIRQ=1;
-					i8259IRR |= 2;
+					i8259IRR |= 0b00000010;
 					}
 				}
 			}
+//#endif
+#endif
     }
   else {
 		i=xlat_key(ch);
 		if(i) {
-			if(KBCommand & 0b01000000) {//  XT opp AT translation, 1=XT
+#ifndef PCAT
+			Keyboard[0]=i;
+  
+			if(!(KBCommand & 0b10000000) && (KBCommand & 0b01000000)) {     //..e se enabled e non reset...
+				KBStatus |= 0b00000001;			// output available
+			//    KBDIRQ=1;
+				i8259IRR |= 0b00000010;
+				}
+#else
+			if(KBCommand & 0b01000000) {//  XT opp AT translation, 1=XT  MA NON è CHIARO, forse non su XT ma solo su AT con 8042!
 				Keyboard[0]=i;
 				}
 			else {
 				Keyboard[0]=i;
 				}
-
 			KBStatus |= 0b00000001;			// output available
 			KBStatus &= ~0b00001000;		// data
   
 	//#ifndef _DEBUG
 			if(!(KBStatus & 0b00010000)) {   // se attiva...
-				if(KBCommand & 0b00000001) {     //..e se interrupt attivi...
+				if((KBCommand & 0b00000001)) {     //..e se interrupt attivi...
 			//    KBDIRQ=1;
-					i8259IRR |= 2;
+					i8259IRR |= 0b00000010;
 					}
 				}
+#endif
+
 			}
     }
 
@@ -1949,16 +2235,16 @@ fine:
 #define SAMPLE_NOISE 6
 BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/) { // v. breakthrough
   uint16_t x,y,z;
-  static uint16_t oldx,oldy;
+  static uint16_t oldx=HORIZ_SIZE/2,oldy=VERT_SIZE/2;
   int samples[NUMSAMPLES];
   uint8_t i, valid;
 
   valid = 1;
 
-  ANSELBbits.ANSB2 = 1;
+//  ANSELBbits.ANSB2 = 1;
   ANSELBbits.ANSB3 = 1;
-//  ANSELEbits.ANSE6 = 1;
-//  ANSELEbits.ANSF7 = 1;
+  ANSELEbits.ANSE6 = 1;
+//  ANSELEbits.ANSE7 = 1;
   
   TRISBbits.TRISB3=1;    //(_yp, INPUT);
   TRISEbits.TRISE7=1;    //(_ym, INPUT);
@@ -2035,6 +2321,7 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
 
   x = (1023-samples[NUMSAMPLES/2]);
 
+  __delay_us(30); // Fast ARM chips need to allow voltages to settle
   int z1 = readADC(0 /*_xm*/); 
   int z2 = readADC(1 /*_yp*/);
 
@@ -2063,15 +2350,15 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
   TRISBbits.TRISB3=0;
   TRISEbits.TRISE6=0;
   TRISEbits.TRISE7=0;
-  ANSELBbits.ANSB2 = 0;
+//  ANSELBbits.ANSB2 = 0;
   ANSELBbits.ANSB3 = 0;
-//  ANSELEbits.ANSE6 = 0;
-//  ANSELEbits.ANSF7 = 0;
+  ANSELEbits.ANSE6 = 0;
+//  ANSELEbits.ANSE7 = 0;
 
 
   if(valid) {
-    mouseX=x;
-    mouseY=y;
+    mouseX=x-oldx;
+    mouseY=y-oldy;
     
     if(z > 200) {
       }
@@ -2099,7 +2386,8 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
 
       }
 		mouseState &= ~0b10000000;  // marker per COM
-    
+
+    oldx=mouseX; oldy=mouseY; 
     }
 
   return valid;

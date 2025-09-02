@@ -317,6 +317,9 @@ int Emulate(int mode) {
           VICRaster=MIN_RASTER; 
           screenDivider++;
           }
+#ifdef MOUSE_TYPE 
+      manageTouchScreen();
+#endif
         }
       else {
         VICRaster+=32;					 	 // più veloce qua, 7 passate
@@ -339,9 +342,6 @@ int Emulate(int mode) {
         CPUPins=DoReset;
         }
     
-#ifdef MOUSE_TYPE 
-      manageTouchScreen();
-#endif
       }
 
 //questa parte equivale a INTA sequenza ecc  http://www.icet.ac.in/Uploads/Downloads/3_mod3.pdf
@@ -443,8 +443,9 @@ int Emulate(int mode) {
 			}
 
 rallenta:
-		if(++timerDivider >= 2          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
+		if(++timerDivider >= 4          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
       // OCCHIO con 3 non va più floppy dopo aver ritarato i timer!! 26/8/25
+      // con 4 va, con mouse pure (chemmerda) con 3 o meno no...
       // Ma in effetti se consideriamo che ogni istruzione impiega da 3-4 a 100 cicli, diciamo max 20 http://aturing.umcs.maine.edu/~meadow/courses/cos335/80x86-Integer-Instruction-Set-Clocks.pdf
       // e passiamo di qua dopo ognuna, allora il divisore quasi non ha senso... anzi andrebbe invertito!
 			timerDivider=0;

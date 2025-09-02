@@ -39,14 +39,15 @@ uint16_t VICRaster=0;
 #define CGA_SIZE (32768 /*720*350/8*/)				// video
 #endif
 #ifdef VGA
-#define CGA_BASE 0xb8000L		// dice b0000 o b8000 se 32KB, a0000 se 64 o 128
-#define CGA_SIZE 32768 //65536L				// video; https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/vgamem.htm
+#define VGA_BASE 0xA0000L		// 4 blocchi da 64K
+#define VGA_SIZE (65536L*4)
 		// v. VGAgraphReg[6] & 0x0c per dimensione e posizione finestra grafica...
 #endif
-#if defined(CGA) || defined(MDA) || defined(VGA)
+#if defined(CGA) || defined(MDA) 
 uint8_t CGAram[CGA_SIZE /* 640*200/8 320*200/2 */];		// anche MDA :) e VGA
 #endif
 #ifdef VGA
+uint8_t VGAram[VGA_SIZE];
 #define VGA_BIOS_BASE 0xC0000L					// https://flint.cs.yale.edu/feng/cos/resources/BIOS/mem.htm
 uint8_t VGABios[32768];
 //uint8_t VGAram[640*480*(24/8)];
@@ -138,8 +139,8 @@ const unsigned char *msdosDisk;
 uint32_t getDiscSector(uint8_t);
 uint8_t *encodeDiscSector(uint8_t);
 void setFloppyIRQ(uint16_t);
-#define DEFAULT_FLOPPY_DELAYED_IRQ 1
-#define SEEK_FLOPPY_DELAYED_IRQ 10
+#define DEFAULT_FLOPPY_DELAYED_IRQ 3
+#define SEEK_FLOPPY_DELAYED_IRQ 30
 
 extern const unsigned char MSDOS_HDISK[]; //:)  se lo lascio qua lo mette in ram sto frocio, PERCHE'???
 const unsigned char *msdosHDisk;
@@ -195,17 +196,111 @@ uint8_t GetValue(uint16_t seg,uint16_t ofs) {
 		i=HDbios[t-ROM_HD_BASE];
 		}
 #endif
-#ifdef CGA_BASE
-	else if(t >= CGA_BASE && t < CGA_BASE+CGA_SIZE) {
-#ifdef VGA
-		// usare VGAgraphReg[6] & 0x0c per finestra grafica...
-#endif
-		i=CGAram[t-CGA_BASE];
-    }
-#endif
 #ifdef VGA
 	else if(t >= VGA_BIOS_BASE && t < VGA_BIOS_BASE+32768) {
 		i=VGABios[t-VGA_BIOS_BASE];
+    }
+#endif
+#ifdef VGA_BASE
+	else if(t >= VGA_BASE && t < VGA_BASE+0x20000L /*VGA_SIZE*/) {
+		DWORD vgaBase,vgaSegm,vgaPlane;
+		switch(VGAgraphReg[6] & 0x0c) {
+			case 0x00:
+				vgaBase=0xA0000L-VGA_BASE;
+				vgaSegm=0x20000L;
+				vgaPlane=0x10000;
+				break;
+			case 0x04:
+				vgaBase=0xA0000L-VGA_BASE;
+				vgaSegm=0x10000L;
+				vgaPlane=0x10000;
+				break;
+			case 0x08:
+				vgaBase=0xB0000L-VGA_BASE;
+				vgaSegm=0x8000L;
+				vgaPlane=0x2000;
+				break;
+			case 0x0c:
+				vgaBase=0xB8000L-VGA_BASE;
+				vgaSegm=0x8000L;
+				vgaPlane=0x2000;
+				break;
+			}
+		t &= (vgaPlane-1); 
+		if(VGAgraphReg[4] & 0x08) {		// chain 4 mode
+			goto vga_chain4;
+//	??	Read mode 0 ignores the value in the Read Map Select Register when the VGA is in display mode 13 hex. In this mode, all four planes are chained together and a pixel is represented by one byte.
+			}
+		if(!(VGAseqReg[4] & 4)) {			//odd/even
+			BOOL oldT=t & 1;
+			t/=2;
+			t &= (vgaPlane-1);
+			t+=vgaBase;
+			if(!oldT) {
+				VGAlatch.bd[0]=VGAram[t];
+				VGAlatch.bd[2]=VGAram[t];
+				VGAlatch.bd[1]=VGAram[t+vgaPlane*2];
+				VGAlatch.bd[3]=VGAram[t+vgaPlane*2];
+				}
+			else {
+				VGAlatch.bd[0]=VGAram[t+vgaPlane];
+				VGAlatch.bd[2]=VGAram[t+vgaPlane];
+				VGAlatch.bd[1]=VGAram[t+vgaPlane*3];
+				VGAlatch.bd[3]=VGAram[t+vgaPlane*3];
+				}
+			}
+		else {
+vga_chain4:
+			t &= (vgaSegm-1); 
+			t+=vgaBase;
+			// forse qua c'entrano gli enable? ma cmq sarebbero superflui
+			VGAlatch.bd[0]=VGAram[t];
+			VGAlatch.bd[1]=VGAram[t+vgaPlane*1];
+			VGAlatch.bd[2]=VGAram[t+vgaPlane*2];
+			VGAlatch.bd[3]=VGAram[t+vgaPlane*3];
+			}
+		if(!(VGAgraphReg[5] & 0x08)) {
+			switch(VGAgraphReg[4] & 0x03) {		// read mode
+				case 0x00:
+					i=VGAlatch.bd[0];
+					break;
+				case 0x01:
+					i=VGAlatch.bd[1];
+					break;
+				case 0x02:
+					i=VGAlatch.bd[2];
+					break;
+				case 0x03:
+					i=VGAlatch.bd[3];
+					break;
+				}
+			}
+		else {		// comparison...
+			BYTE j,k,k1;
+			i=0xff;
+			for(j=1; j; j<<=1) {
+				for(k=1,k1=0; k & 0xf; k<<=1,k1++) {
+					if(!(VGAgraphReg[7] & k)) {			// color don't care map
+						if(!!(VGAlatch.bd[k1] & j) != !!(VGAgraphReg[2] & k)) {			// color compare map
+							i &= ~j;
+							}
+						}
+					}
+				}
+			}
+			/*{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: %04x  readRAMV %08X : %02X  memCfg=%u,rMemMd=%X, rdMd=%u,gMode=%02X, planes=%X\n",timeGetTime(),
+				_ip,t,i,(VGAgraphReg[6] & 0x0c) >> 2,VGAseqReg[4] & 0xf,
+				VGAgraphReg[4] & 3,VGAgraphReg[5],
+				VGAseqReg[2] & 0xf);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}*/
+    }
+#endif
+#ifdef CGA_BASE
+	else if(t >= CGA_BASE && t < CGA_BASE+CGA_SIZE) {
+		i=CGAram[t-CGA_BASE];
     }
 #endif
 #ifdef RAM_DOS
@@ -1117,7 +1212,7 @@ endHDcommand:
       break;
 #endif
 
-#ifdef VGA
+#ifdef VGA				// http://www.osdever.net/FreeVGA/vga/portidx.htm
     case 0x3b:
       t &= 0xf;
       switch(t) {
@@ -1134,9 +1229,13 @@ endHDcommand:
 					break;
         case 1:			// read register actl
           i=VGAactlReg[VGAptr & 0x1f];		// 
+					//VGAPalette[];
           break;
+				case 0x2:
+//          i=VGAstatus0 ;VGAreg[2];		// read input status...
+					break;
         case 0x4+1:
-          i=VGAreg[t];		// 
+          i=VGAseqReg[VGAreg[0x4] & 0x7];		// 
           break;
         case 0x6:
           i=VGAreg[t];		// DAC register
@@ -2275,11 +2374,14 @@ uint16_t GetShortValue(uint16_t seg,uint16_t ofs) {
 		i.b.h=HDbios[t1];
 		}
 #endif
+#ifdef VGA_BASE
+	else if(t >= VGA_BASE && t < VGA_BASE+0x20000L /*VGA_SIZE*/) {
+		i.b.h=GetValue(seg,ofs+1);		// inoltre i doc dicono che in genere si dovrebbe accedere solo a byte...
+		i.b.l=GetValue(seg,ofs);	// faccio così, date tutte le complicazioni; 
+		}
+#endif
 #ifdef CGA_BASE
 	else if(t >= CGA_BASE && t < (CGA_BASE+CGA_SIZE)) {
-#ifdef VGA
-		// usare VGAgraphReg[6] & 0x0c per finestra grafica...
-#endif
 		t-=CGA_BASE;
 		t1-=CGA_BASE;
 		i.b.l=CGAram[t];
@@ -2317,8 +2419,8 @@ uint16_t GetShortValue(uint16_t seg,uint16_t ofs) {
 
 #ifdef EXT_80386
 uint32_t GetIntValue(uint16_t seg,uint32_t ofs) {
-	register uint32_t i;
-	uint32_t t,t1;
+	register DWORD_BYTES i;
+	DWORD t,t1;
 
 #if !defined(EXT_80186) && !defined(EXT_NECV20)
 	t=MAKE20BITS(seg,ofs);
@@ -2330,40 +2432,65 @@ uint32_t GetIntValue(uint16_t seg,uint32_t ofs) {
 
 	if(t >= (ROM_END-ROM_SIZE)) {
 		t-=ROM_END-ROM_SIZE;
-		i=MAKELONG(MAKEWORD(bios_rom[t],bios_rom[t+1]),MAKEWORD(bios_rom[t+2],bios_rom[t+3]));
+		i.b.l=bios_rom[t];
+		i.b.h=bios_rom[t+1];
+		i.b.u=bios_rom[t+2];
+		i.b.u2=bios_rom[t+3];
 		}
 #ifdef ROM_SIZE2
 	else if(t >= ROM_START2 && t<(ROM_START2+ROM_SIZE2)) {
 		t-=ROM_START2;
-		i=MAKELONG(MAKEWORD(bios_rom_opt[t],bios_rom_opt[t+1]),MAKEWORD(bios_rom_opt[t+2],bios_rom_opt[t+3]));
+		i.b.l=bios_rom_opt[t];
+		i.b.h=bios_rom_opt[t+1];
+		i.b.u=bios_rom_opt[t+2];
+		i.b.u2=bios_rom_opt[t+3];
 		}
 #endif
 #ifdef ROM_HD_BASE
 	else if(t >= ROM_HD_BASE && t<ROM_HD_BASE+32768) {
 		t-=ROM_HD_BASE;
-		i=MAKELONG(MAKEWORD(HDbios[t],HDbios[t+1]),MAKEWORD(HDbios[t+2],HDbios[t+3]));
+		i.b.l=HDbios[t];
+		i.b.h=HDbios[t+1];
+		i.b.u=HDbios[t+2];
+		i.b.u2=HDbios[t+3];
+		}
+#endif
+#ifdef VGA_BASE
+	else if(t >= VGA_BASE && t < VGA_BASE+0x20000L /*VGA_SIZE*/) {
+		i=MAKELONG(MAKEWORD(CGAram[t],CGAram[t+1]),MAKEWORD(CGAram[t+2],CGAram[t+3]));
+		i.b.u2=GetValue(seg,ofs+3);
+		i.b.u=GetValue(seg,ofs+2);
+		i.b.h=GetValue(seg,ofs+1);		// inoltre i doc dicono che in genere si dovrebbe accedere solo a byte...
+		i.b.l=GetValue(seg,ofs);	// faccio così, date tutte le complicazioni; 
 		}
 #endif
 #ifdef CGA_BASE
 	else if(t >= CGA_BASE && t < CGA_BASE+CGA_SIZE) {
-#ifdef VGA
-		// usare VGAgraphReg[6] & 0x0c per finestra grafica...
-#endif
 		t-=CGA_BASE;
-		i=MAKELONG(MAKEWORD(CGAram[t],CGAram[t+1]),MAKEWORD(CGAram[t+2],CGAram[t+3]));
+		i.b.l=CGAram[t];
+		i.b.h=CGAram[t+1];
+		i.b.u=CGAram[t+2];
+		i.b.u2=CGAram[t+3];
     }
 #endif
 #ifdef VGA
 	else if(t >= VGA_BIOS_BASE && t < VGA_BIOS_BASE+32768) {
 		t-=VGA_BIOS_BASE;
-		i=MAKELONG(MAKEWORD(VGABios[t],VGABios[t+1]),MAKEWORD(VGABios[t+2],VGABios[t+3]));
+		i.b.l=VGABios[t];
+		i.b.h=VGABios[t+1];
+		i.b.u=VGABios[t+2];
+		i.b.u2=VGABios[t+3];
     }
 #endif
 	else if(t < RAM_SIZE) {
-		i=MAKELONG(MAKEWORD(ram_seg[t],ram_seg[t+1]),MAKEWORD(ram_seg[t+2],ram_seg[t+3]));
+		i.b.l=ram_seg[t];
+		i.b.h=ram_seg[t+1];
+		i.b.u=ram_seg[t+2];
+		i.b.u2=ram_seg[t+3];
 		}
 	else
 		i=UNIMPLEMENTED_MEMORY_VALUE;
+  
 	return i;
 	}
 #endif
@@ -2535,11 +2662,163 @@ void PutValue(uint16_t seg,uint16_t ofs,uint8_t t1) {
 		disk_ram[t-0x7c000]=t1;
 		} else 
 #endif
+#ifdef VGA_BASE
+	if(t >= VGA_BASE && t < VGA_BASE+0x20000L /*VGA_SIZE*/) {
+		BYTE v1,v2;
+		BYTE t2,t3,t4;
+		DWORD vgaBase,vgaSegm,vgaPlane;
+
+/*{		char myBuf[256];
+			wsprintf(myBuf,"%u: %04x  writeRAMV %08X : %02X  memCfg=%u,rMemMd=%X, wFSel=%u,rot=%u,wMode=%02X,sR=%X,%X planes=%X\n",timeGetTime(),
+				_ip,t,t1,(VGAgraphReg[6] & 0x0c) >> 2,VGAseqReg[4] & 0xf,
+				(VGAgraphReg[3] & 0x18) >> 3,VGAgraphReg[3] & 0x7,VGAgraphReg[5],VGAgraphReg[0],VGAgraphReg[1],
+
+				VGAseqReg[2] & 0xf);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}*/
+		switch(VGAgraphReg[6] & 0x0c) {
+			case 0x00:
+				vgaBase=0xA0000L-VGA_BASE;
+				vgaSegm=0x20000L;
+				vgaPlane=0x10000;
+				break;
+			case 0x04:
+				vgaBase=0xA0000L-VGA_BASE;
+				vgaSegm=0x10000L;
+				vgaPlane=0x10000;
+				break;
+			case 0x08:
+				vgaBase=0xB0000L-VGA_BASE;
+				vgaSegm=0x8000L;
+				vgaPlane=0x2000;
+				break;
+			case 0x0c:
+				vgaBase=0xB8000L-VGA_BASE;
+				vgaSegm=0x8000L;
+				vgaPlane=0x2000;
+				break;
+			}
+		switch(VGAgraphReg[5] & 0x03) {			// write mode
+			case 0x00:
+				t1 = (t1 >> (VGAgraphReg[3] & 0x7)) | (t1 << (8-(VGAgraphReg[3] & 0x7)));		// rotate viene prima di tutto, dice https://wiki.osdev.org/VGA_Hardware#The_Latches
+				if(VGAgraphReg[1] & 8)
+					t4=VGAgraphReg[0] & 8 ? 255 : 0;
+				else
+					t4=t1;
+				if(VGAgraphReg[1] & 4)
+					t3=VGAgraphReg[0] & 4 ? 255 : 0;
+				else
+					t3=t1;
+				if(VGAgraphReg[1] & 2)
+					t2=VGAgraphReg[0] & 2 ? 255 : 0;
+				else
+					t2=t1;
+				if(VGAgraphReg[1] & 1)
+					t1=VGAgraphReg[0] & 1 ? 255 : 0;
+				else
+					t1=t1;
+				break;
+			case 0x01:
+				t1=VGAlatch.bd[0];
+				t2=VGAlatch.bd[1];
+				t3=VGAlatch.bd[2];
+				t4=VGAlatch.bd[3];
+				break;
+			case 0x02:
+				t4=t1 & 8 ? 255 : 0;
+				t3=t1 & 4 ? 255 : 0;
+				t2=t1 & 2 ? 255 : 0;
+				t1=t1 & 1 ? 255 : 0;
+				break;
+			case 0x03:
+				t4=VGAgraphReg[0] & 8 ? 255 : 0;
+				t3=VGAgraphReg[0] & 4 ? 255 : 0;
+				t2=VGAgraphReg[0] & 2 ? 255 : 0;
+				t1=VGAgraphReg[0] & 1 ? 255 : 0;
+				break;
+			}
+		switch(VGAgraphReg[5] & 0x03) {			// write mode
+			case 0x00:
+			case 0x02:
+				switch(VGAgraphReg[3] & 0x18) {			// function select
+					case 0x00:
+						break;
+					case 0x08:
+						t4 &= VGAlatch.bd[3];
+						t3 &= VGAlatch.bd[2];
+						t2 &= VGAlatch.bd[1];
+						t1 &= VGAlatch.bd[0];
+						break;
+					case 0x10:
+						t4 |= VGAlatch.bd[3];
+						t3 |= VGAlatch.bd[2];
+						t2 |= VGAlatch.bd[1];
+						t1 |= VGAlatch.bd[0];
+						break;
+					case 0x18:
+						t4 ^= VGAlatch.bd[3];
+						t3 ^= VGAlatch.bd[2];
+						t2 ^= VGAlatch.bd[1];
+						t1 ^= VGAlatch.bd[3];
+						break;
+					}
+				break;
+			}
+		if(VGAgraphReg[5] & 0x10) {		// odd/even (p.406), dice SEMPRE opposto di VGAseqReg[4] b2
+			}
+		if(!(VGAseqReg[4] & 4)) {		// Note that the value of this bit should be the complement of the value in the OE field of the Mode Register.
+			BOOL oldT=t & 1;
+			t &= (vgaPlane-1);
+			t/=2;
+//			if((VGAgraphReg[5] & 0x20)) {		// patch per mode 4/5 (CGA shift register
+//				t+=oldT;
+//				}
+			t+=vgaBase;
+			if(!oldT) {
+				v1 = t1 & VGAgraphReg[8];		// salvo i bit a 1 del risultato...
+				v2 = VGAram[t] & ~VGAgraphReg[8];	// ...e i bit a 0 originali...
+				VGAram[t]=v1 | v2;			// ...e unisco
+				v1 = t3 & VGAgraphReg[8];
+				v2 = VGAram[t+vgaPlane*2] & ~VGAgraphReg[8];
+				VGAram[t+vgaPlane*2]=v1 | v2;
+				}
+			else {
+				v1 = t2 & VGAgraphReg[8];
+				v2 = VGAram[t+vgaPlane] & ~VGAgraphReg[8];
+				VGAram[t+vgaPlane]=v1 | v2;
+				v1 = t4 & VGAgraphReg[8];
+				v2 = VGAram[t+vgaPlane*3] & ~VGAgraphReg[8];
+				VGAram[t+vgaPlane*3]=v1 | v2;
+				}
+			}
+		else {
+			t &= (vgaSegm-1);
+			t+=vgaBase;
+			if(VGAseqReg[2] & 1) {
+				v1 = t1 & VGAgraphReg[8];		// salvo i bit a 1 del risultato...
+				v2 = VGAram[t] & ~VGAgraphReg[8];	// ...e i bit a 0 originali...
+				VGAram[t]=v1 | v2;			// ...e unisco
+				}
+			if(VGAseqReg[2] & 2) {
+				v1 = t2 & VGAgraphReg[8];
+				v2 = VGAram[t+vgaPlane] & ~VGAgraphReg[8];
+				VGAram[t+vgaPlane]=v1 | v2;
+				}
+			if(VGAseqReg[2] & 4) {
+				v1 = t3 & VGAgraphReg[8];
+				v2 = VGAram[t+vgaPlane*2] & ~VGAgraphReg[8];
+				VGAram[t+vgaPlane*2]=v1 | v2;
+				}
+			if(VGAseqReg[2] & 8) {
+				v1 = t4 & VGAgraphReg[8];
+				v2 = VGAram[t+vgaPlane*3] & ~VGAgraphReg[8];
+				VGAram[t+vgaPlane*3]=v1 | v2;
+				}
+			}
+		}
+#endif
 #ifdef CGA_BASE
 	if(t>=CGA_BASE && t < (CGA_BASE+CGA_SIZE)) {
-#ifdef VGA
-		// usare VGAgraphReg[6] & 0x0c per finestra grafica...
-#endif
 		CGAram[t-CGA_BASE]=t1;
     LCDdirty=TRUE;
     }
@@ -2569,11 +2848,14 @@ void PutShortValue(uint16_t seg,uint16_t ofs,uint16_t t2) {
 		disk_ram[t-0x7c000]=t2;
 		} else 
 #endif
+#ifdef VGA_BASE
+	if(t >= VGA_BASE && t < VGA_BASE+0x20000L /*VGA_SIZE*/) {
+		PutValue(seg,ofs,LOBYTE(t2));		// faccio così, date tutte le complicazioni; 
+		PutValue(seg,ofs+1,HIBYTE(t2));		// inoltre i doc dicono che in genere si dovrebbe accedere solo a byte...
+		}
+#endif
 #ifdef CGA_BASE
 	if(t>=CGA_BASE && t<(CGA_BASE+CGA_SIZE)) {
-#ifdef VGA
-		// usare VGAgraphReg[6] & 0x0c per finestra grafica...
-#endif
 		t-=CGA_BASE;
 		t1-=CGA_BASE;
 		CGAram[t]=LOBYTE(t2);
@@ -2604,13 +2886,17 @@ void PutIntValue(uint16_t seg,uint32_t ofs,uint32_t t1) {
 	t1=t+1;
 #endif
 
-// printf("rom_seg: %04x, p: %04x\n",rom_seg,p);
-
+#ifdef VGA_BASE
+	if(t >= CGA_BASE && t < CGA_BASE+CGA_SIZE) {
+		PutValue(seg,ofs,LOBYTE(LOWORD(t2)));		// faccio così, date tutte le complicazioni; 
+		PutValue(seg,ofs+1,HIBYTE(LOWORD(t2)));		// inoltre i doc dicono che in genere si dovrebbe accedere solo a byte...
+		PutValue(seg,ofs+2,LOBYTE(HIWORD(t2)));		// faccio così, date tutte le complicazioni; 
+		PutValue(seg,ofs+3,HIBYTE(HIWORD(t2)));		// inoltre i doc dicono che in genere si dovrebbe accedere solo a byte...
+    }
+	else 
+#endif
 #ifdef CGA_BASE
 	if(t>=CGA_BASE && t<(CGA_BASE+CGA_SIZE)) {
-#ifdef VGA
-		// usare VGAgraphReg[6] & 0x0c per finestra grafica...
-#endif
 		t-=CGA_BASE;
 		CGAram[t++]=LOBYTE(LOWORD(t1));
 		CGAram[t++]=HIBYTE(LOWORD(t1));

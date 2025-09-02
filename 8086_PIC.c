@@ -99,7 +99,7 @@
 
 
 const char CopyrightString[]= {'P','C','/','X','T',' ','E','m','u','l','a','t','o','r',' ','v',
-	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '2','7','/','0','8','/','2','5', 0 };
+	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '0','2','/','0','9','/','2','5', 0 };
 
 const char Copyr1[]="(C) Dario's Automation 2019-2025 - G.Dar\xd\xa\x0";
 
@@ -109,7 +109,7 @@ extern BOOL fExit,debug;
 extern BYTE CPUPins;
 extern BYTE ColdReset;
 extern BYTE ram_seg[];
-extern BYTE CGAram[];
+extern BYTE CGAram[],VGAram[];
 extern BYTE CGAreg[16];
 extern BYTE i8237RegR[16],i8237RegW[16],i8237Reg2R[16],i8237Reg2W[16];
 extern BYTE i8259RegR[2],i8259RegW[2],i8259Reg2R[2],i8259Reg2W[2];
@@ -810,248 +810,478 @@ plot_cursor:
     }
 #endif
   
-#ifdef VGA  
-  if(rowIni==0)
-    CGAreg[0xa] &= ~0b1000; // CGA not in retrace V
-  else if(rowFin>=VERT_SIZE-8)
-    CGAreg[0xa] |= 0b1000; // CGA in retrace V
-  
-	i=VGAcrtcReg[8];
+#ifdef VGA
+	uint8_t *pVGARam;
+	uint8_t mask;
+	uint32_t offset;
 
-	vmode = VGAcrtcReg[0x5];
-//	vmode = CGAreg[8] /* 8 | 1*/;		// http://www.antonis.de/qbebooks/gwbasman/screens.html per test modi screen gwbasic
-	vmode=8;
+  rowFin=min(rowFin,VERT_SIZE);
+  if(rowIni==0) {
+    CGAreg[0xa] &= ~B8(00001000); // CGA not in retrace V
+//		VGAstatus0 |= B8(10000000);			
+//		VGAstatus1 &= ~B8(00001000);
+		}
+  else if(rowFin>=VERT_SIZE-8) {
+    CGAreg[0xa] |= B8(00001000); // CGA in retrace V
+//		VGAstatus0 &= ~B8(10000000);			
+//		VGAstatus1 |= B8(00001000);
+		}
   
-  if(vmode & 8) {     // enable video
-    if(VGAgraphReg[6] & 1 /*vmode & 2*/) {     // graphic mode
-      if(!(CGAreg[8] & 16)) {     // lores graph (320x200x4)
-        if(CGAreg[9] & 16)      // bright foreground
-          ;
-        START_WRITE();
-        if(rowIni==0) {
-		      color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
-          setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
-          for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-            for(px=0; px<160; px++) {         // 320 pixel
-              writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
-              }
-            }
-          }
-        setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
-        p1=CGAram + (rowIni*80);
-        // OCCHIO CHE PRIMA CI SON TUTTE LE RIGHE PARI E POI LE DISPARI!
-        if(CGAreg[8] & 4)      // disable color ovvero palette #3
+
+//	i=VGAcrtcReg[8];
+//	VGAseqReg[0] b0 e b1 sono reset sequencer
+
+//	vmode = VGAcrtcReg[0x5];			// https://www.artikel33.com/informatik/1/vgaregister.php
+//	vmode = CGAreg[8] /* 8 | 1*/;		// http://www.antonis.de/qbebooks/gwbasman/screens.html per test modi screen gwbasic
+
+//	VGAcrtcReg[0x17] CRTC Mode passa da a3h text a e3h graph
+	// gli altri fanno un po' come cazzo ci pare
+//  VGAgraphReg[5] GDC Mode passa da 10h a 68h (256 color mode, B6 si alza; con Mode 13h diventa 40h
+//  VGAgraphReg[4] Read plane select passa da 00h a 68h
+//  VGAgraphReg[6]   passa da 0Eh a 05h (graph mode B1 si alza, memory mode è 01 ossia 64KB partendo da A0000
+//	VGAseqReg[1] Dot 8/9 passa da 0 a 1 
+//	VGAseqReg[2] Map 0 Enable passa da 03 a 0f (da 2 map a 4, pare
+//	VGAseqReg[4]   passa da 03 a 06
+
+
+	test_dump_vga_reg();
+
+
+  if(!(VGAseqReg[1] & 0x20)) {     // enable video
+    if(VGAgraphReg[6] & 1) {     // graphic mode
+			switch(VGAgraphReg[6] & 0x0c) {
+				case 0x00:
+				case 0x04:
+					pVGARam=&VGAram[0];
+					offset=0x10000;
+					break;
+				case 0x08:
+					pVGARam=&VGAram[0]+0x10000L;
+					offset=0x2000;
+					break;
+				case 0x0c:
+					pVGARam=&VGAram[0]+0x18000L;
+					offset=0x2000;
+					break;
+				}
+//    anche  if(VGAactlReg[0x10] & 1) {     // graphic mode
+			if(VGAgraphReg[5] & 0x40 /* usare altro ma per ora è unico a 256color!*/) {			// modo 13h, 320*200*256 su 256K
+//    anche  if(VGAactlReg[0x10] & 0x40) {     // graphic mode
+				pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((640)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
+	//          setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-0,(rowFin-rowIni));
+				for(py=rowIni; py<rowFin; py++) {    // modo 13h
+					for(i=0; i<2; i++) {
+						p1=(BYTE*)pVGARam + (((py ))*320) ;		// 
+						for(px=0; px<320; px++) {         // 320 pixel (320byte) 
+							ch=*p1++;
+							*pVideoRAM=(ch << 4);
+	//						ch=*p1++;
+							*pVideoRAM++ |= (ch & 0xf);
+							}
+						}
+					}
+				}
+			else {			// 
+//				if(!(VGAreg[2] & 0x80)) {		// questo  è 1 per i modi 2 colori e 0 a 16, ma non lo trovo nel doc... forse sbaglio qualcosa
+						// e3 mode 12h, 6ah
+						// a3 mode 10h
+						// 63 mode 0dh e 06h
+						// ma cmq non va su Mode 6, 640x200x2
+//				if(!(VGAgraphReg[6] & 0x8)) {		//questo va basso su modo 6 ma ANCHE su modo 11h... ovvio,è memory size
+//			if(VGAgraphReg[5] & 0x20 // questo va a 1 per i modi CGA, even/odd memory maps
+				switch(VGAseqReg[2] & 0xf) {		// uso questo, bit planes, anche se non mi fa impazzire come idea
+					case 15:
+						// 0Dh, 320x200x16, 
+						i=VGAcrtcReg[9] & 0x80 ? 640 : 320;
+						pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((i)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
+						switch(VGAcrtcReg[1]) {
+							case 99:		// 6Ah; horiz display end, 99 per 800/600
+								pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((320)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
+								// finire!!
+								for(py=rowIni; py<rowFin; py++) {    // 
+									p1=(BYTE*)pVGARam + (py*100) ;		// 
+									for(px=0; px<80; px++) {         // 640 pixel PER ORA taglio
+										for(mask=0x80; mask; mask>>=1) {
+											if(mask & 0x55) {
+												ch=*(p1+0);
+												*pVideoRAM |= ch & mask ? 1 : 0;
+												ch=*(p1+offset);
+												*pVideoRAM |= ch & mask ? 2 : 0;
+												ch=*(p1+offset*2);
+												*pVideoRAM |= ch & mask ? 4 : 0;
+												ch=*(p1+offset*3);
+												*pVideoRAM++ |= ch & mask ? 8 : 0;
+												}
+											else {
+												ch=*(p1+0);
+												*pVideoRAM = ch & mask ? 0x10 : 0;
+												ch=*(p1+offset);
+												*pVideoRAM |= ch & mask ? 0x20 : 0;
+												ch=*(p1+offset*2);
+												*pVideoRAM |= ch & mask ? 0x40 : 0;
+												ch=*(p1+offset*3);
+												*pVideoRAM |= ch & mask ? 0x80 : 0;
+												}
+											}
+										p1++;
+										}
+// non va									if(!(py % 5))
+//										pVideoRAM-=640;
+									}
+								break;
+							case 79:		// 11h; horiz display end, 79 o 39 per 640/320; sarebbero 480 ma ok
+								for(py=rowIni; py<rowFin; py++) {    // mode 11h
+									p1=(BYTE*)pVGARam + (py*80) ;		// 
+									for(px=0; px<80; px++) {         // 640 pixel 
+										for(mask=0x80; mask; mask>>=1) {
+											if(mask & 0x55) {
+												ch=*(p1+0);
+												*pVideoRAM |= ch & mask ? 1 : 0;
+												ch=*(p1+offset);
+												*pVideoRAM |= ch & mask ? 2 : 0;
+												ch=*(p1+offset*2);
+												*pVideoRAM |= ch & mask ? 4 : 0;
+												ch=*(p1+offset*3);
+												*pVideoRAM++ |= ch & mask ? 8 : 0;
+												}
+											else {
+												ch=*(p1+0);
+												*pVideoRAM = ch & mask ? 0x10 : 0;
+												ch=*(p1+offset);
+												*pVideoRAM |= ch & mask ? 0x20 : 0;
+												ch=*(p1+offset*2);
+												*pVideoRAM |= ch & mask ? 0x40 : 0;
+												ch=*(p1+offset*3);
+												*pVideoRAM |= ch & mask ? 0x80 : 0;
+												}
+											}
+										p1++;
+										}
+									if(VGAcrtcReg[9] & 0x80) {		// raddoppio se 200 linee (+ veloce così
+										memcpy(pVideoRAM,pVideoRAM-320,320);
+										pVideoRAM+=320;
+										}
+									}
+								break;
+							case 39:
+								for(py=rowIni; py<rowFin; py++) {    // 
+									p1=(BYTE*)pVGARam + (py*40) ;		// 
+									for(px=0; px<40; px++) {         // 640 pixel 
+										for(mask=0x80; mask; mask>>=1) {
+											ch=*(p1+0);
+											*pVideoRAM = ch & mask ? 1 : 0;
+											ch=*(p1+offset);
+											*pVideoRAM |= ch & mask ? 2 : 0;
+											ch=*(p1+offset*2);
+											*pVideoRAM |= ch & mask ? 4 : 0;
+											ch=*(p1+offset*3);
+											*pVideoRAM |= ch & mask ? 8 : 0;
+											*pVideoRAM++ |= *pVideoRAM << 4;
+											}
+										p1++;
+										}
+									if(VGAcrtcReg[9] & 0x80) {		// raddoppio se 200 linee (+ veloce così
+										memcpy(pVideoRAM,pVideoRAM-320,320);
+										pVideoRAM+=320;
+										}
+									}
+								break;
+							}
+						break;
+					case 3:			// 4 colori, mode 4,5
+/* gloriouscow dice che qua non esiste        if(CGAreg[8] & 4)      // disable color ovvero palette #3
           color=2;     // quale palette
-        else
-          color=CGAreg[9] & 32 ? 1 : 0;     // quale palette
-        if(CGAreg[9] & 16)      // high intensity foreground color...
-					;
-        for(py=rowIni; py<rowFin; py++) {    // 
-					p1=(BYTE*)&CGAram[0] + (((py ))*20) ;		// TROVARE layout memoria!
-          for(px=0; px<80; px++) {         // 320 pixel (80byte) 
-            ch=*p1++;
-            writedata16(cgaColors[color][ch >> 6]);
-            writedata16(cgaColors[color][(ch >> 4) & 3]);
-            writedata16(cgaColors[color][(ch >> 2) & 3]);
-            writedata16(cgaColors[color][(ch >> 0) & 3]);
-            }
-          ClrWdt();
-          }
-        if(rowIni>=VERT_SIZE-8) {
-          color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
-          setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
-          for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-            for(px=0; px<160; px++) {         // 320 pixel
-              writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
-              }
-            }
-          }
-        END_WRITE();
-        }
-      else {                  // hires graph (640x200x1)
-	      color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE... VERIFICARE 2024 (non c'era...
-//        (CGAreg[9] & 0xf)      // colori per overscan/background/hires color
-        if(!(CGAreg[8] & 16)) {     // modo 160x200 16 colori   
-          START_WRITE();
-          if(rowIni==0) {
-            setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
-            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-              for(px=0; px<160; px++) {         // 320 pixel
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
-                }
-              }
-            }
-          setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
-        // OCCHIO CHE PRIMA CI SON TUTTE LE RIGHE PARI E POI LE DISPARI!
-          for(py=rowIni; py<rowFin; py++) {    // 
-						p1=(BYTE*)&CGAram[0] + (((py ))*80) ;		// TROVARE layout memoria!
-            for(px=0; px<80; px++) {         // 160 pixel (80byte) 
-              ch=*p1++;
-              writedata16x2(textColors[ch >> 4],textColors[ch >> 4]);
-              writedata16x2(textColors[ch & 0xf],textColors[ch & 0xf]);    // 160 -> 320
-              }
-            ClrWdt();
-            }
-          if(rowIni>=VERT_SIZE-8) {
-            color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
-            setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
-            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-              for(px=0; px<160; px++) {         // 320 pixel
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
-                }
-              }
-            }
-          END_WRITE();
-          }
-        else {
-          if(CGAreg[9] & 4)      // disable color ovvero palette #3 QUA NON SI CAPISCE COSA DOVREBBE FARE!
-            color=15;
-          else
-            color=CGAreg[9] & 15;
-          START_WRITE();
-          if(rowIni==0) {
-            setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
-            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-              for(px=0; px<160; px++) {         // 320 pixel
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
-                }
-              }
-            }
-          setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
-          for(py=rowIni; py<rowFin; py++) {    // 
-						p1=(BYTE*)&CGAram[0] + (((py ))*(HORIZ_SIZE/8)) ;		// TROVARE layout memoria!
-            for(px=0; px<80; px++) {         // 640 pixel (80byte) diventano 320
-              ch=*p1++;
-              if(ch & 0x80)
-                writedata16(textColors[color]);
-              else
-                writedata16(textColors[0]);
-              if(ch & 0x20)
-                writedata16(textColors[color]);
-              else
-                writedata16(textColors[0]);
-              if(ch & 0x8)
-                writedata16(textColors[color]);
-              else
-                writedata16(textColors[0]);
-              if(ch & 0x2)
-                writedata16(textColors[color]);
-              else
-                writedata16(textColors[0]);
-              }
-            ClrWdt();
-            }
-          if(rowIni>=VERT_SIZE-8) {
-            color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
-            setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
-            for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-              for(px=0; px<160; px++) {         // 320 pixel
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
-                }
-              }
-            }
-          END_WRITE();
-          }
-        }
+        else*/
+						color=CGAreg[9] & B8(00100000) ? 1 : 0;
+						pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((640)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
+						switch(VGAcrtcReg[1]) {
+							case 39:		// mode 4,5 : 320x200x4
+									/*{int myFile;
+								myFile=_lcreat("vgaram.bin",0);
+								if(myFile != -1) {
+									_lwrite(myFile,VGAram,262144);
+									_lclose(myFile);
+									}
+									}*/
+									// v. CGA 4 color https://www.usebox.net/jjm/notes/cga/
+								for(py=rowIni; py<rowFin; py++) {    // 
+									p1=(BYTE*)pVGARam + ((py/2)*40) +(py & 1 ? 8192/*CGA emu*//2 : 0);// bit planes 0 and 1 in mode 6 are used to store even and odd bytes of the data, non è proprio così, verificare
+									for(px=0; px<40; px++) {         // 320 pixel 
+										BYTE c;
+
+										ch=*p1;
+										*pVideoRAM++=(cgaColors[color][ch >> 6] << 4) | cgaColors[color][((ch >> 6) & 3)];
+										*pVideoRAM++=(cgaColors[color][(ch >> 4) & 3] << 4) | cgaColors[color][((ch >> 4) & 3)];
+										*pVideoRAM++=(cgaColors[color][(ch >> 2) & 3] << 4) | cgaColors[color][((ch >> 2)) & 3];
+										*pVideoRAM++=(cgaColors[color][(ch >> 0) & 3] << 4) | cgaColors[color][(ch ) & 3];
+										ch=*(p1+offset);
+										*pVideoRAM++=(cgaColors[color][ch >> 6] << 4) | cgaColors[color][((ch >> 6) & 3)];
+										*pVideoRAM++=(cgaColors[color][(ch >> 4) & 3] << 4) | cgaColors[color][((ch >> 4) & 3)];
+										*pVideoRAM++=(cgaColors[color][(ch >> 2) & 3] << 4) | cgaColors[color][((ch >> 2)) & 3];
+										*pVideoRAM++=(cgaColors[color][(ch >> 0) & 3] << 4) | cgaColors[color][(ch ) & 3];
+										
+										p1++;
+										}
+									memcpy(pVideoRAM,pVideoRAM-320,320);
+									pVideoRAM+=320;
+									}
+																/*	{int myFile;
+								myFile=_lcreat("VideoRAM.bin",0);
+								if(myFile != -1) {
+									_lwrite(myFile,VideoRAM,320*480);
+									_lclose(myFile);
+									}
+									}*/
+								break;
+							}
+						break;
+					case 1:
+						color=0x0f;			// black / white
+	//				if(!(VGAseqReg[1] & 0x08)) {		//  questo è dot clock =1 se 320 horiz...
+						switch(VGAcrtcReg[1]) {
+							case 79:		// 11h NO! esce sopra; horiz display end, 79 o 39 per 640/320; anche 0F che sarebbe 350 linee ma ok; anche 06h
+						// usare VGAcrtcReg[9] & 0x80 per 200/400 linee (1=200
+								i=VGAcrtcReg[9] & 0x80 ? 640 : 320;
+								pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((i)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
+								// mah è ok (400 invece di 480 ma ok) 
+								for(py=rowIni; py<rowFin; py++) {    // 
+									p1=(BYTE*)pVGARam + ((py/2)*80) +(py & 1 ? offset : 0);		// bit planes 0 and 1 in mode 6 are used to store even and odd bytes of the data, non è proprio così, verificare
+									for(px=0; px<80; px++) {         // 640 pixel
+										ch=*p1++;
+										if(ch & 0x80)   // 
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x40)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										if(ch & 0x20)
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x10)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										if(ch & 0x08)
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x4)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										if(ch & 0x2) 
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x1)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										}
+									if(VGAcrtcReg[9] & 0x80) {		// raddoppio se 200 linee (+ veloce così
+										memcpy(pVideoRAM,pVideoRAM-320,320);
+										pVideoRAM+=320;
+										}
+									}
+								break;
+							case 39:		// modo 4 opp 5, mah questo non esiste così, c'è 320x200x16 e non b/n
+								i=VGAcrtcReg[9] & 0x80 ? 640 : 320;
+								pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((i)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
+								// mah è ok (200 invece di 240 ma ok) 
+								for(py=rowIni; py<rowFin; py++) {    // 
+									p1=(BYTE*)pVGARam + (py*40) ;		// 
+									for(px=0; px<40; px++) {         // 320 pixel (40byte) 
+										ch=*p1++;
+										if(ch & 0x80)   // 
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x40)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										if(ch & 0x20)
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x10)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										if(ch & 0x08)
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x4)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										if(ch & 0x2) 
+											*pVideoRAM=(color & 0xf) << 4;
+										else
+											*pVideoRAM=(color & 0xf0);
+										if(ch & 0x1)   // 
+											*pVideoRAM++ |= (color & 0xf);
+										else
+											*pVideoRAM++ |= (color & 0xf0) >> 4;
+										}
+									if(VGAcrtcReg[9] & 0x80) {		// raddoppio se 200 linee (+ veloce così
+										memcpy(pVideoRAM,pVideoRAM-320,320);
+										pVideoRAM+=320;
+										}
+									}
+								break;
+							}
+						break;
+					}
+	      }
       }
     else {                // text mode (da qualche parte potrebbe esserci la Pagina selezionata...
-      START_WRITE();
+			switch(VGAgraphReg[6] & 0x0c) {
+				case 0x00:
+				case 0x04:		// beh non capita, direi
+					pVGARam=&VGAram[0];
+					offset=0x10000;
+					break;
+				case 0x08:
+					pVGARam=&VGAram[0]+0x10000L;
+					offset=0x2000;
+					break;
+				case 0x0c:
+					pVGARam=&VGAram[0]+0x18000L;
+					offset=0x2000;
+					break;
+				}
       color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
+			//    anche  VGAactlReg[0x11] ma non palette
+
       if(rowIni==0) {
-        setAddrWindow(HORIZ_OFFSCREEN+0,0,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+				pVideoRAM=(BYTE*)&VideoRAM[0]+HORIZ_OFFSCREEN/2;
         for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-          for(px=0; px<160; px++) {         // 320 pixel
-            writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
-            }
-          }
-        }
-      setAddrWindow(HORIZ_OFFSCREEN+0,rowIni +VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,(rowFin-rowIni));
-      for(py=rowIni/8; py<rowFin/8; py++) {    // 
+		      for(px=0; px<HORIZ_SIZE/4; px++) {         // 320 pixel
+						*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+						}
+					}
+				}
+			pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
+      for(py=rowIni/16; py<rowFin/16; py++) {    // 
+//    vedere VGAactlReg[0x10] b3 e b2 per intensity e 9th bit
         if(VGAcrtcReg[0x2] == 80) {     // 80x25
-          for(i=0; i<16; i+=2) {         // 16 righe -> 8
-						p1=(BYTE*)&CGAram[0] + (py*80*2)   + 2*MAKEWORD(i6845RegW[13],i6845RegW[12]) /* display start addr*/;    // char/colore
+          for(i=0; i<16; i++) {         // 16 righe 
+						p1=(BYTE*)pVGARam + (py*80)   ;    // char/colore
 //#warning            era 80?? 2024 ah ma tanto rowini è 0...
-            for(px=0; px<80; px++) {         // 80 char (80byte) diventano 320 pixel
-              ch=*p1++;
+            for(px=0; px<HORIZ_SIZE/8; px++) {         // 80 char (80byte) diventano 640 pixel
+              ch=*p1;
 //              p=(BYTE *)&VGAfont_16[((WORD)ch)*16+i];  // TROVARLI IN qualche registro! sono nella ROM BIOS VGA
-              p=(BYTE *)&VGABios[0x2526 + ((WORD)ch)*16+i];  // TROVARLI IN qualche registro! 
+//              p=(BYTE *)&VGABios[0x2526 + ((WORD)ch)*16+i];  // TROVARLI IN qualche registro! 
+              p=(BYTE *)&VGAram[0x20000 + 2*((WORD)ch)*16+i];  // When an alphanumeric mode is selected, the character font patterns are transferred from the ROM to map 2, OCCHIO SONO INTERLEAVATI con qualcosa ;)
+							/*{int myFile;
+						myFile=_lcreat("vgaram.bin",0);
+						if(myFile != -1) {
+							_lwrite(myFile,VGAram,262144);
+							_lclose(myFile);
+							}
+							}*/
               ch=*p;
-              color=*p1++;   // il colore segue il char
-              if(ch & 0x40)   // difficile scegliere quali 2 pixel prendere.. !
-                writedata16(textColors[color & 0xf]);
+              color=*(p1+offset);   // il colore si trova nel planes seguente
+							p1++;
+              if(ch & 0x80)
+								*pVideoRAM=(color & 0xf) << 4;
               else
-                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
-              if(ch & 0x10)   // difficile scegliere quali 2 pixel prendere.. !
-                writedata16(textColors[color & 0xf]);
+								*pVideoRAM=(color & 0xf0);
+              if(ch & 0x40)   // 
+								*pVideoRAM++ |= (color & 0xf);
               else
-                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
-              if(ch & 0x4)   // difficile scegliere quali 2 pixel prendere.. !
-                writedata16(textColors[color & 0xf]);
+								*pVideoRAM++ |= (color & 0xf0) >> 4;
+              if(ch & 0x20)
+								*pVideoRAM=(color & 0xf) << 4;
               else
-                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
-              if(ch & 0x1)   // difficile scegliere quali 2 pixel prendere.. !
-                writedata16(textColors[color & 0xf]);
+								*pVideoRAM=(color & 0xf0);
+              if(ch & 0x10)   // 
+								*pVideoRAM++ |= (color & 0xf);
               else
-                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
+								*pVideoRAM++ |= (color & 0xf0) >> 4;
+              if(ch & 0x08)
+								*pVideoRAM=(color & 0xf) << 4;
+              else
+								*pVideoRAM=(color & 0xf0);
+              if(ch & 0x4)   // 
+								*pVideoRAM++ |= (color & 0xf);
+              else
+								*pVideoRAM++ |= (color & 0xf0) >> 4;
+              if(ch & 0x2) 
+								*pVideoRAM=(color & 0xf) << 4;
+              else
+								*pVideoRAM=(color & 0xf0);
+              if(ch & 0x1)   // 
+//                writedata16(textColors[color & 0xf]);
+								*pVideoRAM++ |= (color & 0xf);
+              else
+//                writedata16(textColors[color >> 4]);    // GESTIRE BLINK!
+								*pVideoRAM++ |= (color & 0xf0) >> 4;
               }
             }
           }
         else {     // 40x25
-          for(i=0; i<16; i+=2) {         // 16 righe -> 8
-  					p1=(BYTE*)&CGAram[0] + (py*40*2)   + 2*MAKEWORD(i6845RegW[13],i6845RegW[12]) /* display start addr*/;    // char/colore
-            for(px=0; px<40; px++) {         // 40 char (40byte) diventano 320 pixel
-              ch=*p1++;
-              p=(BYTE *)&VGAfont_16[((WORD)ch)*16+i];  // TROVARLI IN qualche registro! sono nella ROM BIOS VGA
+          for(i=0; i<16; i++) {         // 16 righe 
+						p1=(BYTE*)pVGARam + (py*40);    // char/colore
+            for(px=0; px<40; px++) {         // 40 char (40byte) diventano 640 pixel
+              ch=*p1;
+//              p=(BYTE *)&VGAfont_16[((WORD)ch)*16+i];  // TROVARLI IN qualche registro! sono nella ROM BIOS VGA
+              p=(BYTE *)&VGAram[0x20000 + 2*((WORD)ch)*16+i];  // When an alphanumeric mode is selected, the character font patterns are transferred from the ROM to map 2, OCCHIO SONO INTERLEAVATI con qualcosa ;)
               ch=*p;
-              color=*p1++;   // il colore segue il char
+              color=*(p1+offset);   // il colore si trova nel planes seguente
+							p1++;
               if(ch & 0x80)   // 8 pixel
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);    // GESTIRE BLINK!
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               if(ch & 0x40)
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);    // 
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               if(ch & 0x20)
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               if(ch & 0x10)
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               if(ch & 0x8)
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               if(ch & 0x4)
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               if(ch & 0x2)
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               if(ch & 0x1)
-                writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+								*pVideoRAM++= ((color & 0xf) << 4) | (color & 0xf);
               else
-                writedata16x2(textColors[color >> 4],textColors[color >> 4]);
+								*pVideoRAM++= (color & 0xf0) | (color >> 4);
               }
             }
           }
-        ClrWdt();
         }
 
-      if(rowIni==VERT_SIZE-8) {
+      if(rowFin>=VERT_SIZE-8) {
         color=CGAreg[9] & 15;   // questo qua diventa il bordo! USARE...
-        setAddrWindow(HORIZ_OFFSCREEN+0,VERT_SIZE+VERT_OFFSCREEN,_width-HORIZ_OFFSCREEN,VERT_OFFSCREEN);
+				pVideoRAM=(BYTE*)&VideoRAM[0]+(VERT_SIZE+VERT_OFFSCREEN)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
         for(py=0; py<VERT_OFFSCREEN; py++) {    // 
-          for(px=0; px<160; px++) {         // 320 pixel
-            writedata16x2(textColors[color & 0xf],textColors[color & 0xf]);
+		      for(px=0; px<HORIZ_SIZE/4; px++) {         // 320 pixel
+						*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
             }
           }
+				blinkState = !blinkState;		// rallentare!
         }
-      END_WRITE();
 
       i=MAKEWORD(VGAcrtcReg[15],VGAcrtcReg[14] & 0x3f);    // coord cursore, abs
       row1=(VGAcrtcReg[0x2] == 80) ? (i/80)*16 : (i/40)*16;
@@ -1060,7 +1290,7 @@ plot_cursor:
 				row1--;			// è la pos della prima riga in alto del char contenente il cursore
         switch((VGAcrtcReg[10] & 0x20)) {		// questo è solo enable! lampeggio??
           case 0:
-					// secondo GLABios, in CGA il cursore lampeggia sempre indipendentemente da questo valore... me ne frego!!
+
 plot_cursor:
   // test          i6845RegW[10]=5;i6845RegW[11]=7;
             cy1= (VGAcrtcReg[10] & 31);    // 0..31
@@ -1068,23 +1298,23 @@ plot_cursor:
             if(cy2 && cy1<=cy2) do {
               if(VGAcrtcReg[0x2] == 80) {     // 80x25
                 color=7;    // fisso :)
-                START_WRITE();
-//								pVideoRAM=(BYTE*)&VideoRAM[0]+((row1)+cy1)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+((i % 80)*4)+(HORIZ_OFFSCREEN/2);
-                setAddrWindow((i % 80)*4+(HORIZ_OFFSCREEN/2),1+ /* ?? boh*/ cy1+ row1 +VERT_OFFSCREEN,4,cy2-cy1);   // altezza e posizione fissa, gestire da i6845RegW[10,11]
-                writedata16x2(textColors[color],textColors[color]);
-                writedata16x2(textColors[color],textColors[color]);
-                END_WRITE();
+								pVideoRAM=(BYTE*)&VideoRAM[0]+((row1)+cy1)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+((i % 80)*4)+(HORIZ_OFFSCREEN/2);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
                 }
               else {
                 color=7;    // fisso :)
-                START_WRITE();
-  //							pVideoRAM=(BYTE*)&VideoRAM[0]+((row1)+cy1)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+((i % 40)*8)+(HORIZ_OFFSCREEN/2);
-              setAddrWindow((i % 40)*8+(HORIZ_OFFSCREEN/2),1+ /* ?? boh*/ cy1+ row1 +VERT_OFFSCREEN,8,cy2-cy1);
-                writedata16x2(textColors[color],textColors[color]);
-                writedata16x2(textColors[color],textColors[color]);
-                writedata16x2(textColors[color],textColors[color]);
-                writedata16x2(textColors[color],textColors[color]);
-                END_WRITE();
+								pVideoRAM=(BYTE*)&VideoRAM[0]+((row1)+cy1)*(((HORIZ_SIZE/2)+(HORIZ_OFFSCREEN)))+((i % 40)*8)+(HORIZ_OFFSCREEN/2);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
+								*pVideoRAM++=((color & 0xf) << 4) | (color & 0xf);
                 }
 							cy1++;
 							} while(cy1<=cy2);
@@ -1115,7 +1345,8 @@ plot_cursor:
         }
 
       }
-    }
+		}
+
 #endif
   
 	}
@@ -1542,14 +1773,14 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
   ADCEIEN1 = 0;
     
   ADCCON2bits.ADCDIV = 64; // per SHARED: 2 TQ * (ADCDIV<6:0>) = 64 * TQ = TAD
-  ADCCON2bits.SAMC = 5;
+  ADCCON2bits.SAMC = 10;
     
   ADCCON3bits.ADCSEL = 0;   //0=periph clock 3; 1=SYSCLK
   ADCCON3bits.CONCLKDIV = 4; // 25MHz, sotto è poi diviso 2 per il canale, = max 50MHz come da doc
 
   ADC3TIMEbits.SELRES=0b10;        // 10 bits
   ADC3TIMEbits.ADCDIV=4;       // 
-  ADC3TIMEbits.SAMC=5;        //   
+  ADC3TIMEbits.SAMC=10;        //   
   
   ADCCSS1 = 0; // Clear all bits
   ADCCSS2 = 0;
@@ -2364,6 +2595,7 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
       }
     
     if(mouseState & 0b10000000) {		// semaforo
+      mouseState |= 0b00100000;     // left click
 #if MOUSE_TYPE==1
       COMDataEmuFifo[0]=0b01000000 | (mouseState & 0b00110000) | (((int8_t)mouseX >> 6) & 0x03) | (((int8_t)mouseY >> 4) & 0x0c);
       COMDataEmuFifo[1]=(int8_t)mouseX & 0x3f;

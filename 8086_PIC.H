@@ -78,9 +78,12 @@
 //#define RAM_DOS 1
 #define MS_DOS_VERSION 3			// occhio INT_1E nei bios! per #settori, anche non cambia nulla...
 
-//#define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (per qualche motivo microsoft NON va su windows 2... non viene visto al boot
+#define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (per qualche motivo microsoft NON va su windows 2... non viene visto al boot
 // ora sembra andare, ma a volte disturba la tastiera... credo sia troppo sensibile a VCC/USB e a posizione touch
-#warning ##################  verificare tastiera che salta dopo mouse (o timer troppo veloci??
+//#warning ##################  verificare tastiera che salta dopo mouse (o timer troppo veloci??
+// oppure se togli mouse il floppy non va! pd
+// con 4 va, anche se i timer sono ovviamente troppo lenti, e i settaggi per delay IRQ floppy non fanno nulla
+// AH NO, succede con alimentazione USB! con il PICKit no... e cmq non prende il click del touch, quindi ci deve essere qualche altro errore
 
 
 #define CPU_CLOCK_DIVIDER 500000L			// così va più o meno come il PIC, su PC greggiod

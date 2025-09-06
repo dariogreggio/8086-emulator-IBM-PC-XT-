@@ -2340,8 +2340,11 @@ uint16_t GetShortValue(uint16_t seg,uint16_t ofs) {
 	t=MAKE20BITS(seg,ofs);
 	t1=MAKE20BITS(seg,ofs+1);
 #else
+//	t=MAKE20BITS(seg,ofs);
+//	t1=t+1;
+// secondo i test V20 è uguale all'altro...
 	t=MAKE20BITS(seg,ofs);
-	t1=t+1;
+	t1=MAKE20BITS(seg,ofs+1);
 #endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
@@ -2426,8 +2429,11 @@ uint32_t GetIntValue(uint16_t seg,uint32_t ofs) {
 	t=MAKE20BITS(seg,ofs);
 	t1=MAKE20BITS(seg,ofs+1);
 #else
+//	t=MAKE20BITS(seg,ofs);
+//	t1=t+1;
+// secondo i test V20 è uguale all'altro...
 	t=MAKE20BITS(seg,ofs);
-	t1=t+1;
+	t1=MAKE20BITS(seg,ofs+1);
 #endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
@@ -2502,8 +2508,11 @@ uint8_t GetPipe(uint16_t seg,uint16_t ofs) {
 	t=MAKE20BITS(seg,ofs);
 	t1=MAKE20BITS(seg,ofs+1);
 #else
+//	t=MAKE20BITS(seg,ofs);
+//	t1=t+1;
+// secondo i test V20 è uguale all'altro...
 	t=MAKE20BITS(seg,ofs);
-	t1=t+1;
+	t1=MAKE20BITS(seg,ofs+1);
 #endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
@@ -2588,8 +2597,11 @@ uint8_t GetMorePipe(uint16_t seg,uint16_t ofs) {
 	t=MAKE20BITS(seg,ofs);
 	t1=MAKE20BITS(seg,ofs+1);
 #else
+//	t=MAKE20BITS(seg,ofs);
+//	t1=t+1;
+// secondo i test V20 è uguale all'altro...
 	t=MAKE20BITS(seg,ofs);
-	t1=t+1;
+	t1=MAKE20BITS(seg,ofs+1);
 #endif
 
 	if(t >= (ROM_END-ROM_SIZE)) {
@@ -2650,11 +2662,7 @@ uint8_t GetMorePipe(uint16_t seg,uint16_t ofs) {
 void PutValue(uint16_t seg,uint16_t ofs,uint8_t t1) {
 	uint32_t t;
 
-#if !defined(EXT_80186) && !defined(EXT_NECV20)
 	t=MAKE20BITS(seg,ofs);
-#else
-	t=MAKE20BITS(seg,ofs);
-#endif
 
 // printf("rom_seg: %04x, p: %04x\n",rom_seg,p);
 #ifdef RAM_DOS
@@ -2837,8 +2845,11 @@ void PutShortValue(uint16_t seg,uint16_t ofs,uint16_t t2) {
 	t=MAKE20BITS(seg,ofs);
 	t1=MAKE20BITS(seg,ofs+1);
 #else
+//	t=MAKE20BITS(seg,ofs);
+//	t1=t+1;
+// secondo i test V20 è uguale all'altro...
 	t=MAKE20BITS(seg,ofs);
-	t1=t+1;
+	t1=MAKE20BITS(seg,ofs+1);
 #endif
 
 // printf("rom_seg: %04x, p: %04x\n",rom_seg,p);
@@ -2882,8 +2893,11 @@ void PutIntValue(uint16_t seg,uint32_t ofs,uint32_t t1) {
 	t=MAKE20BITS(seg,ofs);
 	t1=MAKE20BITS(seg,ofs+1);
 #else
+//	t=MAKE20BITS(seg,ofs);
+//	t1=t+1;
+// secondo i test V20 è uguale all'altro...
 	t=MAKE20BITS(seg,ofs);
-	t1=t+1;
+	t1=MAKE20BITS(seg,ofs+1);
 #endif
 
 #ifdef VGA_BASE

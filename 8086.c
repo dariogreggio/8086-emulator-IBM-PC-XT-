@@ -65,13 +65,16 @@ extern uint8_t LCDdirty;
 #ifndef EXT_80386
 	union REGISTERS regs;
 #else
-	union REGISTERS regs;
+	union REGISTERS32 regs;
 #endif
-#ifndef EXT_80386
-	union REGISTERS16 segs;
-#else
+#ifdef EXT_80386
 	union REGISTERS32 segs;
 	union SEGMENT_DESCRIPTOR seg_descr[6];
+#elif EXT_80286
+	union REGISTERS16 segs;
+	union SEGMENT_DESCRIPTOR seg_descr[4];
+#else
+	union REGISTERS16 segs;
 #endif
 
 
@@ -229,7 +232,9 @@ int Emulate(int mode) {
 #endif
 	uint16_t _ip=0;
 	register union REGISTRO_F _f;
-	union REGISTRO_F _f1;
+#ifdef EXT_80286
+	union MACHINE_STATUS_WORD _msw;
+#endif
   uint8_t inRep=0;
 	uint8_t inRepStep=0;
   BYTE segOverride=0,segOverrideIRQ=0,inEI=0;
@@ -240,6 +245,11 @@ int Emulate(int mode) {
 #endif
 #ifdef EXT_80x87
   uint16_t status8087=0,control8087=0;
+#endif
+#if EXT_80286
+	BYTE GDTR[5];
+	//LDTR?
+	BYTE LDTR[5];
 #endif
   register union OPERAND op1,op2;
   register union RESULT res1,res2,res3;
@@ -260,7 +270,7 @@ int Emulate(int mode) {
   _ip=0x0000;
   _cs=0xffff;
 #endif
-  _f.x=_f1.x=0; _f.unused=1;
+  _f.x=0; _f.unused=1;
   inRep=0; inRepStep=0; segOverride=0; inEI=0;
 #ifdef EXT_80386
   sizeOverride=0; sizeOverrideA=0;
@@ -408,7 +418,7 @@ int Emulate(int mode) {
             
 		if(CPUPins & DoReset) {
 			initHW();
-			_f.x=_f1.x=0;     // https://thestarman.pcministry.com/asm/debug/8086REGs.htm
+			_f.x=0;     // https://thestarman.pcministry.com/asm/debug/8086REGs.htm
 			_f.unused=1; _f.unused2=_f.unused3=0; 
 #ifdef EXT_80x87 
 			status8087=0; control8087=0;			// VERIFICARE!
@@ -1506,15 +1516,121 @@ FFFF:000F                Top of 8086 / 88 address space*/
 #endif
 
 #ifdef EXT_80286
-          case 0x0:      // LLDT/LTR/SLDT/SMSW/VERW
+          case 0x0:      // LLDT/LTR/SLDT/STR/VERW
+						COMPUTE_RM
+								switch((Pipe2.b.l & 0x38) >> 3) {
+									case 0:		// SLDT
+										PutShortValue(*theDs,op2.mem+i,MAKEWORD(LDTR[0],LDTR[1]));		// 
+										break;
+									case 2:		// LLDT
+										break;
+									case 1:		// STR
+										break;
+									case 3:		// LTR
+										break;
+									case 4:		// VERR
+										_f.Zero= GetShortValue(*theDs,op2.mem)         ? 1 :0;
+										break;
+									case 5:		// VERW
+										_f.Zero=GetShortValue(*theDs,op2.mem)         ? 1 :0;
+										break;
+									}
+								break;
+							case 3:
+								switch((Pipe2.b.l & 0x38) >> 3) {
+									case 0:		// SLDT
+										*op2.reg16=MAKEWORD(LDTR[0],LDTR[1]);
+/*										for(i=0; i<5; i++)
+											PutValue(*theDs,op2.mem+i,LDTR[i]);		// 
+										PutValue(*theDs,op2.mem+5,0xff);		// */
+										break;
+									case 2:		// LLDT
+										break;
+									case 1:		// STR
+										break;
+									case 3:		// LTR
+										break;
+									case 4:		// VERR
+										_f.Zero= *op2.reg16         ? 1 :0;
+										break;
+									case 5:		// VERW
+										_f.Zero=*op2.reg16         ? 1 :0;
+										break;
+									}
+								break;
+							}
             break;
-          case 0x1:      // LGDT/LIDT/LMSW/SGDT/SIDT/STR
+          case 0x1:      // LGDT/LIDT/LMSW/SMSW/SGDT/SIDT
+						COMPUTE_RM
+								switch((Pipe2.b.l & 0x38) >> 3) {
+									case 4:		// SMSW
+										PutShortValue(*theDs,op2.mem,_msw.x);
+										break;
+									case 1:		// SIDT
+										break;
+									case 0:		// SGDT
+										for(i=0; i<5; i++)
+											PutValue(*theDs,op2.mem+i,GDTR[i]);		// 
+										PutValue(*theDs,op2.mem+5,0xff);		// 
+										break;
+									case 3:		// LIDT
+										for(i=0; i<5; i++)
+											LDTR[i]=GetValue(*theDs,op2.mem+i);		// 
+										break;
+									case 2:		// LGDT
+										for(i=0; i<5; i++)
+											GDTR[i]=GetValue(*theDs,op2.mem+i);		// 
+										break;
+									case 6:		// LMSW
+										_msw.x=GetShortValue(*theDs,op2.mem);
+										break;
+									}
+								break;
+							case 3:
+								switch((Pipe2.b.l & 0x38) >> 3) {
+									case 3:
+									case 2:
+
+exception286:
+										break;
+									case 6:		// LMSW
+										_msw.x=*op2.reg16;
+										break;
+									case 4:		// SMSW
+										*op2.reg16=_msw.x;
+										break;
+									}
+								break;
+
+							}
+
             break;
           case 0x2:      // LAR
+						COMPUTE_RM
+
+								GetShortValue(*theDs,op2.mem);
+								break;
+							case 3:
+								*op2.reg16;
+								break;
+
+							}
+
             break;
           case 0x3:      // LSL
+						COMPUTE_RM
+
+								GetShortValue(*theDs,op2.mem);
+								break;
+							case 3:
+								*op2.reg16;
+								break;
+
+							}
             break;
           case 0x6:      // CLTS
+
+						_msw.TS=0;
             break;
 #endif
 #ifdef EXT_80386
@@ -2570,7 +2686,7 @@ aggFlagSWA:    // aux, zero, sign, parity
 
  			case 0x3f:      // AAS
         if((_al & 0xf) > 9 || _f.Aux) {
-          _ax-=6;
+          _al-=6;
           _ah--;
           _f.Aux=1;
           }
@@ -2692,22 +2808,28 @@ aggFlagDecW:
           PUSH_STACK(regs.r[i].x);
 				break;
 			case 0x61:      // POPA
-        for(i=7; i>=4; i--)    // 
+        for(i=7; i>4; i--)    // 
           POP_STACK(regs.r[i].x);
         POP_STACK(_ax);     // dummy
         for(i=3; (int16_t)i>=0; i--)
           POP_STACK(regs.r[i].x);
 				break;
 			case 0x62:        // BOUND
-#define WORKING_REG regs.r[Pipe2.reg].x
-//        GetMorePipe(_cs,_ip-1));
-        _ip+=3;
-        if(WORKING_REG < Pipe2.x.l || WORKING_REG > Pipe2.x.h) {   // finire...
-          // dovrebbe causare un INT 5
-					i=5;
-          goto do_irq;
-					}
-
+				COMPUTE_RM_OFS
+					GET_MEM_OPER
+            res1.x=GetShortValue(*theDs,op2.mem);
+            res2.x=GetShortValue(*theDs,op2.mem+2);
+						if((int16_t)regs.r[Pipe2.reg].x < (int16_t)res1.x || (int16_t)regs.r[Pipe2.reg].x > (int16_t)res2.x) {   // 
+							// dovrebbe causare un INT 5
+							i=5;
+							goto do_irq;
+							}
+            break;
+          case 3:
+// non c'è direi						GET_REGISTER_8_16_2
+						goto unknown_istr;
+						break;
+						}
 				break;
 #endif
 #ifdef EXT_80286
@@ -2734,13 +2856,37 @@ aggFlagDecW:
 #endif
 #ifdef EXT_NECV20
 			case 0x64:
-				inRep=0x15;					// REPNC
-        inEI++;
+        if(_cx || _f.Carry) {			// C salta tutto!
+					inRep=0x15;					// REPNC
+		      inEI++;
+					}
+				else {
+			    Pipe1=GetPipe(_cs,_ip++));
+/*					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
+//					ma perché???
+#if defined(EXT_80386)
+						|| Pipe1==0x64 || Pipe1==0x65
+#endif
+						)*/
+						_ip++;
+					}
 				break;
         
 			case 0x65:
-				inRep=0x16;					// REPC
-				inEI++;		// forse ne fa uno di troppo alla fine, ma ok...
+        if(_cx || !_f.Carry) {			// NC salta tutto!
+					inRep=0x16;					// REPC
+  				inEI++;		// forse ne fa uno di troppo alla fine, ma ok...
+					}
+				else {
+			    Pipe1=GetPipe(_cs,_ip++));
+/*					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
+//					ma perché???
+#if defined(EXT_80386)
+						|| Pipe1==0x64 || Pipe1==0x65
+#endif
+						)*/
+						_ip++;
+					}
 				break;
 #endif
         
@@ -2792,7 +2938,8 @@ aggFlagDecW:
         op1.reg16 = &regs.r[(Pipe2.b.l >> 3) & 0x7].x;		// 3 o 7??
 
 				COMPUTE_RM_OFS
-						GetPipe(_cs,_ip);
+					GET_MEM_OPER
+						GetPipe(_cs,_ip-1);
             op3.mem=Pipe2.x.l;
             res1.x=GetShortValue(*theDs,op2.mem);
             res2.x=op3.mem;
@@ -2813,8 +2960,8 @@ aggFlagDecW:
           case 3:
 						//GET_REGISTER_8_16_2
             op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;			// 3 o 7 ??
-						GetMorePipe(_cs,_ip); 
-            op3.mem=Pipe2.xm.w;
+						GetPipe(_cs,_ip-1);
+            op3.mem=Pipe2.x.l;
             res1.x=*op2.reg16;
             res2.x=op3.mem;
             res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;   // (sicuro 32? per i flag
@@ -2849,7 +2996,8 @@ aggFlagDecW:
         op1.reg16 = &regs.r[(Pipe2.b.l >> 3) & 0x7].x;		// 3 o 7??
        
 				COMPUTE_RM_OFS
-						GetPipe(_cs,_ip);
+					GET_MEM_OPER
+						GetPipe(_cs,_ip-1);
             op3.mem=(int16_t)(int8_t)Pipe2.b.l;
             res1.x=GetShortValue(*theDs,op2.mem);
             res2.x=op3.mem;
@@ -2870,8 +3018,8 @@ aggFlagDecW:
           case 3:
 						//GET_REGISTER_8_16_2
             op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;			// 3 o 7 ??
-						GetMorePipe(_cs,_ip); 
-            op3.mem=(int16_t)(int8_t)Pipe2.b.h;
+						GetPipe(_cs,_ip-1);
+            op3.mem=(int16_t)(int8_t)Pipe2.b.l;
             res1.x=*op2.reg16;
             res2.x=op3.mem;
 						res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;
@@ -2929,9 +3077,9 @@ aggFlagDecW:
           }
 				OutValue(_dx,GetValue(_es,_di));
         if(_f.Dir)
-          _di--;
+          _si--;
         else
-          _di++;
+          _si++;
 				break;
 
 			case 0x6f:        // OUTSW
@@ -2943,10 +3091,10 @@ aggFlagDecW:
 #endif
 				OutShortValue(_dx,GetShortValue(_es,_di));
         if(_f.Dir) {
-          _di-=2;   // anche 32bit??
+          _si-=2;   // anche 32bit??
           }
         else {
-          _di+=2;
+          _si+=2;
           }
 				break;
 #endif			// 186, V20
@@ -3153,7 +3301,7 @@ jmp_short:
 			case 0x83:				// ADD ecc rm16, immediate8 con sign-extend
 			  if(Pipe2.mod<3)
 					GetMorePipe(_cs,_ip-1);   // 
-				if(!(Pipe1 & 2)) 			// vuol dire che l'operando è 8bit ma esteso a 16
+				if(Pipe1 < 0x83) 			// vuol dire che l'operando è 8bit ma esteso a 16
           _ip++;
         
 				COMPUTE_RM_OFS
@@ -4050,27 +4198,20 @@ fix_flags:
 			case 0xc8:        //ENTER
 				PUSH_STACK(_bp);
         res3.x=_sp;
-        switch(Pipe2.b.u) {
-          case 0:
-            break;
-          case 1:
-            PUSH_STACK(_bp);
-            break;
-          default:
-            for(i=0; i<Pipe2.b.u; i++) {		// max nesting 32...
-              _bp-=2;
-              PUSH_STACK(_bp);
-              }
-            break;
+				Pipe2.x.l+=Pipe2.b.u*2;
+        if(Pipe2.b.u>0) {
+					Pipe2.b.u &= 31;			// max nesting 32...
+          while(--Pipe2.b.u) {		
+            _bp-=2;
+            PUSH_STACK(GetShortValue(_ss,_bp));
+            }
+          PUSH_STACK(res3.x);
           }
-				PUSH_STACK(res3.x);
 				_bp=res3.x;
-				_sp=_bp-Pipe2.b.u;
+				_sp=_bp-Pipe2.x.l;
         _ip+=3;
         break;
-#endif
-        
-#ifdef EXT_80186
+
 			case 0xc9:        // LEAVE
         _sp=_bp;
 				POP_STACK(_bp);
@@ -4318,6 +4459,9 @@ do_rcl16:
 
 			case 0xd4:      // AAM
         _ip++;
+#ifdef EXT_NECV20
+// boh? no solite cazzate				Pipe2.b.l=10; // dice...
+#endif
 				if(Pipe2.b.l) {
 					_ah=_al / Pipe2.b.l;    // 10 fisso in teoria, ma si può usare genericamente come base per la conversione...
 					_al=_al % Pipe2.b.l;    //
@@ -4367,7 +4511,7 @@ do_rcl16:
         
 			case 0xd5:      // AAD
 #ifdef EXT_NECV20
-				Pipe2.b.l=10; // dice...
+        Pipe2.b.l=10; // dice...
 #endif
 				res1.b=_al;
 				res2.b=Pipe2.b.l;

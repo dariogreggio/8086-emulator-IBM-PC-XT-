@@ -52,17 +52,25 @@
 
 
 
+#undef EXT_80286
+#undef EXT_80386
+#undef EXT_80486
+//#define EXT_80x87
+#if defined(EXT_80486)
+#define EXT_80386
+#endif
+#if defined(EXT_80386)
+#define EXT_80286
+#endif
+#if defined(EXT_80286)
+#define EXT_80186
+#endif
 //#define EXT_80186
 //#define EXT_NECV20
 #if !defined(EXT_80186) && !defined(EXT_NECV20)
 #define UNDOCUMENTED_8086			//GLORIOUSCOW	 per cose non standard ma verificate sul campo da lui :D
 #endif
 
-
-#undef EXT_80286
-#undef EXT_80386
-#undef EXT_80486
-//#define EXT_80x87
 
 #define CGA 1
 //#define MDA 1
@@ -215,6 +223,40 @@ union REG_8086 {
 #else
 	union __attribute__((__packed__)) REGISTERS32 {
 	  union __attribute__((__packed__)) REG_8086 r[6];
+		};
+#endif
+#ifdef EXT_80286
+	union SEGMENT_SELECTOR {		// 
+    uint16_t x;
+		struct {
+			unsigned int RPL: 1;
+			unsigned int TI: 2;
+			unsigned int Index: 13;
+			};
+		};
+	union MACHINE_STATUS_WORD {		// 
+    uint16_t x;
+		struct {
+			unsigned int PE: 1;
+			unsigned int MP: 1;
+			unsigned int EM: 1;
+			unsigned int TS: 1;
+			unsigned int unused: 12;
+			};
+		};
+	union SEGMENT_DESCRIPTOR {
+    uint64_t x;
+		struct {
+			unsigned int Limit: 16;
+			unsigned int Base: 16;
+			unsigned int BaseH: 8;
+			unsigned int A: 1;
+			unsigned int Type: 3;
+			unsigned int System: 1;		// 1=segm descr; 0=system/control segm descr
+			unsigned int DPL: 2;
+			unsigned int P: 1;
+			unsigned int reserved: 16;
+			};
 		};
 #endif
 #ifdef EXT_80386
@@ -399,6 +441,7 @@ extern volatile BYTE keysFeedPtr;
 
 #define ROTATE_SHIFT8 \
 	switch(Pipe2.reg) {\
+    	union REGISTRO_F _f1;\
 		case 0:       /* ROL */\
 			while(res2.b--) {\
 				_f.Carry=res3.b & 0x80 ? 1 : 0;\
@@ -470,6 +513,7 @@ extern volatile BYTE keysFeedPtr;
 
 #define ROTATE_SHIFT16 \
 	switch(Pipe2.reg) {	\
+    	union REGISTRO_F _f1;\
 		case 0:       /* ROL*/\
 			while(res2.b--) {\
 				_f.Carry=res3.x & 0x8000 ? 1 : 0;\

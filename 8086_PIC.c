@@ -99,7 +99,7 @@
 
 
 const char CopyrightString[]= {'P','C','/','X','T',' ','E','m','u','l','a','t','o','r',' ','v',
-	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '0','2','/','0','9','/','2','5', 0 };
+	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '0','6','/','0','9','/','2','5', 0 };
 
 const char Copyr1[]="(C) Dario's Automation 2019-2025 - G.Dar\xd\xa\x0";
 

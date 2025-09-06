@@ -3075,7 +3075,7 @@ aggFlagDecW:
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
           }
-				OutValue(_dx,GetValue(_es,_di));
+				OutValue(_dx,GetValue(_ds,_si));
         if(_f.Dir)
           _si--;
         else
@@ -3089,7 +3089,7 @@ aggFlagDecW:
           }
 #ifdef EXT_80386
 #endif
-				OutShortValue(_dx,GetShortValue(_es,_di));
+				OutShortValue(_dx,GetShortValue(_ds,_si));
         if(_f.Dir) {
           _si-=2;   // anche 32bit??
           }
@@ -4996,9 +4996,9 @@ Trap:
 #endif
 											goto divide0; //divide error
 											}
-#ifdef UNDOCUMENTED_8086
 										_ah = _ax % res2.b;			// non è bello ma...
 										_al = res3.b;
+#ifdef UNDOCUMENTED_8086
 										_f.Parity=0;
 										_f.Sign=!!(_ah & 0x80);
 #endif

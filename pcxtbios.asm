@@ -474,7 +474,7 @@ else
 endif
 else
 ifdef	TURBO_ENABLED
-	str_banner	db	'Turbo XT BIOS v3.2 - 21/07/2024', 0
+	str_banner	db	'Turbo XT BIOS v3.2 - 04/08/2025', 0
 	; v. ANCHE ALLA FINE, signature
 else
 	str_banner	db	'Super XT BIOS v3.1 - 10/28/2017', 0
@@ -620,7 +620,7 @@ endif
 	or	[byte ds:15h], error_bios	; Checksum error BIOS eprom
 
 @@init_int:
-	cli					; Init interrupt controller
+	cli					; Init 8259 interrupt controller
 	mov	al, 13h
 	out	20h, al
 	mov	al, 8
@@ -2763,7 +2763,7 @@ status_table	db	04h, 10h, 08h, 04h, 03h, 02h, 20h	; Disk status table lookup
 	mov	al, [bp+7]			; Else read sectors requested
 	inc	al				;   add one for luck
 
-@@skip: sub	al, [bp+5]			; Subtract stectors read
+@@skip: sub	al, [bp+5]			; Subtract sectors read
 	retn
 
 @@overflow:
@@ -3040,7 +3040,7 @@ proc	int_1E	far
 	db	2
 	db	25h
 	db	2
-	db	8
+	db	9			 ;metto 9 o 18 OCCHIO CHECKSUM a ffff
 	db	2Ah
 	db	0FFh
 	db	50h
@@ -4608,8 +4608,8 @@ proc	cpu_check	near			; Test for 8088 or V20 CPU
 
 	xor	al, al				; Clean out al to set ZF
 	mov	al, 40h				; mul on V20 does not affect the zero flag
-	mul	al				;   but on an 8088 the zero flag is used CHE NON è UN CAZZO VERO!!! bestie
-;	jz	@@have_v20			; Was zero flag set?
+	mul	al				;   but on an 8088 the zero flag is used ( ;) CHE NON è UN CAZZO VERO!!! bestie
+	jz	@@have_v20			; Was zero flag set?
 	mov	si, offset str_8088		;   No, so we have an 8088 CPU
 	ret
 @@have_v20:
@@ -5385,7 +5385,7 @@ endp	power
 ; BIOS Release Date and Signature
 ;--------------------------------------------------------------------------------------------------
 	entry	0FFF5h
-date	db	"21/7/24", 0			; Release date (DD/MM/YY)
+date	db	"04/8/25", 0			; Release date (DD/MM/YY)
 						;   originally 08/23/87
 	entry	0FFFEh
 ifdef	IBM_PC

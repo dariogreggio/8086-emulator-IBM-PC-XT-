@@ -204,15 +204,6 @@ int Emulate(int mode) {
 #define _ebp regs.r[5].d
 #define _esi regs.r[6].d
 #define _edi regs.r[7].d
-#define _ax regs.r[0].x.l
-#define _cx regs.r[1].x.l
-#define _dx regs.r[2].x.l
-#define _bx regs.r[3].x.l
-#define _sp regs.r[4].x.l
-#define _bp regs.r[5].x.l
-#define _si regs.r[6].x.l
-#define _di regs.r[7].x.l
-#else
 #define _ax regs.r[0].x
 #define _cx regs.r[1].x
 #define _dx regs.r[2].x
@@ -221,11 +212,20 @@ int Emulate(int mode) {
 #define _bp regs.r[5].x
 #define _si regs.r[6].x
 #define _di regs.r[7].x
+#else
+#define _ax regs.r[0].x
+#define _cx regs.r[1].x
+#define _dx regs.r[2].x
+#define _bx regs.r[3].x
+#define _sp regs.r[4].x
+#define _bp regs.r[5].x
+#define _si regs.r[6].x		// IX in NEC_V20
+#define _di regs.r[7].x		// IY in NEC_V20
 #endif
-#define _es segs.r[0].x
+#define _es segs.r[0].x		// DS1 in NEC_V20
 #define _cs segs.r[1].x
 #define _ss segs.r[2].x
-#define _ds segs.r[3].x
+#define _ds segs.r[3].x		// DS0 in NEC_V20
 #ifdef EXT_80386
 #define _fs segs.r[4].x
 #define _gs segs.r[5].x
@@ -365,7 +365,7 @@ int Emulate(int mode) {
           i8259ISR &= ~0x1;
         }
       }
-    if((i8259IRR & 0x2) && !(i8259IMR & 0x2)) {
+    else if((i8259IRR & 0x2) && !(i8259IMR & 0x2)) {
 			if(_f.IF) {
         CPUPins |= DoIRQ;
         ExtIRQNum=9;      // IRQ 9 Keyboard
@@ -374,7 +374,7 @@ int Emulate(int mode) {
           i8259ISR &= ~0x2;
         }
       }
-    if((i8259IRR & 0x10) && !(i8259IMR & 0x10)) {
+    else if((i8259IRR & 0x10) && !(i8259IMR & 0x10)) {
 			if(_f.IF) {
         CPUPins |= DoIRQ;
         ExtIRQNum=0x0c;      // IRQ 12 COM1
@@ -383,7 +383,7 @@ int Emulate(int mode) {
           i8259ISR &= ~0x10;
         }
       }
-    if((i8259IRR & 0x20) && !(i8259IMR & 0x20)) {
+    else if((i8259IRR & 0x20) && !(i8259IMR & 0x20)) {
 			if(_f.IF) {
         CPUPins |= DoIRQ;
         ExtIRQNum=13;      // IRQ 5 Hard disc
@@ -392,7 +392,7 @@ int Emulate(int mode) {
           i8259ISR &= ~0x20;
         }
       }
-    if((i8259IRR & 0x40) && !(i8259IMR & 0x40)) {
+    else if((i8259IRR & 0x40) && !(i8259IMR & 0x40)) {
 			if(_f.IF) {
         CPUPins |= DoIRQ;
         ExtIRQNum=14;      // IRQ 6 Floppy disc
@@ -402,7 +402,7 @@ int Emulate(int mode) {
         }
       }
 #ifdef PCAT
-    if((i8259IRR2 & 0x1) && !(i8259IMR2 & 0x1)) {
+    else if((i8259IRR2 & 0x1) && !(i8259IMR2 & 0x1)) {
 			if(_f.IF) {
         CPUPins |= DoIRQ;
         ExtIRQNum=0x70;      // IRQ RTC
@@ -1139,14 +1139,12 @@ FFFF:000F                Top of 8086 / 88 address space*/
 					case 0x15:
 					case 0x16:
 					case 0x17:
-						// servirà //        GetMorePipe(_cs,_ip-1));
+  					GetPipe(_cs,_ip-1);
 						COMPUTE_RM
-								if(!(Pipe1 & 1)) {
+								if(!(Pipe1 & 1))
 									res1.b=GetValue(*theDs,op2.mem);
-									}
-								else {
+								else
 									res1.x=GetShortValue(*theDs,op2.mem);
-									}
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
 										if(!(Pipe1 & 1)) {
@@ -1159,40 +1157,35 @@ FFFF:000F                Top of 8086 / 88 address space*/
 											}
 										break;
 									case 1:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b & ~(1 << (_cl & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x & ~(1 << (_cl & 0xf));
-											}
 										break;
 									case 2:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b | (1 << (_cl & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x | (1 << (_cl & 0xf));
-											}
 										break;
 									case 3:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b ^ (1 << (_cl & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x ^ (1 << (_cl & 0xf));
-											}
 										break;
 									}
-								if(!(Pipe1 & 1)) {
+								if(!(Pipe1 & 1))
 									PutValue(*theDs,op2.mem,res3.b);
-									}
-								else {
+								else
 									PutShortValue(*theDs,op2.mem,res3.x);
-									}
 								break;
 							case 3:
 								GET_REGISTER_8_16_2
-								res1.b=*op2.reg8;
+								if(!(Pipe1 & 1))
+									res1.b=*op2.reg8;
+								else
+									res1.x=*op2.reg16;
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
 										if(!(Pipe1 & 1)) {
@@ -1205,36 +1198,28 @@ FFFF:000F                Top of 8086 / 88 address space*/
 											}
 										break;
 									case 1:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b & ~(1 << (_cl & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x & ~(1 << (_cl & 0xf));
-											}
 										break;
 									case 2:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b | (1 << (_cl & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x | (1 << (_cl & 0xf));
-											}
 										break;
 									case 3:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b ^ (1 << (_cl & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x ^ (1 << (_cl & 0xf));
-											}
 										break;
 									}
-								if(!(Pipe1 & 1)) {
+								if(!(Pipe1 & 1))
 	                *op2.reg8=res3.b;
-									}
-								else {
+								else
 	                *op2.reg16=res3.x;
-									}
 								break;
 							}
             break;
@@ -1246,15 +1231,13 @@ FFFF:000F                Top of 8086 / 88 address space*/
 					case 0x1d:
 					case 0x1e:
 					case 0x1f:
-						// servirà //        GetMorePipe(_cs,_ip-1));
-
+  					GetMorePipe(_cs,_ip-1);
 						COMPUTE_RM
-								if(!(Pipe1 & 1)) {
+								if(!(Pipe1 & 1))
 									res1.b=GetValue(*theDs,op2.mem);
-									}
-								else {
+								else
 									res1.x=GetShortValue(*theDs,op2.mem);
-									}
+								_ip++;
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
 										if(!(Pipe1 & 1)) {
@@ -1267,40 +1250,36 @@ FFFF:000F                Top of 8086 / 88 address space*/
 											}
 										break;
 									case 1:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b & ~(1 << (Pipe2.b.u & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x & ~(1 << (Pipe2.b.u & 0xf));
-											}
 										break;
 									case 2:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b | (1 << (Pipe2.b.u & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x | (1 << (Pipe2.b.u & 0xf));
-											}
 										break;
 									case 3:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b ^ (1 << (Pipe2.b.u & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x ^ (1 << (Pipe2.b.u & 0xf));
-											}
 										break;
 									}
-								if(!(Pipe1 & 1)) {
+								if(!(Pipe1 & 1))
 									PutValue(*theDs,op2.mem,res3.b);
-									}
-								else {
+								else
 									PutShortValue(*theDs,op2.mem,res3.x);
-									}
 								break;
 							case 3:
 								GET_REGISTER_8_16_2
-								res1.b=*op2.reg8;
+								if(!(Pipe1 & 1))
+									res1.b=*op2.reg8;
+								else
+									res1.x=*op2.reg16;
+								_ip++;
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
 										if(!(Pipe1 & 1)) {
@@ -1313,36 +1292,28 @@ FFFF:000F                Top of 8086 / 88 address space*/
 											}
 										break;
 									case 1:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b & ~(1 << (Pipe2.b.u & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x & ~(1 << (Pipe2.b.u & 0xf));
-											}
 										break;
 									case 2:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b | (1 << (Pipe2.b.u & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x | (1 << (Pipe2.b.u & 0xf));
-											}
 										break;
 									case 3:
-										if(!(Pipe1 & 1)) {
+										if(!(Pipe1 & 1))
 											res3.b= res1.b ^ (1 << (Pipe2.b.u & 0x7));
-											}
-										else {
+										else
 											res3.x= res1.x ^ (1 << (Pipe2.b.u & 0xf));
-											}
 										break;
 									}
-								if(!(Pipe1 & 1)) {
+								if(!(Pipe1 & 1))
 	                *op2.reg8=res3.b;
-									}
-								else {
+								else
 	                *op2.reg16=res3.x;
-									}
 								break;
 							}
             break;
@@ -1440,75 +1411,137 @@ FFFF:000F                Top of 8086 / 88 address space*/
             break;
 					case 0x28:					// ROL4
 					case 0x2a:					// ROR4
-  					_ip++;
+  					GetPipe(_cs,_ip-1);
 						COMPUTE_RM
 								res1.b=GetValue(*theDs,op2.mem);
-								res2.b=*op1.reg8;
-								if(Pipe2.b.l == 0x28) {
-                  res2.b = (_al << 4) | ((res1.b >> 4) & 0x000F) ;
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=res2.b;
+								res2.b=_al;
+								if(Pipe1 == 0x28) {
+                  res2.b = (_al << 4) | (res1.b >> 4);
+                  res3.b = (res1.b << 4) | (_al & 0x0f); 
 									}
 								else {
-                  res2.b = (res1.b >> 4) | ((_al << 4) & 0x00F0);
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=(_al & 0xFF00) | (res2.b & 0x00FF);
+                  res2.b = (res1.b & 0xf) | (res1.b & 0xf0) /*da test (_al & 0xf0)*/; 
+                  res3.b = (res1.b >> 4) | (_al << 4);
 									}
+                _al=res2.b;
 								PutValue(*theDs,op2.mem,res3.b);
-							break;
-						case 3:
-							GET_REGISTER_8_16_2
+								break;
+							case 3:
+								GET_REGISTER_8_16_2
 								res1.b=*op2.reg8;
-								res2.b=*op1.reg8;
-								if(Pipe2.b.l == 0x28) {
-                  res2.b = (_al << 4) | ((res1.b >> 4) & 0x000F);
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=res2.b;
+								res2.b=_al;
+								// secondo i test, a diff. del doc, se AL è operando (idiota) NON viene ruotato del tutto! (ovviamente il coglio-coglio lo fa...
+								if(Pipe1 == 0x28) {
+                  res2.b = (_al << 4) | (res1.b >> 4);
+                  res3.b = (res1.b << 4) | ((op2.reg8 != &_al ? _al : res2.b)  & 0xf); 
 									}
 								else {
-                  res2.b = (_al << 4) | ((res1.b >> 4) & 0x000F);
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=res2.b;
+									res2.b = (res1.b & 0xf) | (res1.b & 0xf0) /*da test (_al & 0xf0)*/; 
+									res3.b = (res2.b >> 4) | (_al << 4);
 									}
-                *op2.reg8=res3.b;
+	              _al=res2.b;
+		            *op2.reg8=res3.b;
 								break;
 							}
             break;
-					case 0x31:					// INS
+					case 0x31:					// INS BINS
+					case 0x39:
 						{BYTE j1,j2;
-						if(!theDs)
+						uint32_t mask;
+  					GetPipe(_cs,_ip-1);
+/*						if(segOverride) {		// QUA NO! (STRAPORCICRISTI si può fare override ma il manuale dice di no (v.test
+							theDs=&segs.r[segOverride-1].x;
+							segOverride=0;
+							}
+						else*/
 							theDs=&_es;
-						res1.b=GetValue(*theDs,_di);
-						res3.x=_ax;
+					  op1.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
+						j1=*op1.reg8 & 0xf;
+						res1.d=(uint32_t)_ax << j1;
+						res2.d=MAKELONG(GetShortValue(*theDs,_di),GetShortValue(*theDs,_di+2));
+						// Pipe2.mod=0b11 verificare e dare errore
+						if(Pipe1 & 8) {
+							j2=Pipe2.b.h & 0xf;
+							_ip+=2;
+							}
+						else {
+							op2.reg8= Pipe2.reg & 0x4 ? &regs.r[Pipe2.reg & 0x3].b.h : &regs.r[Pipe2.reg & 0x3].b.l;
+							j2=*op2.reg8 & 0xf;
+							_ip++;
+							}
+						*op1.reg8 += j2+1;
+						mask= 1L << j1;
+						if(j2) {
+							while(j2--) {
+								uint32_t oldmask=mask;
+								mask <<= 1;
+								mask |= oldmask;
+								}
+							}
 
-						PutShortValue(*theDs,_di,res3.x);
+						// patch se al o ah sono usati, direi ovvia cazzata!
+//						res1.d=(DWORD)_ax << j1;
+
+
+						res1.d &= mask;
+						res3.d=res2.d & ~mask;
+						res3.d |= res1.d;
+
+						PutShortValue(_es,_di,res3.x);
+						PutShortValue(_es,_di+2,HIWORD(res3.d));
+						if(*op1.reg8 > 15) {
+							*op1.reg8 &= 15;
+							_di+=2;						// sempre ++ ??
+							}
+						// flag a cazzo da test, solito; manuale dice nulla
 						}
             break;
-					case 0x39:					// INS
+					case 0x33:					// EXT BEXT
+					case 0x3b:
 						{BYTE j1,j2;
-						if(!theDs)
-							theDs=&_es;
-						j2=Pipe2.b.u & 0xf;			// VERIFICARE DOV'è IMM8!!
-						res3.x=_ax;
+						uint32_t mask;
+  					GetPipe(_cs,_ip-1);
+						if(segOverride) {		// PORCICRISTI si può fare override ma il manuale dice di no (v.test
+							theDs=&segs.r[segOverride-1].x;
+							segOverride=0;
+							}
+						else
+							theDs=&_ds;
+					  op1.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
+						j1=*op1.reg8 & 0xf;
+						res1.d=MAKELONG(GetShortValue(*theDs,_si),GetShortValue(*theDs,_si+2));
+						// Pipe2.mod=0b11 verificare e dare errore
+						if(Pipe1 & 8) {
+							j2=Pipe2.b.h & 0xf;
+							_ip+=2;
+							}
+						else {
+							op2.reg8= Pipe2.reg & 0x4 ? &regs.r[Pipe2.reg & 0x3].b.h : &regs.r[Pipe2.reg & 0x3].b.l;
+							j2=*op2.reg8 & 0xf;
+							_ip++;
+							}
+						*op1.reg8 += j2+1;
+						mask= 1L << j1;
+						if(j2) {
+							while(j2--) {
+								uint32_t oldmask=mask;
+								mask <<= 1;
+								mask |= oldmask;
+								}
+							}
+						res1.d &= mask;
 
-						PutShortValue(*theDs,_di,res3.x);
+						_ax = res1.d >> j1;
+						if(!_ax)
+							i=1;
+						if(*op1.reg8 > 15) {
+							*op1.reg8 &= 15;
+							_si+=2;						// sempre ++ ??
+							}
+						// flag a cazzo da test, solito; manuale dice nulla
 						}
             break;
-					case 0x33:					// EXT
-						{BYTE j1,j2;
-						res1.x=GetShortValue(*theDs,_si);
-
-						_ax=res3.x;
-						}
-            break;
-					case 0x3b:					// EXT
-						{BYTE j1,j2;
-						j2=Pipe2.b.u & 0xf;			// VERIFICARE DOV'è IMM8!!
-						res1.x=GetShortValue(*theDs,_si);
-
-						_ax=res3.x;
-						}
-            break;
+            
 					case 0xff:					// BRKMM
 						// entra in modalità 8080!!
 						_f.MD=0;
@@ -2861,7 +2894,7 @@ aggFlagDecW:
 		      inEI++;
 					}
 				else {
-			    Pipe1=GetPipe(_cs,_ip++));
+			    Pipe1=GetPipe(_cs,_ip++);
 /*					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
 //					ma perché???
 #if defined(EXT_80386)
@@ -2878,7 +2911,7 @@ aggFlagDecW:
   				inEI++;		// forse ne fa uno di troppo alla fine, ma ok...
 					}
 				else {
-			    Pipe1=GetPipe(_cs,_ip++));
+			    Pipe1=GetPipe(_cs,_ip++);
 /*					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
 //					ma perché???
 #if defined(EXT_80386)
@@ -4227,7 +4260,7 @@ fix_flags:
         _sp+=Pipe2.x.l;
         break;
         
-#ifndef EXT_80186     // bah, così dicono..
+#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, così dicono..
 			case 0xc9:
 #endif
 			case 0xcb:
@@ -5432,7 +5465,7 @@ _lclose(spoolFile);
 
 									break;
 								case 6:       // PUSH 
-#ifdef UNDOCUMENTED_8086
+#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti è undocumented pure per V20 e credo anche 286...
 								case 7:
 #endif
 									PUSH_STACK(res1.x);
@@ -5498,7 +5531,7 @@ _lclose(spoolFile);
 									_cs=*op2.reg16+2;
 									break;
 								case 6:       // PUSH 
-#ifdef UNDOCUMENTED_8086
+#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti è undocumented pure per V20 e credo anche 286...
 								case 7:
 #endif
 #ifdef EXT_80286
@@ -5589,7 +5622,7 @@ skipnmi:
 				PUSH_STACK(_f.x);
 				PUSH_STACK(_cs);
 				PUSH_STACK(_ip);
-				_f.Trap=0; _f.IF=0;	_f.Aux=0;
+				_f.Trap=0; _f.IF=0;	
 				_ip=GetShortValue(0,/* (i8259ICW[1] << 11) | */ (uint16_t)ExtIRQNum /*bus dati*/ *4);   // https://sw0rdm4n.wordpress.com/2014/09/09/old-knowledge-of-x86-architecture-8086-interrupt-mechanism/
 				_cs=GetShortValue(0,((uint16_t)ExtIRQNum /*bus dati*/ *4) +2);
         ExtIRQNum=0;

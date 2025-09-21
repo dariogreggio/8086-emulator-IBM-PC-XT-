@@ -6,7 +6,7 @@
 //per LSL ecc https://stackoverflow.com/questions/1712744/left-shift-overflow-on-68k-x86
 
 //v. per Ovf metodo usato su 68000 senza byte alto... provare
-// la cosa di inEI... chiss‡... e anche in Z80; perÚ SERVE su segment override!! (ovvio; dice anche che i primi 8088 avevano questo bug, vedi CPU TEST in BIOS https://cosmodoc.org/topics/processor-detection/ )  
+// la cosa di inEI... chiss√†... e anche in Z80; per√≤ SERVE su segment override!! (ovvio; dice anche che i primi 8088 avevano questo bug, vedi CPU TEST in BIOS https://cosmodoc.org/topics/processor-detection/ )  
 
 
 #include <stdio.h>
@@ -97,7 +97,7 @@ extern uint8_t LCDdirty;
 	0-otherwise*/
 
 /*// da Makushi 68000 o come cazzo si chiama :D  + vari PD...
-// res2 Ë Source e res1 Ë Dest ossia quindi res3=Result  OCCHIO QUA*/
+// res2 √® Source e res1 √® Dest ossia quindi res3=Result  OCCHIO QUA*/
 	// https://github.com/kxkx5150/CPU-8086-cpp/blob/main/src/Intel8086.cpp
 	// https://github.com/zsteve/hard86/blob/master/src/emulator/emulator_engine/src/flags.c#L105
 #define CARRY_ADD_8()  (!!(((res2.b & res1.b) | (~res3.b & (res2.b | res1.b))) & 0x80))		// ((S & D) | (~R & (S | D)))
@@ -186,7 +186,7 @@ for ADC it's set_flag(F_AUX_CARRY, (p1&0xF)+(p2&0xF)+flag(F_CARRY) >= 0x10);
 
 
 int Emulate(int mode) {
-  // in termini di memoria usata, tenere locali le variabili Ë molto meglio...
+  // in termini di memoria usata, tenere locali le variabili √® molto meglio...
 #define _ah regs.r[0].b.h
 #define _al regs.r[0].b.l
 #define _ch regs.r[1].b.h
@@ -254,7 +254,7 @@ int Emulate(int mode) {
   register union OPERAND op1,op2;
   register union RESULT res1,res2,res3;
   BYTE immofs;		// usato per dato #imm che segue indirizzamento 0..2 (NON registro)
-		// Ë collegato a GetMorePipe, inoltre
+		// √® collegato a GetMorePipe, inoltre
   register uint16_t i;
 	int c=0;
   uint8_t screenDivider=0;
@@ -332,7 +332,7 @@ int Emulate(int mode) {
 #endif
         }
       else {
-        VICRaster+=32;					 	 // pi˘ veloce qua, 7 passate
+        VICRaster+=32;					 	 // pi√π veloce qua, 7 passate
         if(VICRaster >= MAX_RASTER) {		 // 
           VICRaster=MIN_RASTER; 
           LED2 ^= 1;      // VIDIRQ attivato come flag qua, ogni 10mS => 60mS qua
@@ -358,7 +358,7 @@ int Emulate(int mode) {
     if((i8259IRR & 0x1) && !(i8259IMR & 0x1)) {
 			if(_f.IF) {			// www.brokenthorn.com/Resources/OSDevPic.html  mah, controintuitivo!
         CPUPins |= DoIRQ;
-  // [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e cosÏ fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
+  // [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e cos√¨ fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
         ExtIRQNum=8;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
         i8259ISR |= 1;	i8259IRR &= ~1;
         if(i8259ICW[3] & 0b00000010)		// AutoEOI
@@ -433,7 +433,7 @@ int Emulate(int mode) {
       _cs=0xffff;
 			_f.unused3_=7;		// v. POPF / fix_flags sotto
 #ifdef EXT_NECV20
-			_f.MD=1;					// cosÏ al boot 
+			_f.MD=1;					// cos√¨ al boot 
 #else
 			_f.unused4=1;			// v. POPF / fix_flags sotto
 #endif
@@ -453,8 +453,8 @@ int Emulate(int mode) {
 			}
 
 rallenta:
-		if(++timerDivider >= 4          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda Ë indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
-      // OCCHIO con 3 non va pi˘ floppy dopo aver ritarato i timer!! 26/8/25
+		if(++timerDivider >= 4          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda √® indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
+      // OCCHIO con 3 non va pi√π floppy dopo aver ritarato i timer!! 26/8/25
       // con 4 va, con mouse pure (chemmerda) con 3 o meno no...
       // Ma in effetti se consideriamo che ogni istruzione impiega da 3-4 a 100 cicli, diciamo max 20 http://aturing.umcs.maine.edu/~meadow/courses/cos335/80x86-Integer-Instruction-Set-Clocks.pdf
       // e passiamo di qua dopo ognuna, allora il divisore quasi non ha senso... anzi andrebbe invertito!
@@ -796,7 +796,7 @@ rallenta:
 				if(!inRepStep)			// se era stato usato REP con istruzione non-stringa...
           goto fineRep;
         if(--_cx && _f.Zero) {
-          _ip -= inRepStep;      // v. bug 8088!! cosÏ dovrebbe andare.. 22/7/24
+          _ip -= inRepStep;      // v. bug 8088!! cos√¨ dovrebbe andare.. 22/7/24
 					inEI++;
 					}
         else
@@ -867,7 +867,7 @@ fineRep:
     
 
     
-     LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte pi˘ veloci
+     LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte pi√π veloci
                     // 500-1uS 22/7/24 con O2! [.9-2uS 16/7/24 senza ottimizzazioni (con O1 si pianta emulatore...
      // 2025 dopo aggiunte varie, specie seg:ofs, siamo sui 1-1.5uS con O2
      
@@ -1008,7 +1008,7 @@ aggParity:
         par ^= res3.b;
         res3.b= par >> 4;
         par ^= res3.b;
-        _f.Parity=par & 1 ? 0 : 1;		// invertito qua pd £$%&/
+        _f.Parity=par & 1 ? 0 : 1;		// invertito qua pd ¬£$%&/
         }
 				break;
 
@@ -1029,7 +1029,7 @@ aggFlagAWA:    // aux, zero, sign, parity
 aggFlagWSZP:    // zero, sign, parity
 				_f.Zero=ZERO_16();
 				_f.Sign=SIGN_16();
-//        parn= par >> 8;   // no! dice che cmq Ë solo sul byte basso https://stackoverflow.com/questions/29292455/parity-of-a-number-assembly-8086
+//        parn= par >> 8;   // no! dice che cmq √® solo sul byte basso https://stackoverflow.com/questions/29292455/parity-of-a-number-assembly-8086
 //        par ^= parn;
 				goto aggParity;
 				break;
@@ -1059,7 +1059,7 @@ aggFlagWSZP:    // zero, sign, parity
 #ifdef RAM_DOS 
           case 0x2:      // read-disk, pseudo-load MBR :)
             switch(_al) {
-              case 0:   // (pseudo) settori :) ma Ë in CH/CL...
+              case 0:   // (pseudo) settori :) ma √® in CH/CL...
                 memcpy(&ram_seg[_bx /*0x007c00*/],MBR, 512 /*sizeof(MBR)*/);
                 _ah=0;
                 _al=1  /*sizeof(MBR)/512*/;
@@ -1241,7 +1241,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (Pipe2.b.u & 0x7));			// VERIFICARE DOV'Ë IMM8!!
+											res3.b= res1.b & (1 << (Pipe2.b.u & 0x7));			// VERIFICARE DOV'√® IMM8!!
 											goto aggFlagBZC;
 											}
 										else {
@@ -1430,7 +1430,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 								GET_REGISTER_8_16_2
 								res1.b=*op2.reg8;
 								res2.b=_al;
-								// secondo i test, a diff. del doc, se AL Ë operando (idiota) NON viene ruotato del tutto! (ovviamente il coglio-coglio lo fa...
+								// secondo i test, a diff. del doc, se AL √® operando (idiota) NON viene ruotato del tutto! (ovviamente il coglio-coglio lo fa...
 								if(Pipe1 == 0x28) {
                   res2.b = (_al << 4) | (res1.b >> 4);
                   res3.b = (res1.b << 4) | ((op2.reg8 != &_al ? _al : res2.b)  & 0xf); 
@@ -1449,7 +1449,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 						{BYTE j1,j2;
 						uint32_t mask;
   					GetPipe(_cs,_ip-1);
-/*						if(segOverride) {		// QUA NO! (STRAPORCICRISTI si puÚ fare override ma il manuale dice di no (v.test
+/*						if(segOverride) {		// QUA NO! (STRAPORCICRISTI si pu√≤ fare override ma il manuale dice di no (v.test
 							theDs=&segs.r[segOverride-1].x;
 							segOverride=0;
 							}
@@ -1501,7 +1501,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 						{BYTE j1,j2;
 						uint32_t mask;
   					GetPipe(_cs,_ip-1);
-						if(segOverride) {		// PORCICRISTI si puÚ fare override ma il manuale dice di no (v.test
+						if(segOverride) {		// PORCICRISTI si pu√≤ fare override ma il manuale dice di no (v.test
 							theDs=&segs.r[segOverride-1].x;
 							segOverride=0;
 							}
@@ -1543,7 +1543,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
             break;
             
 					case 0xff:					// BRKMM
-						// entra in modalit‡ 8080!!
+						// entra in modalit√† 8080!!
 						_f.MD=0;
             break;
 #endif
@@ -1821,7 +1821,7 @@ exception286:
         _ip+=2;
         */
 #ifdef EXT_80386
-        			// e se segue b4 b5 Ë fs o gs!
+        			// e se segue b4 b5 √® fs o gs!
 #define WORKING_REG regs.r[(Pipe2.reg].x      // CONTROLLARE
 				i=GetShortValue(Pipe2.xm.w);
 				WORKING_REG=GetShortValue(i);
@@ -2859,7 +2859,7 @@ aggFlagDecW:
 							}
             break;
           case 3:
-// non c'Ë direi						GET_REGISTER_8_16_2
+// non c'√® direi						GET_REGISTER_8_16_2
 						goto unknown_istr;
 						break;
 						}
@@ -2896,7 +2896,7 @@ aggFlagDecW:
 				else {
 			    Pipe1=GetPipe(_cs,_ip++);
 /*					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
-//					ma perchÈ???
+//					ma perch√©???
 #if defined(EXT_80386)
 						|| Pipe1==0x64 || Pipe1==0x65
 #endif
@@ -2913,7 +2913,7 @@ aggFlagDecW:
 				else {
 			    Pipe1=GetPipe(_cs,_ip++);
 /*					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
-//					ma perchÈ???
+//					ma perch√©???
 #if defined(EXT_80386)
 						|| Pipe1==0x64 || Pipe1==0x65
 #endif
@@ -3330,11 +3330,11 @@ jmp_short:
 
 			case 0x80:				// ADD ecc rm8, immediate8
 			case 0x81:				// ADD ecc rm16, immediate16
-			case 0x82:				// undefined/nop... (ADD ecc rm8, immediate8  con sign-extend   LO USA EDLIN!@#£$%
+			case 0x82:				// undefined/nop... (ADD ecc rm8, immediate8  con sign-extend   LO USA EDLIN!@#¬£$%
 			case 0x83:				// ADD ecc rm16, immediate8 con sign-extend
 			  if(Pipe2.mod<3)
 					GetMorePipe(_cs,_ip-1);   // 
-				if(Pipe1 < 0x83) 			// vuol dire che l'operando Ë 8bit ma esteso a 16
+				if(Pipe1 < 0x83) 			// vuol dire che l'operando √® 8bit ma esteso a 16
           _ip++;
         
 				COMPUTE_RM_OFS
@@ -3801,11 +3801,11 @@ fix_flags:
 #ifdef EXT_80286
 //				_f.unused3_=0; _f.unused4=0;			// beh.. 
 #else
-				_f.unused3_=7 /*1 o 3=386*/; 		// cosÏ viene visto come 8086 o Nec, azzerando unused4 e 3_ 80286 (logico)
+				_f.unused3_=7 /*1 o 3=386*/; 		// cos√¨ viene visto come 8086 o Nec, azzerando unused4 e 3_ 80286 (logico)
 #ifdef EXT_NECV20
 				_f.MD=1;		// mah direi cmq... dato che siamo in modo 8086/native!
 #else
-				_f.unused4=1 /*0=386*/;			// cosÏ viene visto come 8086 o Nec, azzerando unused4 e 3_ 80286 (logico)
+				_f.unused4=1 /*0=386*/;			// cos√¨ viene visto come 8086 o Nec, azzerando unused4 e 3_ 80286 (logico)
 #endif
 #endif
 				break;
@@ -4022,7 +4022,7 @@ fix_flags:
 				break;
 
 			case 0xae:      // SCASB; NO OVERRIDE qua!  http://www.nacad.ufrj.br/online/intel/vtune/users_guide/mergedProjects/analyzer_ec/mergedProjects/reference_olh/mergedProjects/instructions/instruct32_hh/vc285.htm
-        // perÚ uno puÚ infilarci il prefisso cmq, quindi v. inRep
+        // per√≤ uno pu√≤ infilarci il prefisso cmq, quindi v. inRep
         if(inRep) {
 //          inRep=3;
           inRepStep=segOverride ? 2 : 1;
@@ -4251,7 +4251,7 @@ fix_flags:
         break;
 #endif
         
-#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, cosÏ dicono..
+#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, cos√¨ dicono..
 			case 0xc8:
 #endif
 			case 0xca:      // RETF
@@ -4260,7 +4260,7 @@ fix_flags:
         _sp+=Pipe2.x.l;
         break;
         
-#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, cosÏ dicono..
+#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, cos√¨ dicono..
 			case 0xc9:
 #endif
 			case 0xcb:
@@ -4277,7 +4277,7 @@ Return32:
 			case 0xcd:
 
 #ifdef EXT_80286
-    /*IF ((vector_number ´ 2) + 3) is not within IDT limit
+    /*IF ((vector_number ¬´ 2) + 3) is not within IDT limit
         THEN #GP; FI; 
     IF stack not large enough for a 6-byte return information
         THEN #SS; FI;*/
@@ -4316,7 +4316,7 @@ do_irq:
 #ifdef EXT_80286
             }
           else {
-// tecnicamente Ë un eccezione, non trap...            _f.Trap=1;
+// tecnicamente √® un eccezione, non trap...            _f.Trap=1;
             }
 #endif
           }
@@ -4336,7 +4336,7 @@ do_irq:
           if(_sp>=6) {		// fare controllo
             }
           else {
-// tecnicamente Ë un eccezione, non trap...            _f.Trap=1;
+// tecnicamente √® un eccezione, non trap...            _f.Trap=1;
             }
 					;
 				POP_STACK(_ip);
@@ -4369,7 +4369,7 @@ do_rcl8:
 					GET_MEM_OPER
 						res1.b=res3.b=GetValue(*theDs,op2.mem);
 						ROTATE_SHIFT8
-#ifdef UNDOCUMENTED_8086			// andrebbe anche messo nella macro ROTATE ma non si puÚ...
+#ifdef UNDOCUMENTED_8086			// andrebbe anche messo nella macro ROTATE ma non si pu√≤...
 						switch(Pipe2.reg) {
 							case 6:
 								if(i || _cl) {			// SETMO SETMOC https://www.os2museum.com/wp/undocumented-8086-opcodes-part-i/
@@ -4496,7 +4496,7 @@ do_rcl16:
 // boh? no solite cazzate				Pipe2.b.l=10; // dice...
 #endif
 				if(Pipe2.b.l) {
-					_ah=_al / Pipe2.b.l;    // 10 fisso in teoria, ma si puÚ usare genericamente come base per la conversione...
+					_ah=_al / Pipe2.b.l;    // 10 fisso in teoria, ma si pu√≤ usare genericamente come base per la conversione...
 					_al=_al % Pipe2.b.l;    //
 					}
 				else {
@@ -4581,11 +4581,11 @@ do_rcl16:
         goto aggFlagBSZP;			// 
 				break;
         
-			case 0xd6:      // dice che non Ë documentata (su 8088)...
+			case 0xd6:      // dice che non √® documentata (su 8088)...
 #ifndef EXT_NECV20
 				_al=_f.Carry ? 0xff : 0;
 				break;
-#endif								// altrimenti Ë come D7!
+#endif								// altrimenti √® come D7!
 
 			case 0xd7:      // XLAT
         if(segOverride) {
@@ -4887,7 +4887,7 @@ res3.x=_ax;
 				_ax=InShortValue(_dx);
 
 #ifdef EXT_NECV20
-				// dice che ED FD Ë RETEM, ritorno da modo 8080...
+				// dice che ED FD √® RETEM, ritorno da modo 8080...
 //			_f.MD=1;
 				// e ED ED CALLN
 #endif
@@ -4921,7 +4921,7 @@ Trap:
 				else {
 /*			    Pipe1=GetPipe(_cs,_ip++));
 					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
-					ma perchÈ???
+					ma perch√©???
 #if defined(EXT_80386)
 						|| Pipe1==0x64 || Pipe1==0x65
 #endif
@@ -4938,7 +4938,7 @@ Trap:
 				else {
 /*			    Pipe1=GetPipe(_cs,_ip++));
 					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
-					ma perchÈ???
+					ma perch√©???
 #if defined(EXT_80386)
 						|| Pipe1==0x64 || Pipe1==0x65
 #endif
@@ -4986,7 +4986,7 @@ Trap:
                   op1.reg8= &_al;
                   res1.b=*op1.reg8;
 									res3.x = ((uint16_t)res1.b)*res2.b;
-									_ax=res3.x;			// non Ë bello ma...		
+									_ax=res3.x;			// non √® bello ma...		
 									_f.Carry=_f.Ovf= !!_ah;
 #ifdef EXT_NECV20
 //									_f.Zero=ZERO_16();     // (ricontrollare 2023 per moltiplicazione
@@ -5004,7 +5004,7 @@ Trap:
                   op1.reg8= &_al;
                   res1.b=*op1.reg8;
 									res3.x = ((int16_t)(int8_t)res1.b)*(int8_t)res2.b;
-									_ax=res3.x;			// (non Ë bello ma...		
+									_ax=res3.x;			// (non √® bello ma...		
 									_f.Carry=_f.Ovf= (((res3.x & 0xff80) == 0xff80)  ||  
 										((res3.x & 0xff80) == 0))  ? 0 : 1;
 #ifdef EXT_NECV20
@@ -5029,7 +5029,7 @@ Trap:
 #endif
 											goto divide0; //divide error
 											}
-										_ah = _ax % res2.b;			// non Ë bello ma...
+										_ah = _ax % res2.b;			// non √® bello ma...
 										_al = res3.b;
 #ifdef UNDOCUMENTED_8086
 										_f.Parity=0;
@@ -5088,7 +5088,7 @@ divide0:
                   res1.x=*op1.reg16;
 									res3.d = ((uint32_t)res1.x)*res2.x;
 									_ax = LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non Ë bello ma...	???perchÈ?
+									_dx=HIWORD(res3.d);			// non √® bello ma...	???perch√©?
 									_f.Carry=_f.Ovf= !!_dx;
 #ifdef EXT_NECV20
 //									_f.Zero=ZERO_32();     // (ricontrollare 2023 per moltiplicazione
@@ -5107,7 +5107,7 @@ divide0:
                   res1.x=*op1.reg16;
 									res3.d = ((int32_t)(int16_t)res1.x)*(int16_t)res2.x;
 									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non Ë bello ma...	???perchÈ?
+									_dx=HIWORD(res3.d);			// non √® bello ma...	???perch√©?
 									_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
 										((res3.d & 0xffff8000) == 0))  ? 0 : 1;
 
@@ -5127,7 +5127,7 @@ divide0:
 								case 6:       // DIV16
 									if(res2.x) {
 										res3.d = ((uint32_t)MAKELONG(_ax,_dx)) / res2.x;
-										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non Ë bello ma...
+										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non √® bello ma...
 			              _ax = res3.x;
 										if(res3.d > 0xFFFF) 
 											goto divide0; //divide error
@@ -5221,7 +5221,7 @@ divide0:
 								case 6:       // DIV8
 									if(res2.b) {
 										res3.x = _ax / res2.b;
-										_ah = _ax % res2.b;			// non Ë bello ma...
+										_ah = _ax % res2.b;			// non √® bello ma...
 										_al = res3.b;
 										if(res3.x > 0xFF) 
 											goto divide0; //divide error
@@ -5295,7 +5295,7 @@ divide0:
                   res1.x=*op1.reg16;
 									res3.d = ((uint32_t)res1.x)*res2.x;
 									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non Ë bello ma...	???perchÈ?
+									_dx=HIWORD(res3.d);			// non √® bello ma...	???perch√©?
 									_f.Carry=_f.Ovf= !!_dx;
 #ifdef EXT_NECV20
 //									_f.Zero=ZERO_32();     // (ricontrollare 2023 per moltiplicazione
@@ -5314,7 +5314,7 @@ divide0:
                   res1.x=*op1.reg16;
 									res3.d = ((int32_t)(int16_t)res1.x)*(int16_t)res2.x;
 									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non Ë bello ma...	???perchÈ?
+									_dx=HIWORD(res3.d);			// non √® bello ma...	???perch√©?
 									_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
 										((res3.d & 0xffff8000) == 0))  ? 0 : 1;
 #ifdef EXT_NECV20
@@ -5333,7 +5333,7 @@ divide0:
 								case 6:       // DIV16
 									if(res2.x) {
 										res3.d = ((uint32_t)MAKELONG(_ax,_dx)) / res2.x;
-										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non Ë bello ma...
+										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non √® bello ma...
 										_ax = res3.x;
 										if(res3.d > 0xFFFF) 
 											goto divide0; //divide error
@@ -5465,7 +5465,7 @@ _lclose(spoolFile);
 
 									break;
 								case 6:       // PUSH 
-#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti Ë undocumented pure per V20 e credo anche 286...
+#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti √® undocumented pure per V20 e credo anche 286...
 								case 7:
 #endif
 									PUSH_STACK(res1.x);
@@ -5520,18 +5520,18 @@ _lclose(spoolFile);
 								case 3:			// CALL FAR DWORD32 PTR
 									PUSH_STACK(_cs);
 									PUSH_STACK((_ip   /*+2*/));
-									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'Ë
+									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'√®
 									_cs=*op2.reg16+2;
 									break;
 								case 4:       // JMP DWORD PTR jmp [100]
 									_ip=res1.x;
 									break;
 								case 5:       // JMP FAR DWORD PTR
-									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'Ë
+									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'√®
 									_cs=*op2.reg16+2;
 									break;
 								case 6:       // PUSH 
-#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti Ë undocumented pure per V20 e credo anche 286...
+#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti √® undocumented pure per V20 e credo anche 286...
 								case 7:
 #endif
 #ifdef EXT_80286
@@ -5634,7 +5634,7 @@ skipirq:
     if(inEI)
       inEI--;
 		if(inLock)
-			inLock--;			// cosÏ al secondo giro si pulisce MA OCCHIO a REP ecc
+			inLock--;			// cos√¨ al secondo giro si pulisce MA OCCHIO a REP ecc
 #ifdef EXT_80386
 		if(sizeOverride)
       sizeOverride--;

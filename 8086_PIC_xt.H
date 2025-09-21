@@ -94,7 +94,7 @@
 // AH NO, succede con alimentazione USB! con il PICKit no... e cmq non prende il click del touch, quindi ci deve essere qualche altro errore
 
 
-#define CPU_CLOCK_DIVIDER 500000L			// così va più o meno come il PIC, su PC greggiod
+#define CPU_CLOCK_DIVIDER 500000L			// cosÃ¬ va piÃ¹ o meno come il PIC, su PC greggiod
 #define RAM_SIZE 0x74000L
 #define RAM_START 0L
 #define ROM_SIZE 8192				// BIOS
@@ -110,7 +110,7 @@ extern const uint8_t IBMBASIC[];
 //extern const uint8_t iosys[];
 //extern const uint8_t commandcom[];
     
-#define FCY 205000000ul    //Oscillator frequency; ricontrollato con baud rate, pare giusto così!
+#define FCY 205000000ul    //Oscillator frequency; ricontrollato con baud rate, pare giusto cosÃ¬!
 #define FOSC 8000000ul
 
 #define CPU_CLOCK_HZ             (FCY)    // CPU Clock Speed in Hz
@@ -489,7 +489,7 @@ extern volatile BYTE keysFeedPtr;
 				res3.b <<= 1;\
 				}\
 			if(i==1)\
-				_f.Ovf=(res3.b ^ res1.b) & 0x80 ? 1 : 0;		/* Ovf=0 se MSB uscente è = MSB entrante / il segno è preservato (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+				_f.Ovf=(res3.b ^ res1.b) & 0x80 ? 1 : 0;		/* Ovf=0 se MSB uscente Ã¨ = MSB entrante / il segno Ã¨ preservato (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
 			break;\
 		case 5:       /* SHR*/\
 			while(res2.b--) {\
@@ -561,7 +561,7 @@ extern volatile BYTE keysFeedPtr;
 				res3.x <<= 1;\
 				}\
 			if(i==1)\
-				_f.Ovf=(res3.x ^ res1.x) & 0x8000 ? 1 : 0;		/* Ovf=0 se MSB uscente è = MSB entrante / il segno è preservato (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
+				_f.Ovf=(res3.x ^ res1.x) & 0x8000 ? 1 : 0;		/* Ovf=0 se MSB uscente Ã¨ = MSB entrante / il segno Ã¨ preservato (https://c9x.me/x86/html/file_module_x86_id_285.html*/\
 			break;\
 		case 5:       /* SHR*/\
 			while(res2.b--) {\
@@ -695,7 +695,7 @@ void LCDWrite(const char *);
 #define	SPISDOTris TRISGbits.TRISG8				// SDO
 #define	SPISCKTris TRISGbits.TRISG6				// SCK
 #define	SPICSTris  TRISGbits.TRISG7				// CS
-#define	LCDDCTris  TRISEbits.TRISE7				// DC che su questo LCD è "A0" per motivi ignoti
+#define	LCDDCTris  TRISEbits.TRISE7				// DC che su questo LCD Ã¨ "A0" per motivi ignoti
 //#define	LCDRSTTris TRISBbits.TRISB7
 	
 #define	m_SPISCKBit LATGbits.LATG6		// pin 
@@ -730,7 +730,7 @@ void LCDWrite(const char *);
 
 #define	m_LCDRDBit  LATBbits.LATB5 		// 
 #define	m_LCDWRBit  LATBbits.LATB4 		// per LCD parallelo ILI
-#define	m_LCDSTRBit LATBbits.LATB4        // non è chiaro... m_A3_out; in pratica è WRITE
+#define	m_LCDSTRBit LATBbits.LATB4        // non Ã¨ chiaro... m_A3_out; in pratica Ã¨ WRITE
 
 #define	m_LCDCSBit  LATBbits.LATB2      // anche touch
 

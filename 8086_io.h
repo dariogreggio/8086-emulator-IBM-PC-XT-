@@ -10,7 +10,7 @@
 #ifdef EXT_80286
 extern struct _EXCEPTION Exception86;
 extern union _DTR GDTR;
-extern union _DTR LDTR;
+extern union _DTR *LDTR;
 extern union MACHINE_STATUS_WORD _msw;
 extern union REGISTRO_F _f;
 #endif
@@ -27,12 +27,13 @@ enum DMA_CONTROL {		//
 	DMA_MODE				= 0xC0,
 
 	DMA_MODEVERIFY	= 0x00,
-	DMA_MODEREAD		= 0x01,
-	DMA_MODEWRITE		= 0x02,
+	DMA_MODEWRITE		= 0x01,
+	DMA_MODEREAD		= 0x02,
+
 	DMA_MODEDEMAND	= 0x00,
+	DMA_MODESINGLE	= 0x01,
+	DMA_MODEBLOCK		= 0x02,
 	DMA_MODECASCADE	= 0x03,
-	DMA_MODESINGLE	= 0x02,
-	DMA_MODEBLOCK		= 0x01,
 
 	DMA_MASK0				= 0x01,
 	DMA_MASK1				= 0x02,
@@ -66,8 +67,12 @@ enum PIT_OPERATION {		//
 	};
 
 enum PIT_FLAGS {		// 
-	PIT_OUTPUT								= 0x80,
-	PIT_RELOADED							= 0x40,
+	PIT_OUTPUT						= 0x80,
+	PIT_ACTIVE						= 0x40,
+	PIT_LATCHED						= 0x20,
+	PIT_LOHIBYTE					= 0x10,
+
+	PIT_BCD								= 0x01,
 	};
 
 enum PIC_OPERATION {		// 
@@ -146,7 +151,24 @@ enum FLOPPY_CONTROL {		//
 	FLOPPY_CONTROL_IRQ =			        0x08,
 	};
 enum FLOPPY_ERROR0 {		// 
-	FLOPPY_ERROR0_ =			        0x80,
+	FLOPPY_ERROR_INVALID =		        0x80,
+	FLOPPY_ERROR_ABNORMAL =		        0x40,
+	FLOPPY_ERROR_SEEKEND =		        0x20,
+	FLOPPY_ERROR_CHECK =							0x10,
+	FLOPPY_ERROR_NOTREADY =		        0x08,
+	};
+enum FLOPPY_ERROR1 {		// 
+	FLOPPY_ERROR_ENDCYLINDER =		    0x80,
+	FLOPPY_ERROR_CRC =								0x20,
+	FLOPPY_ERROR_OVERRUN =						0x10,
+	FLOPPY_ERROR_READONLY =						0x02,
+	FLOPPY_ERROR_NOMARK =							0x01,
+	};
+enum FLOPPY_ERROR2 {		// 
+	FLOPPY_ERROR_DATACRC =						0x20,
+	FLOPPY_ERROR_WRONGCYLINDER =			0x10,
+	FLOPPY_ERROR_BADCYLINDER =				0x02,
+	FLOPPY_ERROR_NOMARKDATA =					0x01,
 	};
 
 enum HD_COMMANDS_XT {

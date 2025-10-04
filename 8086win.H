@@ -16,9 +16,9 @@
 #include "resource.h"
 
 
-//#define EXT_80186
+//#define EXT_80186 1
 //#define EXT_NECV20
-#define EXT_80286 
+//#define EXT_80286 1
 #undef EXT_80386
 #undef EXT_80486
 //#define EXT_80x87
@@ -29,7 +29,7 @@
 #define EXT_80286
 #endif
 #if defined(EXT_80286)
-#define EXT_80186
+#define EXT_80186 1
 #endif
 #if !defined(EXT_80186) && !defined(EXT_NECV20)
 #define UNDOCUMENTED_8086			//GLORIOUSCOW	 per cose non standard ma verificate sul campo da lui :D
@@ -46,14 +46,16 @@
 #ifdef EXT_80286
 #define PCAT 1
 #endif
+
 //#define DEBUG_TESTSUITE 1
 
+//#define DEBUG_MEMORY 1
 //#define DEBUG_8237 1
-//#define DEBUG_8253 1
+#define DEBUG_8253 1
 //#define DEBUG_8259 1
 //#define DEBUG_RTC 1
 //#define DEBUG_KB 1
-#define DEBUG_FD 1
+//#define DEBUG_FD 1
 //#define DEBUG_HD 1
 //#define DEBUG_VGA 1
 
@@ -61,9 +63,9 @@
 //#pragma message("SPOSTARE questi "segmenti" >> 4 e togliere da GetShortValue ecc! ma OCCHIO")
 // (e mettere controllo su REPecc che se segue istruzione non-stringa SALTA
 
-//#ifndef PCAT		// non serve, ma v. CMOS
-#define ROM_HD_BASE 0xc8000			 //PRIMA di option/ROM_START2 !
-//#endif
+#ifndef PCAT		// non serve, ma v. CMOS
+#define ROM_HD_BASE 0xc8000			 //PRIMA di option/ROM_START2 !  nb causa un mucchio di riletture status floppy al boot, su glabios...
+#endif
 //#define RAM_DOS 1
 
 #define MS_DOS_VERSION 3			// (occhio INT_1E nei bios! per #settori, anche se non cambia nulla...
@@ -72,23 +74,32 @@
 #define MOUSE_TYPE 1			// 1=Microsoft, 2=Mouse System  (ora va anche su windows 2... solo dopo un po' si blocca (credo come Atari, problema di semaforo
 
 
+#ifdef DEBUG_TESTSUITE
+#define RAM_SIZE 1048576L	/*per test*/		//0xa0000L
+#define RAM_SIZE_EXTENDED 0
+#define CPU_CLOCK_DIVIDER 1000000L		// 
+#else
+#if !defined(EXT_80286)
 #define CPU_CLOCK_DIVIDER 1150000L		// circa 5x 4.77MHz con MIPS speed test, 28/7/25 ... non va ancora bene, anche se aumento non quadra (il risultante è 2 e non si può fare molto altro...
 // ma OCCHIO clock timer e DMA!
 			// (500000L			// così va più o meno come il PIC, su PC greggiod
-#ifdef DEBUG_TESTSUITE
-#define RAM_SIZE 1048576L	/*per test*/		//0xa0000L
-#else
-#if !defined(EXT_80286)
 #define RAM_SIZE 0xA0000  //1048576L  //0xa0000L prova per windows 3 VGA
 #define RAM_SIZE_EXTENDED 0
 #else
-#define RAM_SIZE 0xA0000L			//0x1000000L  //16MB
-#define RAM_SIZE_EXTENDED 0x160000L
+#define CPU_CLOCK_DIVIDER 1600000L		// circa 5x 4.77MHz con MIPS speed test, 28/7/25 ... non va ancora bene, anche se aumento non quadra (il risultante è 2 e non si può fare molto altro...
+// ma OCCHIO clock timer e DMA!
+#ifdef _DEBUG
+#define RAM_SIZE 0x70000L			//0x1000000L  //16MB
+#define RAM_SIZE_EXTENDED 0x10000L		//160000
+#else
+#define RAM_SIZE 0xa0000L			//0x1000000L  //16MB
+#define RAM_SIZE_EXTENDED 0x60000L		//160000
+#endif
 #endif
 #endif
 #define RAM_START 0L
 #ifdef PCAT  //EXT_80286
-#define ROM_SIZE 131072				// BIOS
+#define ROM_SIZE 65536				// BIOS
 #else
 #ifdef PC_IBM5160
 #define ROM_SIZE (32768/*+8192*/)				// BIOS
@@ -383,6 +394,29 @@ union RESULT {
 			} Access;
 		unsigned int reserved: 16;
 		};
+	struct SEGMENT_DESCRIPTOR_TSS {
+		unsigned short Limit: 16;
+		unsigned short Base: 16;
+		unsigned char BaseH: 8;
+		union {
+			uint8_t b;
+			struct {
+				union {
+					unsigned char Type:4;		// non va... si spostano in avanti i bit a seguire...
+					struct {
+						unsigned char Id0:1;		// fisso 1
+						unsigned char Busy:1;
+						unsigned char Id1:1;		// fisso 1
+						unsigned char Id2:1;		// fisso 0
+						};
+					};
+				unsigned char System: 1;		// 0=system/control segm descr
+				unsigned char DPL: 2;
+				unsigned char P: 1;
+				};
+			} Access;
+		unsigned int reserved: 16;
+		};
 	struct REGISTERS_SEG {
 		union SEGMENT_SELECTOR s;
 		struct SEGMENT_DESCRIPTOR d;
@@ -489,6 +523,11 @@ union SEGMENTS_DESCRIPTOR {
 #endif
 #ifdef EXT_80286
 	enum EXCEPTIONS {
+		EXCEPTION_DIVIDE0=0,			// divide by 0
+		EXCEPTION_TRACE=1,			// 
+		EXCEPTION_BPOINT=3,			// "breakpoint" non ci piace... 
+		EXCEPTION_OVERFLOW=4,
+		EXCEPTION_BOUND=5,
 		EXCEPTION_UD=6,			// invalid opcode
 		EXCEPTION_NOMATH=7,			// 
 		EXCEPTION_DOUBLEFAULT=8,			// double fault
@@ -508,12 +547,12 @@ struct _EXCEPTION {
   WORD addrH;
 	DWORD parm;
   union {
-    WORD w;
+    uint16_t w;
     struct {
-      unsigned short int ud:8;
-      unsigned short int fc:3;
-      unsigned short int in:1;
-      unsigned short int rw:1;
+      unsigned char ud:8;
+      unsigned char hascode:1;
+      unsigned char in:1;
+      unsigned char rw:1;
       };
     } descr;
   BYTE active;
@@ -821,6 +860,7 @@ BOOL PlayResource(LPSTR lpName,BOOL bStop);
 int Disassemble(const BYTE *src,HFILE f,char *dest,DWORD len,WORD pcaddr,struct REGISTERS_SEG  *pcaddrH,BYTE opzioni);
 BYTE to_bcd(BYTE n);
 BYTE from_bcd(BYTE n);
+char *strcpyhl(char *dest,const char *src);
 
 
 
@@ -834,7 +874,7 @@ https://post.bytes.com/forum/topic/c/176274-binary-constant-macros
 */
 #define HEX__(n) 0x##n##LU
 
-/* 8-bit conversion function */
+/* 8-bit conversion function */ /* OCCHIO a volte servono extra parentesi, specie in if() */
 #define B8__(x) ((x&0x0000000FLU)?1:0) \
 | ((x&0x000000F0LU)?2:0) \
 | ((x&0x00000F00LU)?4:0) \

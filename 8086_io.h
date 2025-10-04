@@ -1,4 +1,3 @@
-#include <windows.h>
 #include <stdint.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -19,8 +18,8 @@ enum DMA_CONTROL {		//
 	DMA_DISABLED		= 0x01,
 	DMA_UPDOWN			= 0x20,
 	DMA_AUTORELOAD	= 0x10,
-
-//masks
+    
+// masks
 	DMA_READ				= 0x04,
 	DMA_TYPE				= 0x0C,
 	DMA_SINGLE			= 0x40,
@@ -29,11 +28,11 @@ enum DMA_CONTROL {		//
 	DMA_MODEVERIFY	= 0x00,
 	DMA_MODEWRITE		= 0x01,
 	DMA_MODEREAD		= 0x02,
-
-	DMA_MODEDEMAND	= 0x00,
-	DMA_MODESINGLE	= 0x01,
-	DMA_MODEBLOCK		= 0x02,
-	DMA_MODECASCADE	= 0x03,
+    
+	DMA_MODEDEMAND	=   0x00,
+	DMA_MODESINGLE	=   0x01,
+	DMA_MODEBLOCK	=   0x02,
+	DMA_MODECASCADE	=   0x03,
 
 	DMA_MASK0				= 0x01,
 	DMA_MASK1				= 0x02,
@@ -52,11 +51,11 @@ enum DMA_CONTROL {		//
 
 enum PIT_MODE {		// 
 	PIT_MODE_INTONTERMINAL		= 0,
-	PIT_MODE_ONESHOT					= 1,
-	PIT_MODE_FREECOUNTER			= 2,
+	PIT_MODE_ONESHOT			= 1,
+	PIT_MODE_FREECOUNTER		= 2,
 	PIT_MODE_SQUAREWAVEGEN		= 3,
-	PIT_MODE_SWTRIGGERED			= 4,
-	PIT_MODE_HWTRIGGERED			= 5,
+	PIT_MODE_SWTRIGGERED		= 4,
+	PIT_MODE_HWTRIGGERED		= 5,
 	};
 
 enum PIT_OPERATION {		// 
@@ -70,7 +69,8 @@ enum PIT_FLAGS {		//
 	PIT_OUTPUT						= 0x80,
 	PIT_ACTIVE						= 0x40,
 	PIT_LATCHED						= 0x20,
-	PIT_LOHIBYTE					= 0x10,
+	PIT_LOADED						= 0x10,
+	PIT_LOHIBYTE					= 0x08,
 
 	PIT_BCD								= 0x01,
 	};

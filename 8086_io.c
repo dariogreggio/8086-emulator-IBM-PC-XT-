@@ -24,6 +24,19 @@
 extern BYTE CPUPins;
 #define UNIMPLEMENTED_MEMORY_VALUE 0x6868		//:)		
 
+extern uint16_t _ip;
+#if defined(EXT_80386)
+	extern union REGISTERS32 segs;
+	extern union SEGMENTS_DESCRIPTOR seg_descr;
+#elif defined(EXT_80286)
+//	union REGISTERS16 segs;
+	extern union SEGMENTS_DESCRIPTOR segs;
+#else
+	extern union SEGMENTS_DESCRIPTOR segs;
+#endif
+
+#define _cs (&segs.r[1])
+
 
 
 uint8_t ram_seg[RAM_SIZE+RAM_SIZE_EXTENDED];
@@ -210,7 +223,7 @@ extern union PIPE Pipe2;
 			Exception86.descr.ud=EXCEPTION_NP;\
 			goto exception286;\
 			}\
-		if(_f.IOPL > seg->d.Access.DPL) {\
+		if(_cs->s.RPL > seg->d.Access.DPL) {\
 			Exception86.descr.ud=EXCEPTION_GP;\
 			goto exception286;\
 			}\
@@ -230,7 +243,7 @@ extern union PIPE Pipe2;
 		}\
 	else {\
 		ADDRESS_286_PRE();\
-		if((seg->d.Access.b & 0b00001000) != 0b00000000) {/*boh data */\
+		if((seg->d.Access.b & 0 /*in effetti anche code è ok... 0b00001000*/) != 0b00000000) {/*boh data */\
 			Exception86.descr.ud=EXCEPTION_GP;\
 			goto exception286;\
 			}\
@@ -2820,6 +2833,7 @@ uint32_t GetIntValue(struct struct REGISTERS_SEG *seg,uint32_t ofs) {
 		goto skippa; // mmm no... pare di no (il test memoria estesa esploderebbe
 
 exception286:
+		Exception86.parm=seg->s.x;
     Exception86.active=1;
     Exception86.addr=t;
     Exception86.descr.in=1;
@@ -2941,6 +2955,7 @@ uint8_t GetPipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
 		goto skippa; // mmm no... pare di no (il test memoria estesa esploderebbe
 
 exception286:
+		Exception86.parm=seg->s.x;
     Exception86.active=1;
     Exception86.addr=t;
     Exception86.descr.in=1;
@@ -3042,6 +3057,7 @@ uint8_t GetMorePipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
 		goto skippa; // mmm no... pare di no (il test memoria estesa esploderebbe
 
 exception286:
+		Exception86.parm=seg->s.x;
     Exception86.active=1;
     Exception86.addr=t;
     Exception86.descr.in=1;
@@ -3271,6 +3287,7 @@ void PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
 		goto skippa; // mmm no... pare di no (il test memoria estesa esploderebbe
 
 exception286:
+		Exception86.parm=seg->s.x;
     Exception86.active=1;
     Exception86.addr=t;
     Exception86.descr.in=1;
@@ -3349,6 +3366,7 @@ void  PutShortValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint16_t t2) {
 		goto skippa; // mmm no... pare di no (il test memoria estesa esploderebbe
 
 exception286:
+		Exception86.parm=seg->s.x;
     Exception86.active=1;
     Exception86.addr=t;
     Exception86.descr.in=1;
@@ -3419,6 +3437,7 @@ void PutIntValue(struct struct REGISTERS_SEG *seg,uint32_t ofs,uint32_t t1) {
 		goto skippa; // mmm no... pare di no (il test memoria estesa esploderebbe
 
 exception286:
+		Exception86.parm=seg->s.x;
     Exception86.active=1;
     Exception86.addr=t;
     Exception86.descr.in=1;
@@ -4296,15 +4315,18 @@ writeRegRTC:
     // https://www.intel.com/content/www/us/en/support/articles/000005500/boards-and-kits.html
 		// https://blog.theretroweb.com/2024/01/20/award-bios-beep-and-post-codes-list/#Version_33
 
-
-/*			if(t1==0x24)
-				debug=1;*/
-			/*if(t1==0x70)
-				debug=1;*/
-
-
-
 					DIAGPort=t1;
+          
+#if 0
+          // ev....
+        char myBuf[80];
+        sprintf(myBuf,"DIAG: %02X",DIAGPort);
+        setTextColor(BRIGHTRED);
+        LCDXY(16,20);
+        gfx_print(myBuf);
+          
+#endif
+
 					t1 &= 0x7;   //[per ora tolti xché usati per debug! 
 //        LED1 = t1 & 1;
 //        LED2 = t1 & 2 ? 1 : 0;

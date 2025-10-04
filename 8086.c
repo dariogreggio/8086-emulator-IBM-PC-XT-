@@ -588,7 +588,7 @@ int Emulate(int mode) {
 #if defined(EXT_80386)
 			//https://sandpile.org/x86/initial.htm
 			memset(&GDTR,0,sizeof(union _DTR)); GDTR.access=0x82;
-			memset(&LDTR,0,sizeof(union _DTR));
+			LDTR=NULL;
 			memset(&IDTR,0,sizeof(union _DTR));
 //			memset(&TS ,0,sizeof(union _DTR));
 			memset(&Exception86,0,sizeof(struct _EXCEPTION));
@@ -604,7 +604,7 @@ int Emulate(int mode) {
       _es->s.x=0x0000;		// ossia Selector
 			_es->d.Base=0x0000; _es->d.BaseH=0x00; _es->d.Limit=0xffff; _es->d.Access.b=0x93;
 			memset(&GDTR,0,sizeof(union _DTR));
-			memset(&LDTR,0,sizeof(union _DTR));
+			LDTR=NULL;
 			memset(&IDTR,0,sizeof(union _DTR));
 //			memset(&TS ,0,sizeof(union _DTR));
 			memset(&Exception86,0,sizeof(struct _EXCEPTION));
@@ -659,7 +659,6 @@ rallenta:
 					i8253Flags[i] &= ~PIT_LOADED;
 					}
 				switch((i8253Mode[i] & 0b00001110) >> 1) {// VERIFICARE altri modi a parte i primi 4
-
 					case PIT_MODE_INTONTERMINAL:		// INTerrupt on terminal count
 						// (continous) output is low and goes high at counting end
 						if(i8253Mode[i] & PIT_BCD)
@@ -788,12 +787,13 @@ rallenta:
 						else {
 							if(i8253Mode[0] & PIT_BCD)
 								;
-//							if(i8253Flags[i] & PIT_ACTIVE)
+							if(i8253Flags[i] & PIT_ACTIVE) {
 								i8253TimerR[i]--;
-							i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
-							if(i==0) {
-								i8259IRR |= 1;
-								}
+                i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
+                if(i==0) {
+                  i8259IRR |= 1;
+                  }
+                }
 							}
 						break;
 					case PIT_MODE_HWTRIGGERED:				// hardware triggered strobe
@@ -803,12 +803,13 @@ rallenta:
 						else {
 							if(i8253Mode[0] & PIT_BCD)
 								;
-//							if(i8253Flags[i] & PIT_ACTIVE)
+							if(i8253Flags[i] & PIT_ACTIVE) {
 								i8253TimerR[i]--;
-							i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
-							if(i==0) {
-								i8259IRR |= 1;
-								}
+                i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
+                if(i==0) {
+                  i8259IRR |= 1;
+                  }
+                }
 							}
 						break;
 					}
@@ -4335,14 +4336,19 @@ do_tasksw_call:
         
    		case 0x9d:        // POPF
 #if defined(EXT_80286)
-				// SOLO SE alterano flag I !! fare
-				if(_msw.PE && _f.IOPL      >0/* IOPL tas klevel*/) {
-
-					//_cs->s.RPL
-//					goto exception286priv;
+				if(_msw.PE) {
+          POP_STACK(res3.x);		// 
+          _f.x = (_f.x & (ID_IOPL | ID_IF)) | (res3.x & ~(ID_IOPL | ID_IF));
+          if(_f.IOPL==0)
+            _f.x = (_f.x & ~ID_IOPL) | (res3.x & ID_IOPL);
+          if(_cs->s.RPL<=_f.IOPL)
+            _f.x = (_f.x & ~ID_IF) | (res3.x & ID_IF);
 					}
+        else
+          POP_STACK(_f.x);
+#else
+				POP_STACK(_f.x);
 #endif
-				POP_STACK(_f.x);		// 
 #ifdef EXT_NECV20	
 				inEI++;			// boh, NECV20 emulator lo fa...
 #endif
@@ -4356,7 +4362,6 @@ fix_flags:
 				_f.unused=1; _f.unused2=_f.unused3=0; 
 #ifdef EXT_80286
 				if(_msw.PE) {
-//				_f.unused3_=0; _f.unused4=0;			// beh.. 
 					}
 				else {			// in real mode non possono essere settati
 					_f.IOPL=_f.NestedTask=0;
@@ -4896,7 +4901,7 @@ do_irq:
 		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 		//				else
-							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
+							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+IntIRQNum.Vector*8];
 							sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((IntIRQNum.Vector *8))];
 
 			//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
@@ -4988,12 +4993,14 @@ do_irq:
 	CPU exception interrupts are similar but push the CS:IP of the
 	causal instruction.	8086/88 divide exceptions are different,
 	they return to the instruction following the division*/
+										if(!IntIRQNum.Type) { 		// se eccezione
 											if(IntIRQNum.Vector==1 || IntIRQNum.Vector==3 || IntIRQNum.Vector==4) {
 												PUSH_STACK(_ip);		// (succ.
 												}
 											else {
 												PUSH_STACK(oldIp);		// (servirebbe ip PRIMA dell'istruzione...
 												}
+  										}
 
 										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 										ASSIGN_SEGMENT(_cs,sdi->Selector);
@@ -6023,11 +6030,7 @@ do_tasksw_jmp:
 
 			case 0xf0:				// LOCK (prefisso...
 #if defined(EXT_80286)
-				if(_msw.PE && _f.IOPL      >0/* IOPL tas klevel*/) {
-
-//???					_cs->s.RPL
-
-
+				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -6082,9 +6085,7 @@ Trap:
 
 			case 0xf4:				// HLT
 #if defined(EXT_80286)
-				if(_msw.PE && _f.IOPL      >0/* IOPL tas klevel*/) {
-
-//_cs->s.RPL???
+				if(_msw.PE && _cs->s.RPL /*_f.IOPL direi*/>0) {
 					goto exception286priv;
 					}
 #endif
@@ -6733,9 +6734,11 @@ _lclose(spoolFile);
 				break;
         
 			default:
-
+				{
+					char myBuf[128];
 unknown_istr:
-
+;
+      }
 
 #if defined(EXT_80286)
 exception286UD:
@@ -6753,10 +6756,15 @@ exception286ext:
 
 //		if(Exception86.active) 
 				{
+        char myBuf[80];
+        sprintf(myBuf,"8086 exception %u (%c) %04X:%04X; %08X\r\n",Exception86.descr.ud,Exception86.descr.rw ? 'R' : 'W',
+          _msw.PE ? _cs->d.BaseH : _cs->s.x,_ip, Exception86.addr);
+        setTextColor(BRIGHTRED);
+        LCDXY(0,1);
+        gfx_print(myBuf);
+        Exception86.active=0;
 
-			Exception86.active=0;
-
-			}
+        }
 
 				//PUSHARE Exception86.parm  v. SOPRA
 				IntIRQNum.Vector=(uint8_t)Exception86.descr.ud;
@@ -6831,10 +6839,9 @@ exception286ext:
 
 					if(_msw.PE) {
 		//				union SEGMENT_SELECTOR *ss=(union SEGMENT_SELECTOR *)Pipe2.x.h;
-						struct SEGMENT_DESCRIPTOR_TASK_GATE *oldsdg;
-						struct SEGMENT_DESCRIPTOR_TASK_GATE *sd;
+						struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
 						struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP *sdi;
-						struct TASK_STATE_REGISTER *tss,*oldtsr;
+						struct TASK_STATE_REGISTER *newtsr,*oldtsr;
 
     /*IF ((vector_number « 2) + 3) is not within IDT limit
         THEN #GP; FI; 
@@ -6844,8 +6851,8 @@ exception286ext:
 	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((2*8))];
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(uint16_t)(2*8)];
+						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)(2*8)];
 
 		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
@@ -6855,57 +6862,63 @@ exception286ext:
 //							sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
 
 						switch(sdi->Access.Type) {
-							case 5:		// Task Gate (Segment / Descriptor
+							struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
+							case 5:		// Task Gate (Segment / Descriptor   v. table B-11
+								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
+	//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
 								if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
 									}
 								else {		// intra-level
 									}
-								tss=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+MAKELONG(sd->Base,0/*sd->BaseH*/)];
-								oldsdg=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+tss->PTSS];
-//								_tss.x=Pipe2.x.h;
-								oldtsr=tss;
-								tss->Ax=_ax;
-								tss->Bx=_bx;
-								tss->Cx=_cx;
-								tss->Dx=_dx;
-								tss->Bp=_bp;
-								tss->Ss=_sp;
-								tss->Si=_si;
-								tss->Di=_di;
-								tss->Flags.x=_f.x;
-								tss->Flags.NestedTask=0;
-								tss->Es=_es->s.x;
-								tss->Ds=_ds->s.x;
-								tss->Ss=_ss->s.x;
-								tss->Cs=_cs->s.x;
-								tss->EntryPoint=_ip+4;			// istruzione seguente questa!
-			//					tss->Ldt=Ldt;
-								tss->PTSS;
-								oldtsr->PTSS;
-								sd->Access.A=1;		// MUST be 0 before!
-								oldsdg->Access.A=0;
-								_ax=oldtsr->Ax;
-								_bx=oldtsr->Bx;
-								_cx=oldtsr->Cx;
-								_dx=oldtsr->Dx;
-								_bp=oldtsr->Bp;
-								_sp=oldtsr->Ss;
-								_si=oldtsr->Si;
-								_di=oldtsr->Di;
-								_f.x=tss->Flags.x;
-								_f.NestedTask=1;
-								ASSIGN_SEGMENT(_es,oldtsr->Es);
-								ASSIGN_SEGMENT(_ds,oldtsr->Ds);
-								ASSIGN_SEGMENT(_ss,oldtsr->Ss);
-								ASSIGN_SEGMENT(_cs,oldtsr->Cs);
-								_ip=oldtsr->EntryPoint;
-			//					Ldt=oldtsr->Ldt;
+								newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
+								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
 
-								_tsr=tss;
+								newtsr->PTSS=_tss.x;
+								memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
+								oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
+
+								oldtsr->Ax=_ax;
+								oldtsr->Bx=_bx;
+								oldtsr->Cx=_cx;
+								oldtsr->Dx=_dx;
+								oldtsr->Bp=_bp;
+								oldtsr->Sp=_sp;
+								oldtsr->Si=_si;
+								oldtsr->Di=_di;
+								oldtsr->Flags.x=_f.x;
+	//							oldtsr->Flags.NestedTask=0;
+								oldtsr->Es=_es->s.x;
+								oldtsr->Ds=_ds->s.x;
+								oldtsr->Ss=_ss->s.x;
+								oldtsr->Cs=_cs->s.x;
+								oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
+
+								sd->Access.A=1;		// MUST be 0 before!
+								oldsd->Access.A=0;
+								_tsr=newtsr;
+								LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
+								_ax=newtsr->Ax;
+								_bx=newtsr->Bx;
+								_cx=newtsr->Cx;
+								_dx=newtsr->Dx;
+								_bp=newtsr->Bp;
+								_sp=newtsr->Sp;
+								_si=newtsr->Si;
+								_di=newtsr->Di;
+								_f.x=newtsr->Flags.x;
+								_f.NestedTask=1;
+								ASSIGN_SEGMENT(_ss,newtsr->Ss);
+								ASSIGN_SEGMENT(_cs,newtsr->Cs);
+								ASSIGN_SEGMENT(_es,newtsr->Es);
+								ASSIGN_SEGMENT(_ds,newtsr->Ds);
+								_ip=newtsr->EntryPoint;
+								res3.x=oldtsr->Ldt;
+								oldtsr->Ldt=newtsr->Ldt;
+								newtsr->Ldt=res3.x;
+
 								_msw.TS=1;
 								// v. table 8-7 per differenze tra CALL JMP IRET
 
-								_f.NestedTask=1;
 // METTERE										_f.IOPL=sd->Access.DPL;
 
 								break;
@@ -6933,7 +6946,7 @@ they return to the instruction following the division*/
 
 									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 									ASSIGN_SEGMENT(_cs,sdi->Selector);
-									_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+//									_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
 
 //									_f.IOPL=_cs->s.RPL /*sdi->Access.DPL*/;
 
@@ -6948,7 +6961,7 @@ they return to the instruction following the division*/
 									PUSH_STACK(_ip);
 									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 									ASSIGN_SEGMENT(_cs,sdi->Selector);
-									_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+//									_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
 									}
 
 								break;
@@ -7002,20 +7015,6 @@ they return to the instruction following the division*/
 //			if(_f.IF) {  v.sopra
         CPUPins &= ~(DoIRQ | DoHalt);
 
-/*			if(inRep || inRepStep) {
-			char myBuf[256];
-			wsprintf(myBuf,"%u: IRQ durante REP %u\n",timeGetTime(),inRep 
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}*/
-
-/*{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: IRQ  %X, i8259ICW=%08X\n",timeGetTime(),ExtIRQNum.Vector,i8259ICW[1] << 11
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}*/
-
 #if defined(EXT_80286)
 				// QUA usare (pag 149 tab 9.2) IDT vector a 16 bit, con b0=error code
 				// e c'è anche TI per selezionare QUALE selettore GDTR LDTR IDTR fig 7.5 pag 118
@@ -7040,9 +7039,9 @@ they return to the instruction following the division*/
 	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+ExtIRQNum.Vector *8];
 //							memcpy(&sdi,&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8))],sizeof(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP));
-						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((IntIRQNum.Vector *8))];
+						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((ExtIRQNum.Vector *8))];
 
 		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
@@ -7053,7 +7052,7 @@ they return to the instruction following the division*/
 
 						switch(sdi->Access.Type) {
 							struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-							case 5:		// Task Gate (Segment / Descriptor
+							case 5:		// Task Gate (Segment / Descriptor   v. table B-11
 								tss=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+MAKELONG(sd->Base,0/*sd->BaseH*/)];
 
 								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
@@ -7066,7 +7065,7 @@ they return to the instruction following the division*/
 								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
 
 								newtsr->PTSS=_tss.x;
-								_tss.x=sd->Base;
+								memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
 								oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
 
 								oldtsr->Ax=_ax;
@@ -7099,10 +7098,10 @@ they return to the instruction following the division*/
 								_di=newtsr->Di;
 								_f.x=newtsr->Flags.x;
 								_f.NestedTask=1;
-								ASSIGN_SEGMENT(_es,newtsr->Es);
-								ASSIGN_SEGMENT(_ds,newtsr->Ds);
 								ASSIGN_SEGMENT(_ss,newtsr->Ss);
 								ASSIGN_SEGMENT(_cs,newtsr->Cs);
+								ASSIGN_SEGMENT(_es,newtsr->Es);
+								ASSIGN_SEGMENT(_ds,newtsr->Ds);
 								_ip=newtsr->EntryPoint;
 								res3.x=oldtsr->Ldt;
 								oldtsr->Ldt=newtsr->Ldt;

@@ -1,55 +1,28 @@
 //https://wiki.osdev.org/Floppy_Disk_Controller#Bit_MT
 
 
-#include <windows.h>
-#include <stdint.h>
+
+#include <stdio.h>
 #include <ctype.h>
 #include <stdlib.h>
-#include <conio.h>
-#include <time.h>
-#include "8086win.h"
+#include <string.h>
+//#include <graph.h>
+//#include <dos.h>
+//#include <malloc.h>
+//#include <memory.h>
+//#include <fcntl.h>
+//#include <io.h>
+#include <xc.h>
 
-#pragma check_stack(off)
-// #pragma check_pointer( off )
-#pragma intrinsic( _enable, _disable )
+#include "Adafruit_ST77xx.h"
+#include "Adafruit_ST7735.h"
+#include "adafruit_gfx.h"
 
+#include "8086_PIC.h"
+#include "8086_io.h"
 
-BYTE bios_rom[ROM_SIZE];
-#ifdef ROM_SIZE2
-BYTE bios_rom_opt[ROM_SIZE2 /* per GLATICK per ora*/];
-#endif
-#ifdef ROM_BASIC
-BYTE IBMBASIC[0x8000];
-#endif
-BYTE HDbios[0x2000];			// la metto a E800
 extern BYTE CPUPins;
-#define UNIMPLEMENTED_MEMORY_VALUE 0xffff //6868  //0xcccc		//:)		// INT3 
-
-
-#ifdef EXT_80286
-extern struct _EXCEPTION Exception86;
-extern union _DTR GDTR;
-extern union _DTR LDTR;
-extern union MACHINE_STATUS_WORD _msw;
-#endif
-
-
-extern LARGE_INTEGER pcFrequency;
-
-
-extern BOOL debug;
-extern HFILE spoolFile;
-extern uint16_t _ip;
-#if defined(EXT_80386)
-	extern union REGISTERS32 segs;
-	extern union SEGMENTS_DESCRIPTOR seg_descr;
-#elif defined(EXT_80286)
-//	union REGISTERS16 segs;
-	extern union SEGMENTS_DESCRIPTOR segs;
-#else
-	extern union SEGMENTS_DESCRIPTOR segs;
-#endif
-#define _cs (&segs.r[1])
+#define UNIMPLEMENTED_MEMORY_VALUE 0x6868		//:)		
 
 
 
@@ -68,8 +41,6 @@ uint16_t VICRaster=0;
 #define CGA_SIZE (32768 /*720*350/8*/)				// video
 #endif
 #ifdef VGA
-//#define CGA_BASE 0xB0000L		// dice b0000 o b8000 se 32KB, a0000 se 64 o 128
-//#define CGA_SIZE 65536L				// video; https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/vgamem.htm
 #define VGA_BASE 0xA0000L		// 4 blocchi da 64K
 #define VGA_SIZE (65536L*4)
 		// v. VGAgraphReg[6] & 0x0c per dimensione e posizione finestra grafica...
@@ -78,25 +49,25 @@ uint16_t VICRaster=0;
 uint8_t CGAram[CGA_SIZE /* 640*200/8 320*200/2 */];		// anche MDA :) e VGA
 #endif
 #ifdef VGA
-uint8_t VGABios[32768];
 uint8_t VGAram[VGA_SIZE];
+#define VGA_BIOS_BASE 0xC0000L					// https://flint.cs.yale.edu/feng/cos/resources/BIOS/mem.htm
+uint8_t VGABios[32768];
+//uint8_t VGAram[640*480*(24/8)];
 uint8_t VGAreg[16],  // https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/vga.htm
-	VGAcrtcReg[32],VGAactlReg[32],VGAgraphReg[16],VGAseqReg[8],
+	VGAcrtcReg[32],VGAactlReg[32],VGAgraphReg[16],
 	VGAFF,VGAptr;
-uint32_t VGADAC[256];		// 18 bit per VGA "base"
 uint16_t VGAsignature;
-union DWORD_BYTES VGAlatch;
 #endif
 uint8_t CGAreg[18];  // https://www.seasip.info/VintagePC/cga.html
 uint8_t MDAreg[18];  // https://www.seasip.info/VintagePC/mda.html
 //  http://www.oldskool.org/guides/oldonnew/resources/cgatech.txt
-extern COLORREF Colori[];
 uint8_t i8237RegR[16],i8237RegW[16],i8237FF=0,i8237Mode[4];
 uint16_t i8237DMAAddr[4],i8237DMALen[4];
 uint16_t i8237DMACurAddr[4],i8237DMACurLen[4];
 #ifdef PCAT
-uint8_t i8237Reg2R[16],i8237Reg2W[16],i8237FF2=0,i8237Mode2[4];
-uint16_t i8237DMAAddr2[4],i8237DMALen2[4];
+uint8_t i8237FF2=0,i8237Mode2[4];
+uint8_t i8237Reg2R[16],i8237Reg2W[16],
+  i8237DMAAddr2[4],i8237DMALen2[4];
 uint16_t i8237DMACurAddr2[4],i8237DMACurLen2[4];
 #endif
 uint8_t DMApage[8],DMArefresh, DIAGPort/*DTK 286 rilegge port 80h*/;
@@ -106,18 +77,33 @@ uint8_t i8259RegR[2],i8259RegW[2],i8259ICW[4],i8259OCW[3],i8259ICWSel,i8259IMR,i
 	DMApage2[8] // per DTK
 #endif
 	;
-uint8_t i8253RegR[4],i8253RegW[4],i8253Mode[3],i8253ModeSel;	// uso MSB di Mode come "OUT" e b6 come "reload" (serve anche un "loaded" flag, credo, per one shot ecc
-uint16_t i8253TimerR[3],i8253TimerW[3],i8253TimerL[3];
-uint8_t i8250Reg[8],i8250Regalt[3];
-uint8_t LPT[3/**/][4 /*3*/];		// per ora, al volo!
 #ifdef PCAT
 uint8_t i8042RegR[2],i8042RegW[2],KBRAM[32],
+/*Location 0 is the Command byte, see above.
+	Location 0x13 (on MCA) is nonzero when a password is enabled.
+	Location 0x14 (on MCA) is nonzero when the password was matched.
+	Locations 0x16-0x17 (on MCA) give two make codes to be discarded during password matching*/
+	i8042Input,i8042OutPtr;
+#else
+uint8_t i8255RegR[4],i8255RegW[4];
+#endif
+
+uint8_t i8253RegR[4],i8253RegW[4],i8253Mode[3],i8253Flags[3];	// uso MSB di Mode come "OUT" e b6 come "reload" (serve anche un "loaded" flag, credo, per one shot ecc
+uint16_t i8253TimerR[3],i8253TimerW[3],i8253TimerL[3];
+uint8_t LPT[3/**/][4 /*3*/];		// per ora, al volo!
+uint8_t i8250Reg[8],i8250Regalt[3];
+#ifdef PCAT
+uint8_t i8042RegR[2],i8042RegW[2],KBRAM[32],
+/*Location 0 is the Command byte, see above.
+	Location 0x13 (on MCA) is nonzero when a password is enabled.
+	Location 0x14 (on MCA) is nonzero when the password was matched.
+	Locations 0x16-0x17 (on MCA) give two make codes to be discarded during password matching*/
 	i8042Input,i8042OutPtr;
 #else
 uint8_t i8255RegR[4],i8255RegW[4];
 #endif
 uint8_t i8042Output;  //b1=A20, b0=Reset,  SERVE cmq per 286 :) A20
-uint8_t KBCommand=B8(01010000),
+uint8_t KBCommand=0b01010000,
 /* |7|6|5|4|3|2|1|0|	8042 Command Byte  OCCHIO è diverso da XT!!
 		| | | | | | | `---- 1=enable output register full interrupt; OVVERO su XT lo uso per segnalare Reset KB
 		|	| | | | | `----- should be 0 (Second PS/2 port interrupt (1 = enabled, 0 = disabled, only if 2 PS/2 ports supported)
@@ -137,20 +123,29 @@ KBStatus;
 	 | | `--------- 1=transmit timeout (data transmit not complete)
 	 | `---------- 1=receive timeout (data transmit not complete)
 	 `----------- 1=even parity rec'd, 0=odd parity rec'd (should be odd)*/
-uint8_t MachineFlags=B8(00000000);		// b0-1=Speaker on; b2-3=TURBO PC (o select); b4-5=Parity/I/O errors su TINYBIOS; b66= 0:KC clk low; b7= 0 enable KB    https://wiki.osdev.org/Non_Maskable_Interrupt
+uint8_t MachineFlags=0b00000000;		// b0-1=Speaker on; b2-3=TURBO PC (o select); b4-5=Parity/I/O errors su TINYBIOS; b66= 0:KC clk low; b7= 0 enable KB    https://wiki.osdev.org/Non_Maskable_Interrupt
 // v. cmq i8255RegR[2]
-uint8_t MachineSettings=B8(01101101);		// b0=floppy (0=sì); b1=FPU; bits 2,3 memory size (64K bytes); b5:4 tipo video: 11=Mono, 10=CGA 80x25, 01=CGA 40x25; b7:6 #floppies-1
+uint8_t MachineSettings=0b00101101;		// b0=floppy (0=sì); b1=FPU; bits 2,3 memory size (64K bytes); b5:4 tipo video: 11=Mono, 10=CGA 80x25, 01=CGA 40x25; b7:6 #floppies-1
 		// ma su IBM5160 b0=1 SEMPRE dice!
 uint8_t i6845RegR[18],i6845RegW[18];
 uint8_t i146818RegR[2],i146818RegW[2],i146818RAM[64];
 uint8_t FloppyContrRegR[2],FloppyContrRegW[2],FloppyFIFO[16],FloppyFIFOPtrR,FloppyFIFOPtrW; // https://www.ardent-tool.com/floppy/Floppy_Programming.html#FDC_Registers
-uint8_t floppyState[4]={0x80,0x00,0,0} /* b0=stepdir,b1=disk-switch,b2=motor,b6=DIR,b7=diskpresent*/,
+uint8_t floppyState[4]={FLOPPY_STATE_DISKPRESENT,0x00,0,0} /* b0=stepdir,b1=disk-switch,b2=motor,b5=xfer,b6=DIR,b7=diskpresent*/,
   floppyHead[4]={0,0,0,0},floppyTrack[4]={0,0,0,0},floppySector[4]={0,0,0,0},
-	floppylastCmd[4];
-uint16_t floppyTimer /*simula attività floppy*/;
+	floppylastCmd[4],fdDisk;
+uint8_t floppyTimer /*simula attività floppy*/;
+#ifndef PCAT
+#ifdef ROM_HD_BASE
 uint8_t HDContrRegR[4],HDContrRegW[4],HDFIFOR[16],HDFIFOW[16],HDFIFOPtrR,HDFIFOPtrW, // 
   hdControl=0,hdState=0,hdHead=0,hdSector=0;
+#endif
+#else
+uint8_t HDContrRegR[8],HDContrRegW[8],// OVVIAMENTE se uso HD AT NON uso quello XT :)
+  hdControl=0,hdState=0,hdError=0,hdDisc=0,hdHead=0,hdSector=0,hdPrecomp=0,numSectors=0;
+uint16_t HDFIFOPtrR,HDFIFOPtrW;
+#endif
 uint16_t hdCylinder=0;
+uint8_t hdTimer /*simula attività HD*/;
 #define HD_SECTORS_PER_CYLINDER 17				// 305/2/17 = 5MB, dovrebbe; 374/2/17 = 24MB  305/4/17 = 10MB
 #define HD_CYLINDERS 305
 #define HD_HEADS 4
@@ -167,68 +162,75 @@ BYTE totalTracks=80;		/*floppy720*/
 //BYTE sectorsPerTrack[4]={18,18,18,18} /*floppy1.4*/;
 BYTE sectorsPerTrack[4]={9,9,9,9} /*floppy720 v. tracks*/;
 BYTE totalTracks=80;		/*floppy1.4*/
-#elif MS_DOS_VERSION==4
-//BYTE sectorsPerTrack[4]={18,18,18,18} /*floppy1.4*/;
-BYTE sectorsPerTrack[4]={9,9,9,9} /*floppy720 v. tracks*/;
-BYTE totalTracks=80;		/*floppy1.4*/
 #endif
 static uint8_t sectorData[SECTOR_SIZE];
 
-unsigned char MSDOS_DISK[2][1440/*360*/*SECTOR_SIZE*2];
+extern const uint8_t *MSDOS_DISK[2];
 const unsigned char *msdosDisk;
 uint32_t getDiscSector(uint8_t);
-uint8_t *encodeDiscSector(uint32_t);
-void setFloppyIRQ(uint16_t);
-#define DEFAULT_FLOPPY_DELAYED_IRQ 1
-#define SEEK_FLOPPY_DELAYED_IRQ 10
+uint8_t *encodeDiscSector(uint8_t);
+void setFloppyIRQ(uint8_t);
+#define DEFAULT_FLOPPY_DELAYED_IRQ 3
+#define SEEK_FLOPPY_DELAYED_IRQ 30
 
-unsigned char MSDOS_HDISK[40     *1048576L];
+extern const unsigned char MSDOS_HDISK[]; //:)  se lo lascio qua lo mette in ram sto frocio, PERCHE'???
 const unsigned char *msdosHDisk;
-uint32_t getHDiscSector(uint8_t);
+uint32_t getHDiscSector(uint8_t,uint8_t lba);
 uint8_t *encodeHDiscSector(uint8_t);
+void setHDIRQ(uint8_t);
+#define DEFAULT_HD_DELAYED_IRQ 3
+#define SLOW_HD_DELAYED_IRQ 7
+
 extern BYTE CPUDivider;
-BYTE mouseState=128;
+BYTE mouseState=0b10000000;
 BYTE COMDataEmuFifo[5];
-uint8_t COMDataEmuFifoCnt;
+BYTE COMDataEmuFifoCnt;
 uint8_t Keyboard[1]={0};
 uint8_t ColdReset=1;
 union INTERRUPT_WORD ExtIRQNum,IntIRQNum;
-volatile struct tm currentDateTime;
+uint8_t LCDdirty;
 extern uint8_t Pipe1;
 extern union PIPE Pipe2;
 
 
-
 #if defined(EXT_80186) // no, pare|| defined(EXT_NECV20)
-#define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)(a)) << 4) + ((uint16_t)(b))))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
+#define MAKE20BITS(a,b) (((((uint32_t)(a)) << 4) + ((uint16_t)(b))))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
 #else
 #define MAKE20BITS(a,b) (0xfffff & ((((uint32_t)(a)) << 4) + ((uint16_t)(b))))		// somma, non OR - e il bit20/A20 può essere usato per HIMEM
 #endif
 // su 8088 NON incrementa segmento se offset è FFFF ... 
 
 #define ADDRESS_286_PRE() {\
-	if(seg->s.x < 0xf000    && seg->s.x > GDTR.Limit) /*PATCH  LMSW   sistemare*/ {\
-		Exception86.descr.ud=EXCEPTION_GP;\
-		goto exception286;\
-		}\
-	if(seg->d.Limit		&& ofs>seg->d.Limit) {/*0=65536, ma v. anche DOWN Expand*/\
-		Exception86.descr.ud=EXCEPTION_STACK;\
-		goto exception286;\
+	if(seg->s.x < 0x1000) {/*PATCH  LMSW   sistemare*/ \
+		if(seg->s.x > GDTR.Limit) {/*+7*/\
+			Exception86.descr.ud=EXCEPTION_GP;\
+			goto exception286;\
+			}\
+		if(!seg->d.Access.P) {\
+			Exception86.descr.ud=EXCEPTION_NP;\
+			goto exception286;\
+			}\
+		if(_f.IOPL > seg->d.Access.DPL) {\
+			Exception86.descr.ud=EXCEPTION_GP;\
+			goto exception286;\
+			}\
+		if(seg->d.Limit		&& ofs>seg->d.Limit) {/*0=65536, ma v. anche DOWN Expand*/\
+			Exception86.descr.ud=EXCEPTION_STACK;\
+			goto exception286;\
+			}\
 		}\
 	}
 #define ADDRESS_286_POST() {\
 	t=MAKELONG(seg->d.Base+ofs,seg->d.BaseH);\
 	seg->d.Access.A=1;\
-	if(!(i8042Output & 2))/*A20*/\
-		t &= 0xfffff;\
 	}
 #define ADDRESS_286_R() {\
-	ADDRESS_286_PRE();\
-	if(seg->s.x >= 0xe000)		/*PATCH  LMSW   sistemare*/ {\
+	if(seg->s.x >= 0x1000)		/*PATCH  LMSW   sistemare*/ {\
 		t=MAKE20BITS(seg->s.x,ofs);\
 		}\
 	else {\
-		if((seg->d.Access.b & B8(00000001)) == B8(00000000)) {/*boh data */\
+		ADDRESS_286_PRE();\
+		if((seg->d.Access.b & 0b00001000) != 0b00000000) {/*boh data */\
 			Exception86.descr.ud=EXCEPTION_GP;\
 			goto exception286;\
 			}\
@@ -237,12 +239,12 @@ extern union PIPE Pipe2;
 	}
 #define ADDRESS_286_E() {\
 	struct SEGMENT_DESCRIPTOR *sd;\
-	if(seg->s.x >= 0xe000)		/*PATCH  LMSW   sistemare*/ {\
+	if(seg->s.x >= 0x1000)		/*PATCH  LMSW   sistemare*/ {\
 		t=MAKE20BITS(seg->s.x,ofs);\
 		}\
 	else {\
 		ADDRESS_286_PRE();\
-		if((seg->d.Access.b & B8(00001010)) != B8(00001010)) {/* code, readable*/\
+		if((seg->d.Access.b & 0b00001010) != 0b00001010) {/* code, readable*/\
 			Exception86.descr.ud=EXCEPTION_GP;\
 			goto exception286;\
 			}\
@@ -251,17 +253,23 @@ extern union PIPE Pipe2;
 	}
 #define ADDRESS_286_W() {\
 	struct SEGMENT_DESCRIPTOR *sd;\
-	ADDRESS_286_PRE();\
-	if((seg->d.Access.b & B8(00001010)) != B8(00000010)) {/*data, writable*/\
-		Exception86.descr.ud=EXCEPTION_GP;\
-		goto exception286;\
+	if(seg->s.x >= 0x1000)		/*PATCH  LMSW   sistemare*/ {\
+		t=MAKE20BITS(seg->s.x,ofs);\
 		}\
-	ADDRESS_286_POST();\
+	else {\
+		ADDRESS_286_PRE();\
+		if((seg->d.Access.b & 0b00001010) != 0b00000010) {/*data, writable*/\
+			Exception86.descr.ud=EXCEPTION_GP;\
+			goto exception286;\
+			}\
+		ADDRESS_286_POST();\
+		}\
 	}
 
-uint8_t _fastcall GetValue(struct REGISTERS_SEG *seg,uint16_t ofs) {
+
+uint8_t GetValue(struct REGISTERS_SEG *seg,uint16_t ofs) {
 	register uint8_t i;
-	DWORD t;
+	uint32_t t;
 
 #ifdef EXT_80286
 	if(_msw.PE) {
@@ -270,19 +278,11 @@ uint8_t _fastcall GetValue(struct REGISTERS_SEG *seg,uint16_t ofs) {
 	else
 #endif
 	t=MAKE20BITS(seg->s.x,ofs);
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
 
-/*	if(t==0x400) {
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read 400 : %02X \n",timeGetTime(),
-				_ip,ram_seg[0x400]);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-		}*/
-
-#if DEBUG_TESTSUITE
-		i=ram_seg[t];
-#else
 #ifdef EXT_80286
 	if(t >= 0x100000L && t < 0x100000L+RAM_SIZE_EXTENDED) {
 		i=ram_seg[t-0x100000L+RAM_SIZE];
@@ -429,18 +429,6 @@ vga_chain4:
 					}
 				}
 			}
-#ifdef _DEBUG
-#ifdef DEBUG_VGA
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  readRAMV %08X : %02X  memCfg=%u,rMemMd=%X, rdMd=%u,gMode=%02X, planes=%X\n",timeGetTime(),
-				_ip,t,i,(VGAgraphReg[6] & 0x0c) >> 2,VGAseqReg[4] & 0xf,
-				VGAgraphReg[4] & 3,VGAgraphReg[5],
-				VGAseqReg[2] & 0xf);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
     }
 #endif
 #ifdef CGA_BASE
@@ -471,31 +459,16 @@ exception286:
     Exception86.descr.in=1;
     Exception86.descr.rw=1;
 
-skippa:
+skippa: ;
 #endif
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x:%04x  UNIMPLEMENTED memoryR B %08X : %02X \n",timeGetTime(),
-#ifdef EXT_80286
-				_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip,t,i);
-#else
-				_cs,_ip,t,i);
-#endif
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-
 		}
-  
-#endif
+
 	return i;
 	}
 
-uint8_t _fastcall InValue(uint16_t t) {
+uint8_t InValue(uint16_t t) {
 	register uint8_t i;
 
-#if DEBUG_TESTSUITE
-	return 0xff;
-#else
   switch(t >> 4) {
     case 0:        // 00-1f DMA 8237 controller
     case 1:					// solo PS/2 dice!
@@ -524,8 +497,8 @@ uint8_t _fastcall InValue(uint16_t t) {
 					i8237FF &= 1;
 					break;
 				case 8:			// Status / Command
-//					if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-//						i8237RegR[8] |= ((1 << 0) << 4);  // request??...
+//					if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+//						i8237RegR[8] |= DMA_REQUEST1;  // request??...
 //						if(!(i8237RegW[15] & (1 << 0)))		// mask...
 //							i8237RegR[8] |= 1;		// simulo attività ch0 (refresh... (serve a glabios o dà POST error 400h, E3BA
 //						}
@@ -546,28 +519,17 @@ uint8_t _fastcall InValue(uint16_t t) {
 					i8237RegR[8] &= 0xf0;  // clear activity flags
 					break;
 				}
-#ifdef _DEBUG
-#ifdef DEBUG_8237
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 0%X  : %02X  \n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       break;
 
     case 2:         // 20-21 PIC 8259 controller
-			// DTK 286 scrive a 6a a 22 e legge a 23 al boot!
-#if defined(EXT_80286)
+#ifdef PCAT
       t &= 0x3;
 #else
       t &= 0x1;
 #endif
       switch(t) {
         case 0:
-					switch(i8259OCW[2] & B8(00000011)) {		// 
+					switch(i8259OCW[2] & 0b00000011) {		// 
 						case 2:
 							i8259RegR[0]=i8259IRR;
 							break;
@@ -592,7 +554,7 @@ uint8_t _fastcall InValue(uint16_t t) {
 // no...					i=i8259ICW[i8259ICWSel];
 //					i8259ICWSel++;
 //					i8259ICWSel %= 4;
-/*					if(i8259RegW[0] == B8(00000011))
+/*					if(i8259RegW[0] == 0b00000011))
 						i=i8259RegW[1];
 					else 
 
@@ -603,17 +565,15 @@ uint8_t _fastcall InValue(uint16_t t) {
 
 					i8259IMR;
           break;
+
+#ifdef PCAT
+				case 2:			// DTK 286 scrive 6a a 22 e legge a 23 al boot!
+// v. datasheet chipset 82C211 (Neat-286)
+					break;
+				case 3:
+					break;
+#endif
         }
-#ifdef _DEBUG
-#ifdef DEBUG_8259
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 02%X  : %02X  \n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       break;
 
     case 4:         // 40-43 PIT 8253/4 controller (incl. speaker)
@@ -621,62 +581,42 @@ uint8_t _fastcall InValue(uint16_t t) {
       t &= 0x3;
       switch(t) {
         case 0:
-					// la cosa dei Latch non è ancora perfetta credo... non si capisce bene
-          if(!i8253ModeSel) {
-	          i8253RegR[0]=LOBYTE(i8253TimerR[0]);
-            i8253TimerL[0]=MAKEWORD(LOBYTE(i8253TimerR[0]),HIBYTE(i8253TimerL[0]));
-//            i=LOBYTE(i8253RegR[0]);  //OCCHIO non deve mai essere >2
-						}
-          else {
-	          i8253RegR[0]=HIBYTE(i8253TimerR[0]);
-            i8253TimerL[0]=MAKEWORD(LOBYTE(i8253TimerL[0]),HIBYTE(i8253TimerR[0]));
-						}
-          i=i8253RegR[0];
-          i8253ModeSel++;
-          i8253ModeSel &= 1;
-          break;
         case 1:
-          if(!i8253ModeSel) {
-            i8253TimerL[1]=MAKEWORD(LOBYTE(i8253TimerR[1]),HIBYTE(i8253TimerL[1]));
-	          i8253RegR[1]=LOBYTE(i8253TimerL[1]);
-//            i=LOBYTE(i8253RegR[0]);  //OCCHIO non deve mai essere >2
-						}
-          else {
-            i8253TimerL[1]=MAKEWORD(LOBYTE(i8253TimerL[1]),HIBYTE(i8253TimerR[1]));
-	          i8253RegR[1]=HIBYTE(i8253TimerL[1]);
-						}
-          i=i8253RegR[1];
-          i8253ModeSel++;
-          i8253ModeSel &= 1;
-          break;
         case 2:
-          if(!i8253ModeSel) {
-	          i8253RegR[2]=LOBYTE(i8253TimerR[2]);
-            i8253TimerL[2]=MAKEWORD(LOBYTE(i8253TimerR[2]),HIBYTE(i8253TimerL[2]));
-//          i=LOBYTE(i8253RegR[2]);  //OCCHIO non deve mai essere >2
+					// la cosa dei Latch non è ancora perfetta credo... non si capisce bene PUTTANALAMADONNA
+					switch((i8253Mode[t] & 0b00110000) >> 4) {
+						case PIT_LOADLOW:		// 
+							i8253RegR[t]=i8253Flags[t] & PIT_LATCHED ? LOBYTE(i8253TimerL[t]) : LOBYTE(i8253TimerR[t]);
+		          i8253Flags[t] &= ~PIT_LATCHED;
+							break;
+						case PIT_LOADHIGH:		// 
+							i8253RegR[t]=i8253Flags[t] & PIT_LATCHED ? HIBYTE(i8253TimerL[t]) : HIBYTE(i8253TimerR[t]);
+							i8253Flags[t] &= ~PIT_LATCHED;
+							break;
+						case PIT_LOADBOTH:
+						case PIT_LATCH:
+							if(i8253Flags[t] & PIT_LOHIBYTE) {
+								i8253RegR[t]=i8253Flags[t] & PIT_LATCHED ? HIBYTE(i8253TimerL[t]) : HIBYTE(i8253TimerR[t]);
+								i8253Flags[t] &= ~PIT_LATCHED;
+								}
+							else {
+								i8253RegR[t]=i8253Flags[t] & PIT_LATCHED ? LOBYTE(i8253TimerL[t]) : LOBYTE(i8253TimerR[t]);
+								}
+							if((i8253Mode[t] & 0b00110000) == (PIT_LOADBOTH << 4)) 
+								i8253Flags[t] ^= PIT_LOHIBYTE;
+							break;
 						}
-          else {
-	          i8253RegR[2]=HIBYTE(i8253TimerR[2]);
-            i8253TimerL[2]=MAKEWORD(LOBYTE(i8253TimerL[2]),HIBYTE(i8253TimerR[2]));
-						}
-          i=i8253RegR[2];
-          i8253ModeSel++;
-          i8253ModeSel &= 1;
+          i=i8253RegR[t];
           break;
         case 3:
+#ifdef PCAT
           i=i8253RegR[3];		// questo in effetti vale solo per 8254, non 8253!
+					// o forse no... dice 3state...
+
+					// e v. altre opzioni
+#endif
           break;
         }
-#ifdef _DEBUG
-#ifdef DEBUG_8253
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 4%X  : %02X \n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       break;
 
     case 6:        // 60-6F 8042/8255 keyboard; speaker; config byte    https://www.phatcode.net/res/223/files/html/Chapter_20/CH20-2.html
@@ -684,11 +624,11 @@ uint8_t _fastcall InValue(uint16_t t) {
       t &= 0x3;
       switch(t) {
         case 0:
-					if(KBStatus & B8(00000001))		// SOLO se c'è stato davvero un tasto! (altrimenti siamo dopo reset o clock ENable
+					if(KBStatus & KB_OUTPUTFULL)		// SOLO se c'è stato davvero un tasto! (altrimenti siamo dopo reset o clock ENable
 						i8255RegR[0]=Keyboard[0];
 					else
 						i8255RegR[0]=0;
-//          KBStatus &= ~B8(00000001);
+//          KBStatus &= ~KB_OUTPUTFULL;
 
 #ifdef PC_IBM5150
 					if(i8255RegW[1] & 0x80)		//https://www.tek-tips.com/threads/port-61h.258828/
@@ -703,7 +643,7 @@ uint8_t _fastcall InValue(uint16_t t) {
           i=i8255RegR[1];
           break;
         case 2:     // machine settings... (da V20)
-//          i=B8(01101100);			// bits 2,3 memory size (64K bytes); b7:6 #floppies; b5:4 tipo video: 11=Mono, 10=CGA 80x25, 01=CGA 40x25
+//          i=0b01101100);			// bits 2,3 memory size (64K bytes); b7:6 #floppies; b5:4 tipo video: 11=Mono, 10=CGA 80x25, 01=CGA 40x25
 //					i8255RegR[2]=MachineSettings;
 
 
@@ -735,13 +675,13 @@ uint8_t _fastcall InValue(uint16_t t) {
 							i8255RegR[2] |= 0x40;		// b6=RAM parity err. on exp board
 						}
 
-//					i8255RegR[2] = B8(00000000);		// test
+//					i8255RegR[2] = 0b00000000);		// test
 
 #ifdef PC_IBM5150
-			if(i8253Mode[2] & B8(10000000))
-				i8255RegR[2] |= B8(00010000);			// loopback cassette
+			if(i8253Mode[2] & 0b10000000))
+				i8255RegR[2] |= 0b00010000);			// loopback cassette
 			else
-				i8255RegR[2] &= ~B8(00010000);			// 
+				i8255RegR[2] &= ~0b00010000);			// 
 #endif
 
           i=i8255RegR[2];   // 
@@ -756,59 +696,83 @@ uint8_t _fastcall InValue(uint16_t t) {
       t &= 0x7;
       switch(t) {
         case 0:
-          if(i8042RegW[1]==0xAA) {      // self test
+					if(KBStatus & KB_COMMAND)	{		// se avevo ricevuto comando...
+						switch(i8042RegW[1]) {
+							case 0xAA:      // self test
+								i8042RegR[0]=Keyboard[i8042OutPtr-1];
+								break;
+							case 0xAB:      // diagnostics
+								i8042RegR[0]=0b00000000;
+								break;
+/*		          case 0xAE:      // enable
+							case 0xAD:      // disable
+								i8042RegR[0]=Keyboard[i8042OutPtr-1];
+								break;*/
+							case 0x20:
+								i8042RegR[0]=KBCommand;
+								break;
+							case 0xA1:			// read firmware version
+								i8042RegR[0]=Keyboard[i8042OutPtr-1];
+								break;
+							case 0xC0:			// read data
+								i8042RegR[0]=Keyboard[i8042OutPtr-1];
+								break;
+							case 0xC1:			// read data 4 lower bit port of ?? jumper?? into 4..7
+								i8042RegR[0]=Keyboard[i8042OutPtr-1];
+								break;
+							case 0xC2:			// read data 4 upper bit port of ?? jumper?? into 4..7
+								i8042RegR[0]=Keyboard[i8042OutPtr-1];
+								break;
+							case 0xD0:			// read data
+								if(KBCommand & 0b00010000)			// se disabilitata
+									i8042RegR[0]=i8042Output;
+								else
+									i8042RegR[0]=i8042Output;				// boh...
+								break;
+							case 0xE1:			// read test lines
+								i8042RegR[0]=0b00000011;				// b1=data, b0=clock
+								break;
+							case 0xEE:     //echo
+								i8042RegR[0]=0xee;
+								break;
+							case 0xF2:			// read ID
+								i8042RegR[0]=0xAB;		i8042RegR[0]=0x83;
+								break;
+							default:
+								if(i8042RegW[1]>=0x00 && i8042RegW[1]<0x20) {   // read ram
+									i8042RegR[0]=KBRAM[i8042RegW[1] & 0x1f];
+									}
+								else if(i8042RegW[1]>=0x20 && i8042RegW[1]<0x40) {   // alias AMI
+									i8042RegR[0]=KBRAM[i8042RegW[1] & 0x1f];
+									}
+								else if(i8042RegW[1]>=0xF0 && i8042RegW[1]<=0xFF) {
+									}
+								else {
+									if(KBStatus & KB_OUTPUTFULL)		// SOLO se c'è stato davvero un tasto! (altrimenti siamo dopo reset o clock ENable
+										i8042RegR[0]=Keyboard[i8042OutPtr-1];
+									}
+								break;
+							}
+						}
+					else {			// se avevo ricevuto dato
+						switch(i8042RegW[1]) {
+							}
+
+
 						i8042RegR[0]=Keyboard[i8042OutPtr-1];
-            }
-          else if(i8042RegW[1]==0xAB) {      // diagnostics
-            i8042RegR[0]=B8(00000000);
-            }
-/*          else if(i8042RegW[1]==0xAE) {      // enable
-            KBCommand &= ~B8(00010000);
-            i8042RegR[0]=B8(00000000);
-            }
-          else if(i8042RegW[1]==0xAD) {      // disable
-            KBCommand |= B8(00010000);
-            i8042RegR[0]=B8(00000000);
-            }*/
-          else if(i8042RegW[1]==0x20) {
-            i8042RegR[0]=KBCommand;
-            }
-          else if(i8042RegW[1]>0x60 && i8042RegW[1]<0x80) {   // boh, non risulta...
-            i8042RegR[0]=KBRAM[i8042RegW[1] & 0x1f];
-            }
-          else if(i8042RegW[1]==0xA1) {			// read data AMI286
-						i8042RegR[0]=Keyboard[i8042OutPtr-1];
-            }
-          else if(i8042RegW[1]==0xC0) {			// read data
-						i8042RegR[0]=Keyboard[i8042OutPtr-1];
-            }
-          else if(i8042RegW[1]==0xC1) {			// read data 4 lower bit port of ?? jumper?? into 4..7
-						i8042RegR[0]=Keyboard[i8042OutPtr-1];
-            }
-          else if(i8042RegW[1]==0xC2) {			// read data 4 upper bit port of ?? jumper?? into 4..7
-						i8042RegR[0]=Keyboard[i8042OutPtr-1];
-            }
-          else if(i8042RegW[1]==0xD0) {			// read data
-						if(KBCommand & B8(00010000))			// se disabilitata
-							i8042RegR[0]=i8042Output;
-						else
-							i8042RegR[0]=i8042Output;				// boh...
-            }
-          else if(i8042RegW[1]==0xEE) {     //echo
-            i8042RegR[0]=0xee;
-            }
-          else if(i8042RegW[1]>=0xF0 && i8042RegW[1]<=0xFF) {
-            }
-          else {
-						if(KBStatus & B8(00000001))		// SOLO se c'è stato davvero un tasto! (altrimenti siamo dopo reset o clock ENable
-							i8042RegR[0]=Keyboard[i8042OutPtr-1];
-            }
+						}
 
 
 					if(i8042OutPtr) {
-						if(!--i8042OutPtr) 
-		          KBStatus &= ~B8(00000001);
-					// aspetta 2 byte dopo AA... non so perché GESTIRE?  ah forse ID
+						if(!--i8042OutPtr) {
+		          KBStatus &= ~KB_OUTPUTFULL;
+//							i8042Output &= ~0b00010000);
+							i8042RegW[1]=0;
+							}
+						}
+					else {		// per sicurezza... verificare come mai, nel caso
+		        KBStatus &= ~KB_OUTPUTFULL;
+//						i8042Output &= ~0b00010000);
 						}
 
 
@@ -819,7 +783,7 @@ uint8_t _fastcall InValue(uint16_t t) {
 
 
           i=i8042RegR[0];
-
+	//				KBStatus &= ~0b00001000);		// è dato (non comando)
 
 
           break;
@@ -842,19 +806,10 @@ uint8_t _fastcall InValue(uint16_t t) {
           break;
         case 4:
           i=i8042RegR[1]=KBStatus; // 
-          KBStatus &= ~B8(00000010);			// cmq i dati son stati usati :)
+          KBStatus &= ~KB_INPUTFULL;			// cmq i dati son stati usati :)
+//					KBStatus |= 0b00001000);		// è comando
           break;
         }
-#endif
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 6%X  : %02X \n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
 #endif
       break;
 
@@ -871,78 +826,55 @@ uint8_t _fastcall InValue(uint16_t t) {
         case 1:     // il bit 7 attiva/disattiva NMI
           switch(i146818RegW[0] & 0x3f) {
             case 0:
-              i146818RegR[1]=currentDateTime.tm_sec;
+              i146818RegR[1]=currentTime.sec;
               break;
               // in mezzo c'è Alarm...
             case 2:
-              i146818RegR[1]=currentDateTime.tm_min;
+              i146818RegR[1]=currentTime.min;
               break;
             case 4:
-              i146818RegR[1]=currentDateTime.tm_hour;
+              i146818RegR[1]=currentTime.hour;
               break;
-            case 6:
-              i146818RegR[1]=currentDateTime.tm_wday;
+            case 6:              // 6 è day of week...
+              i146818RegR[1]=currentDate.weekday;
               break;
             case 7:
-              i146818RegR[1]=currentDateTime.tm_mday;
+              i146818RegR[1]=currentDate.mday;
               break;
             case 8:
-              i146818RegR[1]=currentDateTime.tm_mon;
+              i146818RegR[1]=currentDate.mon;
               break;
             case 9:
-              i146818RegR[1]=currentDateTime.tm_year;
+              i146818RegR[1]=currentDate.year;
               break;
             case 10:
-              i146818RegR[1]=(i146818RAM[10] & B8(10000000)) | B8(00100110);			// dividers + UIP
+              i146818RegR[1]=(i146818RAM[10] & 0b10000000) | 0b00100110;			// dividers + UIP
               break;
             case 11:
-              i146818RegR[1]=B8(00000010);			// 12/24: 24; BCD mode
+              i146818RegR[1]=0b00000010;			// 12/24: 24; BCD mode
               break;
             case 12:
               i146818RegR[1]=i146818RAM[12] = 0;   // flag IRQ
+// no non va così      i146818RAM[10] &= ~0b10000000);		// o glatick si incazza, v. sopra
               break;
             case 13:
               i146818RegR[1]=i146818RAM[13];
-							i146818RAM[13] |= B8(10000000);			// VBat ok dopo una lettura
+							i146818RAM[13] |= 0b10000000;			// VBat ok dopo una lettura  EVIDENTE CAZZATA v. datasheet e valori cmos sotto!
               break;
 
             case 14:
-//              i146818RegR[1]=B8(00000000);			// diag in GLATick...
+//              i146818RegR[1]=0b00000000);			// diag in GLATick...
 //              break;
 #ifdef PCAT
             case 15:			// flag, Award scrive 6		https://www.rcollins.org/ftp/source/pmbasics/tspec_a1.l1
 #endif
             default:      // qua ci sono i 4 registri e poi la RAM
               i146818RegR[1]=i146818RAM[i146818RegW[0] & 0x3f];
-
-/*							if((i146818RegW[0] & 0x3f) == 14 || (i146818RegW[0] & 0x3f)==15)
-							{	char myBuf[256],myBuf2[32];
-							wsprintf(myBuf,"%u RTCRAM R: ",timeGetTime());
-							for(i=0; i<64; i++) {		// 
-								wsprintf(myBuf2,"%02X ",i146818RAM[i]);
-								strcat(myBuf,myBuf2);
-								if(i==9 || i==13)
-									strcat(myBuf," ");
-								}
-							strcat(myBuf,"\r\n");
-							_lwrite(spoolFile,myBuf,strlen(myBuf));
-							}*/
-
               break;
             }
           i=i146818RegR[1];
           break;
         }
-#ifdef _DEBUG
-#ifdef DEBUG_RTC
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 7%X [%x]  : %02X  \n",timeGetTime(),
-				_ip,t,i146818RegW[0] & 0x3f,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       break;
     case 0x8:        // 8237 DMA??
       t &= 0xf;
@@ -1036,16 +968,6 @@ uint8_t _fastcall InValue(uint16_t t) {
 					break;
 				}
 #endif
-#ifdef _DEBUG
-#ifdef DEBUG_8237
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 8%X  : %02X  \n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       break;
 
     case 0x9:        // SuperXT TD3300A
@@ -1069,7 +991,7 @@ uint8_t _fastcall InValue(uint16_t t) {
       t &= 0x1;
       switch(t) {
         case 0:
-					switch(i8259OCW2[2] & B8(00000011)) {		// 
+					switch(i8259OCW2[2] & 0b00000011) {		// 
 						case 2:
 							i8259Reg2R[0]=i8259IRR2;
 							break;
@@ -1085,16 +1007,6 @@ uint8_t _fastcall InValue(uint16_t t) {
 						i=i8259Reg2R[1];
           break;
         }
-#ifdef _DEBUG
-#ifdef DEBUG_8259
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at A%X  : %02X  \n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 #else
 i=t;  //DEBUG
 #endif
@@ -1129,8 +1041,8 @@ i=t;  //DEBUG
 					i8237FF2 &= 1;
 					break;
 				case 8:			// Status / Command
-//					if(!(i8237Reg2W[8] & B8(00000001))) {			// controller enable
-//						i8237Reg2R[8] |= ((1 << 0) << 4);  // request??...
+//					if(!(i8237Reg2W[8] & 0b00000001))) {			// controller enable
+//						i8237Reg2R[8] |= DMA_REQUEST1;  // request??...
 //						if(!(i8237Reg2W[15] & (1 << 0)))		// mask...
 //							i8237RegR2[8] |= 1;		// simulo attività ch0 (refresh... (serve a glabios o dà POST error 400h, E3BA
 //						}
@@ -1151,16 +1063,6 @@ i=t;  //DEBUG
 					i8237Reg2R[8] &= 0xf0;  // clear activity flags
 					break;
 				}
-#ifdef _DEBUG
-#ifdef DEBUG_8237
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at C%X  : %02X  \n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 			break;
 #endif
 
@@ -1179,7 +1081,53 @@ i=t;  //DEBUG
   // 2f8-3f8 serial
 
 #ifdef PCAT
-    case 0x1f:      // 1f0-1ff   // hard disc 0 su AT		http://www.techhelpmanual.com/897-at_hard_disk_ports.html   http://www.techhelpmanual.com/892-i_o_port_map.html
+    case 0x17:      // 170-177   // hard disc 1 su AT		
+    case 0x1f:      // 1f0-1f7   // hard disc 0 su AT		http://www.techhelpmanual.com/897-at_hard_disk_ports.html   http://www.techhelpmanual.com/892-i_o_port_map.html
+			if(t & 0x80)
+				hdDisc &= ~2;
+			else
+				hdDisc |= 2;
+      t &= 0x7;
+      switch(t) {
+        case 0:			// data MA è a 16BIT!! v. sotto
+/*					HDContrRegR[t]=sectorData[HDFIFOPtrR];
+					HDFIFOPtrR++;
+					if(HDFIFOPtrR >= SECTOR_SIZE)
+						HDFIFOPtrR=0;
+					hdState &= ~HD_AT_STATUS_BUSY;		// tolgo busy :)
+					*/
+          break;
+        case 1:			// error
+					HDContrRegR[t]=hdError;
+//					hdError=0;
+          break;
+        case 2:			// sector count
+        case 3:			// sector number
+        case 4:			// cyl high
+        case 5:			// cyl low
+					// se ATAPI, 4 = 0x14 e 5 = 0xeb; se SATA 0x3c e 0xc3
+        case 6:			// drive & head
+					HDContrRegR[t]=HDContrRegW[t];
+          break;
+        case 7:			// status
+					HDContrRegR[t]=hdState;
+					if((HDContrRegW[7] & 0xf0) == 0x20 || (HDContrRegW[7] & 0xf0) == 0x30)
+						;		//  (per read e write andrebbe fatto a fine operazione, ma è complicato
+					else
+						hdState &= ~HD_AT_STATUS_BUSY;		// tolgo busy :)
+// cagata, chissà come dovrebbe essere					i8259IRR2 &= hdDisc >=2 ? ~0b10000000) : ~0b01000000);		// tolgo IRQ... v.3f6
+					// e OCCHIO cmq di là pulisco busy su IRQ, è più semplice!
+
+          break;
+/*        case 0x0F: // 3F7  // da granite
+            u8 result = 0;
+            result |= (drive_head&0x10)?1:2;
+            result |= (drive_head&0x0F)<<2;
+            data = result;
+            break;				
+						*/
+				}
+			i=HDContrRegR[t];
       break;
 #endif
 
@@ -1200,22 +1148,22 @@ i=t;  //DEBUG
       t &= 0xf;
       switch(t) {
         case 1:
-          i=currentDateTime.tm_sec;
+          i=currentTime.sec;
           break;
         case 2:
-          i=currentDateTime.tm_min;
+          i=currentTime.min;
           break;
         case 3:
-          i=currentDateTime.tm_hour;
+          i=currentTime.hour;
           break;
         case 4:
-          i=currentDateTime.tm_mday;
+          i=currentDate.mday;
           break;
         case 5:
-          i=currentDateTime.tm_mon;
+          i=currentDate.mon;
           break;
         case 6:
-          i=currentDateTime.tm_year;
+          i=currentDate.year;
           break;
         case 7:
           break;
@@ -1224,7 +1172,8 @@ i=t;  //DEBUG
         }
       break;
       
-    case 0x32:    // 320- (hard disk su XT	http://www.techhelpmanual.com/898-xt_hard_disk_ports.html  https://forum.vcfed.org/index.php?threads/ibm-xt-i-o-addresses.1237247/		
+#ifdef ROM_HD_BASE
+		case 0x32:    // 320- (hard disk su XT	http://www.techhelpmanual.com/898-xt_hard_disk_ports.html  https://forum.vcfed.org/index.php?threads/ibm-xt-i-o-addresses.1237247/		
       t &= 3;
       switch(t) {
 				BYTE disk;
@@ -1236,31 +1185,31 @@ i=t;  //DEBUG
 					// perché pare che tipo il DMA nei HD viene attivato DOPO la conferma della rilettura
 
 
-					switch(HDContrRegW[0] & B8(11100000)) {		// i 3 bit alti sono class, gli altri il comando
-						case B8(00000000):
-							disk=HDFIFOW[1] & B8(00100000) ? 1 : 0;
-							switch(HDContrRegW[0] & B8(00011111)) {		// i 3 bit alti sono class, gli altri il comando
-								case 0x00:			// test ready
+					switch(HDContrRegW[0] & 0b11100000) {		// i 3 bit alti sono class, gli altri il comando
+						case 0b00000000:
+							disk=HDFIFOW[1] & 0b00100000 ? 1 : 0;
+							switch(HDContrRegW[0] & 0b00011111) {		// i 3 bit alti sono class, gli altri il comando
+								case HD_XT_TEST_READY:			// test ready
 									if(!disk)
-										HDFIFOR[0]=B8(00000000);
+										HDFIFOR[0]=0b00000000;
 									else
-										HDFIFOR[0]=B8(00100000);		// errore su disco 2 ;) se ne sbatte
+										HDFIFOR[0]=0b00100000;		// errore su disco 2 ;) se ne sbatte
 
 endHDcommandWithIRQ:
-									if(hdControl & B8(00000010))
-											i8259IRR |= B8(00100000);		// simulo IRQ...
-									hdState |= B8(00100000);		// IRQ pending
+									if(hdControl & 0b00000010)
+										setHDIRQ(DEFAULT_HD_DELAYED_IRQ);
+									hdState |= HD_XT_STATUS_IRQ;		// IRQ pending
 endHDcommand:
-									hdState &= ~B8(00000010);		// passo a read
-									hdState &= ~B8(00001000);			// BSY
+									hdState &= ~HD_XT_STATUS_DRQ;		// passo a read
+									hdState &= ~HD_XT_STATUS_BUSY;			// BSY
 									HDFIFOPtrW=HDFIFOPtrR=0;
 									break;
 								case 0x01:			// recalibrate
 
 									if(!disk)
-										HDFIFOR[0]=B8(00000000);
+										HDFIFOR[0]=0b00000000;
 									else
-										HDFIFOR[0]=B8(00100010);		// errore su disco 2 ;) QUA VA! solo che poi resta a provarci 1000 volte...
+										HDFIFOR[0]=0b00100010;		// errore su disco 2 ;) QUA VA! solo che poi resta a provarci 1000 volte...
 
 									// ritardo...
 									hdCylinder=0;
@@ -1272,14 +1221,14 @@ endHDcommand:
 										HDFIFOR[1]=HDFIFOR[2]=HDFIFOR[3]=HDFIFOR[4]=0;
 										}
 
-//							hdState |= B8(00100000);		// IRQ pending
-//										if(hdControl & B8(00000010))		// sparisce C anche se il disco rimane visibile... strano...
-//											i8259IRR |= B8(00100000);		// simulo IRQ...
+//							hdState |= HD_XT_STATUS_IRQ;		// IRQ pending
+//										if(hdControl & 0b00000010))		// sparisce C anche se il disco rimane visibile... strano...
+//											i8259IRR |= 0b00100000);		// simulo IRQ...
 									goto endHDcommandWithIRQ;
 									break;
 								case 0x02:			// reserved
 									break;
-								case 0x03:			// request sense
+								case HD_XT_READ_STATUS:			// request sense
 
 									if(HDFIFOR[0]) {		// se errore ultima op...
 //											HDFIFOR[1]=HDFIFOR[2]=HDFIFOR[3]=HDFIFOR[4];		// ci sarebbero cilindro ecc dell'errore
@@ -1291,97 +1240,66 @@ endHDcommand:
 
 									goto endHDcommand;
 									break;
-								case 0x04:			// format drive
 
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-						{
-						char myBuf[256],mybuf2[32];
-						wsprintf(myBuf,"****F %s  D%u  Drive \n",_strtime(mybuf2),
-							disk,hdCylinder,hdHead,hdSector,MAKELONG(addr,DMApage[3]),n,getHDiscSector(disk)*SECTOR_SIZE);
-						_lwrite(spoolFile,myBuf,strlen(myBuf));
-						}
-#endif
-#endif
+								case HD_XT_FORMAT_DRIVE:			// format drive
 
 									goto endHDcommand;
 
 									break;
-								case 0x05:			// read verify
+								case HD_XT_VERIFY:			// read verify
 
-									hdState |= B8(00010000);			// attivo DMA (?? su hdControl<1>
+									hdState |= HD_XT_STATUS_DRQ;			// attivo DMA (?? su hdControl<1>
 									if(!disk) {
 										hdCylinder=MAKEWORD(HDFIFOW[3],HDFIFOW[2] >> 6);
-										hdHead=HDFIFOW[1] & B8(00011111);
-										hdSector=HDFIFOW[2] & B8(00011111);
+										hdHead=HDFIFOW[1] & 0b00011111;
+										hdSector=HDFIFOW[2] & 0b00011111;
 										HDFIFOW[4];	HDFIFOW[5];		// 
 										addr=i8237DMACurAddr[3]=i8237DMAAddr[3];
 										i8237DMACurLen[3]=i8237DMALen[3];
 										n=i8237DMALen[3]   +1;		// 1ff ...
 										}
 
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-					{
-					char myBuf[256],mybuf2[32];
-					wsprintf(myBuf,"****V %s  D%u  C%u H%u S%u , %06x: %04x, %08x \n",_strtime(mybuf2),
-						disk,hdCylinder,hdHead,hdSector,MAKELONG(addr,DMApage[3]),n,getHDiscSector(disk)*SECTOR_SIZE);
-					_lwrite(spoolFile,myBuf,strlen(myBuf));
-					}
-#endif
-#endif
-
-
-
 									if(!disk)		// 
-										HDFIFOR[0]=B8(00000000);
+										HDFIFOR[0]=0b00000000;
 									else
-										HDFIFOR[0]=B8(00100010);		// errore su disco 2 ;) MA NON SPARISCE
+										HDFIFOR[0]=0b00100010;		// errore su disco 2 ;) MA NON SPARISCE
 
-									hdState &= ~B8(00000010);		// passo a read (lungh.diversa qua
-									hdState &= ~B8(00010000);			// disattivo DMA 
+									hdState &= ~HD_XT_STATUS_DDR;		// passo a read (lungh.diversa qua
+									hdState &= ~HD_XT_STATUS_DRQ;			// disattivo DMA 
 
 									goto endHDcommandWithIRQ;
 									break;
-								case 0x06:			// format track
-							hdState |= B8(00010000);			// attivo DMA (?? su hdControl<1>
+
+								case HD_XT_FORMAT_TRACK:			// format track
+							hdState |= HD_XT_STATUS_DRQ;			// attivo DMA (?? su hdControl<1>
 
 									hdCylinder=MAKEWORD(HDFIFOW[3],HDFIFOW[2] >> 6);
-									hdHead=HDFIFOW[1] & B8(00011111);
-
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-					{
-					char myBuf[256],mybuf2[32];
-					wsprintf(myBuf,"****F %s  D%u  C%u H%u S%u , %06x: %04x, %08x \n",_strtime(mybuf2),
-						disk,hdCylinder,hdHead,hdSector,MAKELONG(addr,DMApage[3]),n,getHDiscSector(disk)*SECTOR_SIZE);
-					_lwrite(spoolFile,myBuf,strlen(myBuf));
-					}
-#endif
-#endif
+									hdHead=HDFIFOW[1] & 0b00011111;
 
 									if(!disk)
-										HDFIFOR[0]=B8(00000000);
+										HDFIFOR[0]=0b00000000;
 									else
-										HDFIFOR[0]=B8(00100010);		// errore su disco 2 ;) MA NON SPARISCE
+										HDFIFOR[0]=0b00100010;		// errore su disco 2 ;) MA NON SPARISCE
 
-									hdState &= ~B8(00010000);			// disattivo DMA 
+									hdState &= ~HD_XT_STATUS_DRQ;			// disattivo DMA 
 
 									goto endHDcommandWithIRQ;
 									break;
-								case 0x07:			// format bad track
+
+								case HD_XT_FORMAT_BAD_TRACK:			// format bad track
 
 									goto endHDcommand;
 									break;
-								case 0x08:			// read
 
-									hdState |= B8(00001000);			// BSY
+								case HD_XT_READ_DATA:			// read
+
+									hdState |= HD_XT_STATUS_BUSY;			// BSY
 
 									if(!disk) {
 
 										hdCylinder=MAKEWORD(HDFIFOW[3],HDFIFOW[2] >> 6);
-										hdHead=HDFIFOW[1] & B8(00011111);
-										hdSector=HDFIFOW[2] & B8(00011111);
+										hdHead=HDFIFOW[1] & 0b00011111;
+										hdSector=HDFIFOW[2] & 0b00011111;
 										HDFIFOW[4];	HDFIFOW[5];		// 
 										addr=i8237DMACurAddr[3]=i8237DMAAddr[3];
 										i8237DMACurLen[3]=i8237DMALen[3];
@@ -1390,42 +1308,30 @@ endHDcommand:
 											encodeHDiscSector(disk);
 
 											if(hdControl & 1) {		// scegliere se DMA o PIO in base a flag HDcontrol qua...
-												if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-													i8237RegR[8] |= ((1 << 3) << 4);  // request??...
-													if(!(i8237RegW[15] & (1 << 3)))	{	// mask...
-														switch(i8237Mode[3] & B8(00001100)) {		// DMA mode
-															case B8(00000000):			// verify
+												if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+													i8237RegR[8] |= DMA_REQUEST3;  // request??...
+													if(!(i8237RegW[15] & DMA_MASK3))	{	// mask...
+                      			switch((i8237Mode[3] & 0b00001100) >> 2) {		// DMA mode
+															case DMA_MODEVERIFY:			// verify
 																memcmp(&ram_seg[MAKELONG(addr,DMApage[3])],sectorData,SECTOR_SIZE);
 																break;
-															case B8(00001000):			// write
-																memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[3])],SECTOR_SIZE);
-																break;
-															case B8(00000100):			// read
+															case DMA_MODEWRITE:			// write
 																memcpy(&ram_seg[MAKELONG(addr,DMApage[3])],sectorData,SECTOR_SIZE);
+																break;
+															case DMA_MODEREAD:			// read
+																memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[3])],SECTOR_SIZE);
 																break;
 															}
 														}
-													i8237Mode[3] & B8(00001100) == B8(00000100);		// Read
-													i8237Mode[3] & B8(11000000) == B8(01000000);		// Single mode
-													i8237RegR[8] |= 1 << 3;  // fatto, TC 3
-													i8237RegR[8] &= ~((1 << 3) << 4);  // request finita
+													i8237Mode[3] & DMA_TYPE == DMA_READ;		// Read
+													i8237Mode[3] & DMA_MODE == DMA_SINGLE;		// Single mode
+													i8237RegR[8] |= DMA_TC3;  // fatto, TC 3
+													i8237RegR[8] &= ~DMA_REQUEST3;  // request finita
 													i8237RegR[13]=ram_seg[SECTOR_SIZE-1]; // ultimo byte trasferito :)
 													}
 												}
 											else {
 												}
-
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-					{
-					char myBuf[256],mybuf2[32];
-					wsprintf(myBuf,"****R %s  D%u  C%u H%u S%u , %06x: %04x, %08x \n",_strtime(mybuf2),
-						disk,hdCylinder,hdHead,hdSector,MAKELONG(addr,DMApage[3]),n,getHDiscSector(disk)*SECTOR_SIZE);
-					_lwrite(spoolFile,myBuf,strlen(myBuf));
-					}
-#endif
-#endif
-
 											hdSector++;
 											if(hdSector>=HD_SECTORS_PER_CYLINDER) {		// 
 												hdSector=0;
@@ -1443,71 +1349,62 @@ endHDcommand:
 
 										i8237DMACurAddr[3]+=i8237DMACurLen[3]+1;
 										i8237DMACurLen[3]=0;
-										HDFIFOR[0] = B8(10000000);		//ST0: B7=address valid, B5:4=error type, B3:0=error code
-										HDFIFOR[1] = (disk ? B8(00100000) : B8(00000000)) | (hdHead & 31);
+										HDFIFOR[0] = 0b10000000;		//ST0: B7=address valid, B5:4=error type, B3:0=error code
+										HDFIFOR[1] = (disk ? 0b00100000 : 0b00000000) | (hdHead & 31);
 										HDFIFOR[2] = hdCylinder & 0xff; //		//C
 										HDFIFOR[3] = (hdCylinder >> 8) | hdSector;
 										}
 									else
-										HDFIFOR[0]=B8(00100000);		// errore su disco 2 ;) MA NON SPARISCE
+										HDFIFOR[0]=0b00100000;		// errore su disco 2 ;) MA NON SPARISCE
 
-									hdState &= ~B8(00010000);			// disattivo DMA 
+									hdState &= ~HD_XT_STATUS_DRQ;			// disattivo DMA 
 //											goto endHDcommand;
 									goto endHDcommandWithIRQ;
 									break;
+
 								case 0x09:			// reserved
 									break;
-								case 0x0a:			// write
 
-									hdState |= B8(00001000);			// BSY
+								case HD_XT_WRITE_DATA:			// write
+
+									hdState |= HD_XT_STATUS_BUSY;			// BSY
 
 									if(!disk) {
 										hdCylinder=MAKEWORD(HDFIFOW[3],HDFIFOW[2] >> 6);
-										hdHead=HDFIFOW[1] & B8(00011111);
-										hdSector=HDFIFOW[2] & B8(00011111);
+										hdHead=HDFIFOW[1] & 0b00011111;
+										hdSector=HDFIFOW[2] & 0b00011111;
 										HDFIFOW[4];	HDFIFOW[5];		// 
 										addr=i8237DMACurAddr[3]=i8237DMAAddr[3];
 										i8237DMACurLen[3]=i8237DMALen[3];
 										n=i8237DMALen[3]   +1;		// 1ff ...
 										do {
-											msdosHDisk=((uint8_t*)MSDOS_HDISK)+getHDiscSector(disk)*SECTOR_SIZE;
+											msdosHDisk=((uint8_t*)MSDOS_HDISK)+getHDiscSector(disk,0)*SECTOR_SIZE;
 
 											if(hdControl & 1) {		// scegliere se DMA o PIO in base a flag HDcontrol qua...
-												if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-													i8237RegR[8] |= ((1 << 3) << 4);  // request??...
-													if(!(i8237RegW[15] & (1 << 3)))	{	// mask...
-														switch(i8237Mode[3] & B8(00001100)) {		// DMA mode
-															case B8(00000000):			// verify
+												if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+													i8237RegR[8] |= DMA_REQUEST3;  // request??...
+													if(!(i8237RegW[15] & DMA_MASK3))	{	// mask...
+                      			switch((i8237Mode[3] & 0b00001100) >> 2) {		// DMA mode
+															case DMA_MODEVERIFY:			// verify
 																memcmp(&ram_seg[MAKELONG(addr,DMApage[3])],msdosHDisk,SECTOR_SIZE);
 																break;
-															case B8(00001000):			// write
-																memcpy(msdosHDisk,&ram_seg[MAKELONG(addr,DMApage[3])],SECTOR_SIZE);
-																break;
-															case B8(00000100):			// read
+															case DMA_MODEWRITE:			// write
 																memcpy(&ram_seg[MAKELONG(addr,DMApage[3])],msdosHDisk,SECTOR_SIZE);
+																break;
+															case DMA_MODEREAD:			// read
+																memcpy(msdosHDisk,&ram_seg[MAKELONG(addr,DMApage[3])],SECTOR_SIZE);
 																break;
 															}
 														}
-													i8237Mode[3] & B8(00001100) == B8(00000100);		// Read
-													i8237Mode[3] & B8(11000000) == B8(01000000);		// Single mode
-													i8237RegR[8] |= 1 << 3;  // fatto, TC 3
-													i8237RegR[8] &= ~((1 << 3) << 4);  // request finita
+													i8237Mode[3] & DMA_TYPE == DMA_READ;		// Read
+													i8237Mode[3] & DMA_MODE == DMA_SINGLE;		// Single mode
+													i8237RegR[8] |= DMA_TC3;  // fatto, TC 3
+													i8237RegR[8] &= ~DMA_REQUEST3;  // request finita
 													i8237RegR[13]=ram_seg[SECTOR_SIZE-1]; // ultimo byte trasferito :)
 													}
 												}
 											else {
 												}
-
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-					{
-					char myBuf[256],mybuf2[32];
-					wsprintf(myBuf,"****W %s  D%u  C%u H%u S%u , %06x: %04x, %08x \n",_strtime(mybuf2),
-						disk,hdCylinder,hdHead,hdSector,MAKELONG(addr,DMApage[3]),n,getHDiscSector(disk)*SECTOR_SIZE);
-					_lwrite(spoolFile,myBuf,strlen(myBuf));
-					}
-#endif
-#endif
 
 											hdSector++;
 											if(hdSector>=HD_SECTORS_PER_CYLINDER) {		// ma NON dovrebbe accadere!
@@ -1526,57 +1423,57 @@ endHDcommand:
 
 										i8237DMACurAddr[3]+=i8237DMACurLen[3]+1;
 										i8237DMACurLen[3]=0;
-										HDFIFOR[0] = B8(00000000);		//ST0: B7=address valid, B5:4=error type, B3:0=error code
-										HDFIFOR[1] = (disk ? B8(00100000) : B8(00000000)) | (hdHead & 31);
+										HDFIFOR[0] = 0b00000000;		//ST0: B7=address valid, B5:4=error type, B3:0=error code
+										HDFIFOR[1] = (disk ? 0b00100000 : 0b00000000) | (hdHead & 31);
 										HDFIFOR[2] = hdCylinder & 0xff; //		//C
 										HDFIFOR[3] = (hdCylinder >> 8) | hdSector;
 										}
 									else
-										HDFIFOR[0]=B8(00100000);		// errore su disco 2 ;) MA NON SPARISCE
+										HDFIFOR[0]=0b00100000;		// errore su disco 2 ;) MA NON SPARISCE
 
-									hdState &= ~B8(00010000);			// disattivo DMA 
+									hdState &= ~HD_XT_STATUS_DRQ;			// disattivo DMA 
 									goto endHDcommandWithIRQ;
 									break;
-								case 0x0b:			// seek
+								case HD_XT_SEEK:			// seek
 
-									hdState |= B8(00001000);			// BSY
+									hdState |= HD_XT_STATUS_BUSY;			// BSY
 
 									if(!disk)
-										HDFIFOR[0]=B8(00000000);
+										HDFIFOR[0]=0b00000000;
 									else
-										HDFIFOR[0]=B8(00100000);		// errore su disco 2 ;) MA NON SPARISCE
+										HDFIFOR[0]=0b00100000;		// errore su disco 2 ;) MA NON SPARISCE
 
 									hdCylinder=MAKEWORD(HDFIFOW[3],HDFIFOW[2] >> 6);
-									hdHead=HDFIFOW[1] & B8(00011111);
+									hdHead=HDFIFOW[1] & 0b00011111;
 									// ritardo...
 
 									goto endHDcommandWithIRQ;
 									break;
-								case 0x0c:			// initialize
+								case HD_XT_INITIALIZE:			// initialize
 									if(HDFIFOPtrW==14) {
 
 										if(!disk)
-											HDFIFOR[0]=B8(00000000);
+											HDFIFOR[0]=0b00000000;
 										else
-											HDFIFOR[0]=B8(00100000   /*00100010 muore tutto*/);		// errore su disco 2 ;) MA NON SPARISCE
+											HDFIFOR[0]=0b00100000   /*00100010 muore tutto*/;		// errore su disco 2 ;) MA NON SPARISCE
 
 										// restituire 4 in Error code poi (però tanto non lo chiede, non arriva SENSE...
 //										HDFIFO[1]=4;
 
-										hdState &= ~B8(00000010);		// passo a read (lungh.diversa qua
+										hdState &= ~HD_XT_STATUS_DDR;		// passo a read (lungh.diversa qua
 										goto endHDcommandWithIRQ;
 										}
-									hdState &= ~B8(00001111);		// 
+									hdState &= ~0b00001111;		// 
 									break;
-								case 0x0d:			// read ECC burst
+								case HD_XT_READ_ECC_BURST_ERROR_LENGTH:			// read ECC burst
 									goto endHDcommand;
 									break;
-								case 0x0e:			// read data from sector buffer
+								case HD_XT_READ_SECTOR_BUFFER:			// read data from sector buffer
 
 										HDFIFOR[0]=0;
 									goto endHDcommandWithIRQ;
 									break;
-								case 0x0f:			// write data to sector buffer
+								case HD_XT_WRITE_SECTOR_BUFFER:			// write data to sector buffer
 
 										HDFIFOR[0]=0;
 									goto endHDcommandWithIRQ;
@@ -1585,26 +1482,26 @@ endHDcommand:
 									break;
 								}
 							break;
-						case B8(00100000):
+						case 0b00100000:
 							break;
-						case B8(01000000):
+						case 0b01000000:
 							break;
-						case B8(01100000):
+						case 0b01100000:
 							break;
-						case B8(10000000):
+						case 0b10000000:
 							break;
-						case B8(10100000):
+						case 0b10100000:
 							break;
-						case B8(11000000):
+						case 0b11000000:
 							break;
-						case B8(11100000):
-							disk=HDFIFOW[1] & B8(00100000) ? 1 : 0;
-							switch(HDContrRegW[0] & B8(00011111)) {		// i 3 bit alti sono class, gli altri il comando
+						case 0b11100000:
+							disk=HDFIFOW[1] & 0b00100000 ? 1 : 0;
+							switch(HDContrRegW[0] & 0b00011111) {		// i 3 bit alti sono class, gli altri il comando
 								case 0x00:			// RAM diagnostic
-//											hdState=B8(00001101);			// mah; e basare DMA su hdControl<1>
+//											hdState=0b00001101);			// mah; e basare DMA su hdControl<1>
 
 
-									HDFIFOR[0]=B8(00000000);									// ok (vuole questo, 20h pare ok e 30h sarebbe ram error
+									HDFIFOR[0]=0b00000000;									// ok (vuole questo, 20h pare ok e 30h sarebbe ram error
 									goto endHDcommandWithIRQ;
 									break;
 								case 0x01:			// reserved
@@ -1613,12 +1510,12 @@ endHDcommand:
 									break;
 								case 0x03:			// drive diagnostic
 
-									HDFIFOR[0]=B8(00000000);									// ok
+									HDFIFOR[0]=0b00000000;									// ok
 									goto endHDcommandWithIRQ;
 									break;
 								case 0x04:			// controller internal diagnostic
 
-									HDFIFOR[0]=B8(00000000);									// ok(vuole questo, 20h pare ok e 30h sarebbe ram error
+									HDFIFOR[0]=0b00000000;									// ok(vuole questo, 20h pare ok e 30h sarebbe ram error
 									goto endHDcommandWithIRQ;
 									break;
 								case 0x05:			// read long
@@ -1639,38 +1536,29 @@ endHDcommand:
           break;
         case 1:     // READ HARDWARE STATUS
 					HDContrRegR[1]=hdState;
-					if(!(hdState & B8(00000001)))
-						hdState |= B8(00000001);			// handshake
+					if(!(hdState & HD_XT_STATUS_XFER))
+						hdState |= HD_XT_STATUS_XFER;			// handshake
 
-					hdState |= B8(00100000);		// IRQ pending
+					hdState |= HD_XT_STATUS_IRQ;		// IRQ pending
           break;
         case 2:			// READ DRIVE CONFIGURATION INFO
-					HDContrRegR[2]=B8(00001111);			// 10MB entrambi (00=5, 01=24, 10=15, 11=10
-					hdState &= ~B8(00100010);			// input, no IRQ
+					HDContrRegR[2]=0b00001111;			// 10MB entrambi (00=5, 01=24, 10=15, 11=10
+					hdState &= ~(HD_XT_STATUS_IRQ | HD_XT_STATUS_DDR);			// input, no IRQ
           break;
         case 3:			// not used
           break;
 				}
 			i=HDContrRegR[t];
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 32%X  : %02X  cmd=%02X, fifoW=%u fifoR=%u\n",timeGetTime(),
-				_ip,t,i,HDContrRegW[1],HDFIFOPtrW,HDFIFOPtrR);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 			break;
+#endif
 
     case 0x37:    // 370-377 (secondary floppy, AT http://www.techhelpmanual.com/896-diskette_controller_ports.html); 378-37A  LPT1
       t &= 3;
 			i=LPT[0][t];		// per ora, al volo!
       switch(t) {
         case 0:
-//          i=(PORTE & 0xff) & ~B8(00010000);
-//          i |= PORTGbits.RG6 ? B8(00010000) : 0;   // perché LATE4 è led...
+//          i=(PORTE & 0xff) & ~0b00010000);
+//          i |= PORTGbits.RG6 ? 0b00010000) : 0;   // perché LATE4 è led...
           break;
         case 1:   // finire
 //          i=PORTB & 0xff;
@@ -1792,16 +1680,6 @@ endHDcommand:
 					break;
 				}
 			break;
-#ifdef _DEBUG
-#ifdef DEBUG_VGA
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 3B/C/D%X  : %02X  c\n",timeGetTime(),
-				_ip,t,i);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 #endif
 
 #ifdef CGA
@@ -1831,31 +1709,25 @@ endHDcommand:
 //							  https://wiki.osdev.org/Floppy_Disk_Controller#Accessing_Floppies_in_Real_Mode
       t &= 0xf;
       switch(t) {
-				BYTE disk;
 				int n,addr;
-
-				case 0:		// solo AT http://isdaman.com/alsos/hardware/fdc/floppy.htm
-				case 1:
-					break;
 
         case 2:   // Write: digital output register (DOR)   MOTD MOTC MOTB MOTA DMA ENABLE SEL1 SEL0
 					// questo registro in effetti non appartiene al uPD765 ma è esterno...
           break;
         case 4:   // Read-only: main status register (MSR)  REQ DIR DMA BUSY D C B A
-					disk=FloppyContrRegW[0] & 3;
-//					FloppyContrRegR[0] |= B8(10000000);		// DIO ready for data exchange
+//					FloppyContrRegR[0] |= FLOPPY_STATUS_REQ;		// DIO ready for data exchange
 					// nella prima word FIFO i 3 bit più bassi sono in genere HD US1 US0 ossia Head e Floppy in uso (0..3)
 					//NB è meglio effettuare le operazioni qua, alla rilettura, che non alla scrittura dell'ultimo parm (v anche HD)
 					// perché pare che tipo il DMA nei HD viene attivato DOPO la conferma della rilettura (qua pare di no ma ok)
-					switch(FloppyContrRegW[1] & B8(00011111)) {		// i 3 bit alti sono MT (multitrack), MF (MFM=1 o FM=0), SK (Skip deleted)
-						case 0x06:			// read data
+					switch(FloppyContrRegW[1] & 0b00011111) {		// i 3 bit alti sono MT (multitrack), MF (MFM=1 o FM=0), SK (Skip deleted)
+						case FLOPPY_READ_DATA:			// read data
 							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
 
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
+								floppyTrack[fdDisk]=FloppyFIFO[2];
+								floppyHead[fdDisk]=FloppyFIFO[3];
+								floppySector[fdDisk]=FloppyFIFO[4];
 								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
 								addr=i8237DMACurAddr[2]=i8237DMAAddr[2];
 
@@ -1863,68 +1735,42 @@ endHDcommand:
 								n=i8237DMALen[2]   +1;		// 1ff ...
 								do {
 	//								getDiscSector();
-									encodeDiscSector(disk);
-
-
-				/*							 {
-			char myBuf[256];
-			wsprintf(myBuf,"T%u H%u S%u , %06x: %04x, %08x \n",floppyTrack,floppyHead,floppySector,MAKELONG(addr,DMApage[2]),n,getDiscSector()*SECTOR_SIZE);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			wsprintf(myBuf,"  %02X %02X %02X %02X  %c%c%c%c\n",sectorData[0],sectorData[1],sectorData[2],sectorData[3],
-				isprint(sectorData[0]) ? sectorData[0] : '.',
-				isprint(sectorData[1]) ? sectorData[1] : '.',
-				isprint(sectorData[2]) ? sectorData[2] : '.',
-				isprint(sectorData[3]) ? sectorData[3] : '.'
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}*/
-
+									encodeDiscSector(fdDisk);
 
 									// SIMULO DMA qua...
-									if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-										i8237RegR[8] |= ((1 << 2) << 4);  // request??...
-										if(!(i8237RegW[15] & (1 << 2)))	{	// mask...
-											switch(i8237Mode[2] & B8(00001100)) {		// DMA mode
-												case B8(00000000):			// verify
+									if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+										i8237RegR[8] |= DMA_REQUEST2;  // request??...
+										if(!(i8237RegW[15] & DMA_MASK2))	{	// mask...
+                 			switch((i8237Mode[2] & 0b00001100) >> 2) {		// DMA mode
+												case DMA_MODEVERIFY:			// verify
 													memcmp(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
 													break;
-												case B8(00001000):			// write
-													memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
-													break;
-												case B8(00000100):			// read
+												case DMA_MODEWRITE:			// write
 													memcpy(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
+													break;
+												case DMA_MODEREAD:			// read
+													memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
 													break;
 												}
 											}
-										i8237Mode[2] & B8(00001100) == B8(00000100);		// Read
-										i8237Mode[2] & B8(11000000) == B8(01000000);		// Single mode
-										i8237RegR[8] |= 1 << 2;  // fatto, TC 2
-										i8237RegR[8] &= ~((1 << 2) << 4);  // request finita
+										i8237Mode[2] & DMA_TYPE == DMA_READ;		// Read
+										i8237Mode[2] & DMA_MODE == DMA_SINGLE;		// Single mode
+										i8237RegR[8] |= DMA_TC2;  // fatto, TC 2
+										i8237RegR[8] &= ~DMA_REQUEST2;  // request finita
 										i8237RegR[13]=ram_seg[MAKELONG(addr,DMApage[2])+(0x80 << FloppyFIFO[5])-1]; // ultimo byte trasferito :)
 										}
 
-#ifdef _DEBUG
-#ifdef DEBUG_FD
-			{
-			char myBuf[256],mybuf2[32];
-			wsprintf(myBuf,"*** %s  D%u  T%u H%u S%u , %06x: %04x, %08x \n",_strtime(mybuf2),
-				disk,floppyTrack[disk],floppyHead[disk],floppySector[disk],MAKELONG(addr,DMApage[2]),n,getDiscSector(disk)*SECTOR_SIZE);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
+									floppySector[fdDisk]++;
+									if(floppySector[fdDisk]>sectorsPerTrack[fdDisk]) {		// ma NON dovrebbe accadere!
+										floppySector[fdDisk]=1;
 
-									floppySector[disk]++;
-									if(floppySector[disk]>sectorsPerTrack[disk]) {		// ma NON dovrebbe accadere!
-										floppySector[disk]=1;
+										if(FloppyContrRegW[1] & 0b10000000) {		// solo se MT?
 
-										if(FloppyContrRegW[1] & B8(10000000)) {		// solo se MT?
+											floppyHead[fdDisk]++;
 
-											floppyHead[disk]++;
-
-											if(floppyHead[disk]>=2) {
-												floppyHead[disk]=0;
-												floppyTrack[disk]++;
+											if(floppyHead[fdDisk]>=2) {
+												floppyHead[fdDisk]=0;
+												floppyTrack[fdDisk]++;
 												}
 											}
 										}
@@ -1937,86 +1783,74 @@ endHDcommand:
 								i8237DMACurAddr[2]+=i8237DMACurLen[2]+1;
 								i8237DMACurLen[2]=0;
 								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
-//								FloppyFIFO[2] = 0 | (floppySector[disk]==sectorsPerTrack[disk] ? B8(10000000) : 0);		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
+								FloppyFIFO[6] = floppySector[fdDisk]; //FloppyFIFO[4];		//R
+								FloppyFIFO[5] = floppyHead[fdDisk]; //FloppyFIFO[3];		//H
+								FloppyFIFO[4] = floppyTrack[fdDisk]; //FloppyFIFO[2];		//C
+								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+//								FloppyFIFO[2] = 0 | (floppySector[fdDisk]==sectorsPerTrack[fdDisk] ? 0b10000000) : 0);		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								//Bit 7 (value = 0x80) is set if the floppy had too few sectors on it to complete a read/write.
 								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
-								if(!(floppyState[disk] & B8(10000000)))		// forzo errore se disco non c'è...
-									FloppyFIFO[1] |= B8(11000000);
-
-endFDcommandWithIRQ2:
-								FloppyFIFOPtrR=1;
-
-endFDcommandWithIRQ:
-								FloppyContrRegR[0]=B8(11000000);
-endFDcommandWithIRQ3:
-								floppyState[disk] |= B8(01000000);		// passo a read
+								if(!(floppyState[fdDisk] & FLOPPY_STATE_DISKPRESENT))		// forzo errore se disco non c'è...
+									FloppyFIFO[1] |= FLOPPY_ERROR_INVALID | FLOPPY_ERROR_ABNORMAL;
 								FloppyFIFOPtrW=0;
-								if(FloppyContrRegW[0] & B8(00001000 /*in asm dice che questo è "Interrupt ON"*/))
-									setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
-								floppylastCmd[disk]=FloppyContrRegW[1] & B8(00011111);
+								FloppyFIFOPtrR=1;
 								}
 
 							else if(FloppyFIFOPtrR) {		// NO! glabios lo fa, PCXTbios no: pensavo ci passasse più volte dopo la fine preparazione, ma non è così quindi si può togliere if
 								//FloppyContrRegR[0]=FloppyFIFO[FloppyFIFOPtrR++];togliere
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-
-//								FloppyContrRegR[0]=B8(10000000) | (floppyState[disk] & B8(01000000));
-
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY)  | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x02:			// read track
+						
+						case FLOPPY_READ_TRACK:			// read track
 							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
 
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=1 /*FloppyFIFO[4]*/;
+								floppyTrack[fdDisk]=FloppyFIFO[2];
+								floppyHead[fdDisk]=FloppyFIFO[3];
+								floppySector[fdDisk]=1 /*FloppyFIFO[4]*/;
 								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
 								addr=i8237DMACurAddr[2]=i8237DMAAddr[2];
 								i8237DMACurLen[2]=i8237DMALen[2];
-								n=i8237DMALen[2]   +1;		// 1ff ...
+								n=i8237DMALen[2]   +1;		// qui ci dev'essere abbastanza spazio per tutti i settori di una traccia, e lo uso quindi anche come contatore come al solito!
 								do {
-									encodeDiscSector(disk);
+									encodeDiscSector(fdDisk);
 
 									// SIMULO DMA qua...
-									if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-										i8237RegR[8] |= ((1 << 2) << 4);  // request??...
-										if(!(i8237RegW[15] & (1 << 2)))	{	// mask...
-											switch(i8237Mode[2] & B8(00001100)) {		// DMA mode
-												case B8(00000000):			// verify
+									if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+										i8237RegR[8] |= DMA_REQUEST2;  // request??...
+										if(!(i8237RegW[15] & DMA_MASK2))	{	// mask...
+                 			switch((i8237Mode[2] & 0b00001100) >> 2) {		// DMA mode
+												case DMA_MODEVERIFY:			// verify
 													memcmp(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
 													break;
-												case B8(00001000):			// write
-													memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
-													break;
-												case B8(00000100):			// read
+												case DMA_MODEWRITE:			// write
 													memcpy(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
+													break;
+												case DMA_MODEREAD:			// read
+													memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
 													break;
 												}
 											}
-										i8237Mode[2] & B8(00001100) == B8(00000100);		// read
-										i8237Mode[2] & B8(11000000) == B8(01000000);		// Single mode
-										i8237RegR[8] |= 1 << 2;  // fatto, TC 2
-										i8237RegR[8] &= ~((1 << 2) << 4);  // request finita
+										i8237Mode[2] & DMA_TYPE == DMA_READ;		// read
+										i8237Mode[2] & DMA_MODE == DMA_SINGLE;		// Single mode
+										i8237RegR[8] |= DMA_TC2;  // fatto, TC 2
+										i8237RegR[8] &= ~DMA_REQUEST2;  // request finita
 										i8237RegR[13]=ram_seg[(0x80 << FloppyFIFO[5])-1]; // ultimo byte trasferito :)
 										}
 
-									floppySector[disk]++;
-									if(floppySector[disk]>sectorsPerTrack[disk]) {		// 
+									floppySector[fdDisk]++;
+									if(floppySector[fdDisk]>sectorsPerTrack[fdDisk]) {		// 
 										break;
 										}
 									addr+=0x80 << FloppyFIFO[5];
@@ -2028,76 +1862,77 @@ endFDcommandWithIRQ3:
 								i8237DMACurAddr[2]+=i8237DMACurLen[2]+1;
 								i8237DMACurLen[2]=0;
 								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[6] = floppySector[fdDisk]; //FloppyFIFO[4];		//R
+								FloppyFIFO[5] = floppyHead[fdDisk]; //FloppyFIFO[3];		//H
+								FloppyFIFO[4] = floppyTrack[fdDisk]; //FloppyFIFO[2];		//C
+								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
-                goto endFDcommandWithIRQ2;
+								FloppyFIFOPtrW=0;
+								FloppyFIFOPtrR=1;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY) | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x0c:			// read deleted
+						
+						case FLOPPY_READ_DELETED_DATA:			// read deleted
 							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
 
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
+								floppyTrack[fdDisk]=FloppyFIFO[2];
+								floppyHead[fdDisk]=FloppyFIFO[3];
+								floppySector[fdDisk]=FloppyFIFO[4];
 								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
 								addr=i8237DMACurAddr[2]=i8237DMAAddr[2];
 								i8237DMACurLen[2]=i8237DMALen[2];
 								n=i8237DMALen[2]   +1;		// 1ff ...
 								do {
-									encodeDiscSector(disk);
-
+									encodeDiscSector(fdDisk);
 
 									// SIMULO DMA qua...
-									if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-										i8237RegR[8] |= ((1 << 2) << 4);  // request??...
-										if(!(i8237RegW[15] & (1 << 2)))	{	// mask...
-											switch(i8237Mode[2] & B8(00001100)) {		// DMA mode
-												case B8(00000000):			// verify
+									if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+										i8237RegR[8] |= DMA_REQUEST2;  // request??...
+										if(!(i8237RegW[15] & DMA_MASK2))	{	// mask...
+                 			switch((i8237Mode[2] & 0b00001100) >> 2) {		// DMA mode
+												case DMA_MODEVERIFY:			// verify
 													memcmp(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
 													break;
-												case B8(00001000):			// write
-													memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
-													break;
-												case B8(00000100):			// read
+												case DMA_MODEWRITE:			// write
 													memcpy(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
+													break;
+												case DMA_MODEREAD:			// read
+													memcpy(sectorData,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
 													break;
 												}
 											}
-										i8237Mode[2] & B8(00001100) == B8(00000100);		// read
-										i8237Mode[2] & B8(11000000) == B8(01000000);		// Single mode
-										i8237RegR[8] |= 1 << 2;  // fatto, TC 2
-										i8237RegR[8] &= ~((1 << 2) << 4);  // request finita
+										i8237Mode[2] & DMA_TYPE == DMA_READ;		// read
+										i8237Mode[2] & DMA_MODE == DMA_SINGLE;		// Single mode
+										i8237RegR[8] |= DMA_TC2;  // fatto, TC 2
+										i8237RegR[8] &= ~DMA_REQUEST2;  // request finita
 										i8237RegR[13]=ram_seg[(0x80 << FloppyFIFO[5])-1]; // ultimo byte trasferito :)
 										}
 
-									floppySector[disk]++;
-									if(floppySector[disk]>sectorsPerTrack[disk]) {		// ma NON dovrebbe accadere!
-										floppySector[disk]=1;
+									floppySector[fdDisk]++;
+									if(floppySector[fdDisk]>sectorsPerTrack[fdDisk]) {		// ma NON dovrebbe accadere!
+										floppySector[fdDisk]=1;
 
-										if(FloppyContrRegW[1] & B8(10000000)) {		// solo se MT?
+										if(FloppyContrRegW[1] & 0b10000000) {		// solo se MT?
 
-											floppyHead[disk]++;
+											floppyHead[fdDisk]++;
 
-											if(floppyHead[disk]>=2) {
-												floppyHead[disk]=0;
-												floppyTrack[disk]++;
+											if(floppyHead[fdDisk]>=2) {
+												floppyHead[fdDisk]=0;
+												floppyTrack[fdDisk]++;
 												}
 											}
 										}
@@ -2110,99 +1945,104 @@ endFDcommandWithIRQ3:
 								i8237DMACurAddr[2]+=i8237DMACurLen[2]+1;
 								i8237DMACurLen[2]=0;
 								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[6] = floppySector[fdDisk]; //FloppyFIFO[4];		//R
+								FloppyFIFO[5] = floppyHead[fdDisk]; //FloppyFIFO[3];		//H
+								FloppyFIFO[4] = floppyTrack[fdDisk]; //FloppyFIFO[2];		//C
+								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
-	              goto endFDcommandWithIRQ2;
+								FloppyFIFOPtrW=0;
+								FloppyFIFOPtrR=1;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY) | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x0a:			// read ID
+						
+						case FLOPPY_READ_ID:			// read ID
 							if(FloppyFIFOPtrW==2 && !FloppyFIFOPtrR) {
 								FloppyFIFO[6] = FloppyFIFO[5];
 								FloppyFIFO[5] = FloppyFIFO[4];
 								FloppyFIFO[4] = FloppyFIFO[3];
 								FloppyFIFO[3] = FloppyFIFO[2];
-								FloppyFIFO[0] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[0] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								FloppyFIFO[1] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[2] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
-								FloppyContrRegR[0]=B8(11010000);
-                goto endFDcommandWithIRQ;
+								FloppyContrRegR[0]=FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY;
+								FloppyFIFOPtrW=0;
+								FloppyFIFOPtrR=1;
+//                goto endFDcommandWithIRQ;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY) | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x05:			// write data
+						
+						case FLOPPY_WRITE_DATA:			// write data
 							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
 
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
+								floppyTrack[fdDisk]=FloppyFIFO[2];
+								floppyHead[fdDisk]=FloppyFIFO[3];
+								floppySector[fdDisk]=FloppyFIFO[4];
 								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
 								addr=i8237DMACurAddr[2]=i8237DMAAddr[2];
 								i8237DMACurLen[2]=i8237DMALen[2];
 								n=i8237DMALen[2]   +1;		// 1ff ...
 								do {
-								  msdosDisk=((uint8_t*)MSDOS_DISK[disk])+getDiscSector(disk)*SECTOR_SIZE;
+								  msdosDisk=((uint8_t*)MSDOS_DISK[fdDisk])+getDiscSector(fdDisk)*SECTOR_SIZE;
 
 									// SIMULO DMA qua...
-									if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-										i8237RegR[8] |= ((1 << 2) << 4);  // request??...
-										if(!(i8237RegW[15] & (1 << 2)))	{	// mask...
-											switch(i8237Mode[2] & B8(00001100)) {		// DMA mode
-												case B8(00000000):			// verify
+									if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+										i8237RegR[8] |= DMA_REQUEST2;  // request??...
+										if(!(i8237RegW[15] & DMA_MASK2))	{	// mask...
+                 			switch((i8237Mode[2] & 0b00001100) >> 2) {		// DMA mode
+												case DMA_MODEVERIFY:			// verify
 													memcmp(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
 													break;
-												case B8(00001000):			// write
-													memcpy(msdosDisk,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
+												case DMA_MODEWRITE:			// write
+													memcpy(msdosDisk,sectorData,0x80 << FloppyFIFO[5]);// verificare, non usato cmq :)
 													break;
-												case B8(00000100):			// read
-													memcpy(msdosDisk,sectorData,0x80 << FloppyFIFO[5]);
+												case DMA_MODEREAD:			// read
+													memcpy(msdosDisk,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
 													break;
 												}
 											}
-										i8237Mode[2] & B8(00001100) == B8(00001000);		// Write
-										i8237Mode[2] & B8(11000000) == B8(01000000);		// Single mode
-										i8237RegR[8] |= 1 << 2;  // fatto, TC 2
-										i8237RegR[8] &= ~((1 << 2) << 4);  // request finita
+										i8237Mode[2] & DMA_TYPE == DMA_READ;		// Write
+										i8237Mode[2] & DMA_MODE == DMA_SINGLE;		// Single mode
+										i8237RegR[8] |= DMA_TC2;  // fatto, TC 2
+										i8237RegR[8] &= ~DMA_REQUEST2;  // request finita
 										i8237RegR[13]=ram_seg[(0x80 << FloppyFIFO[5])-1]; // ultimo byte trasferito :)
 										}
 
-									floppySector[disk]++;
-									if(floppySector[disk]>sectorsPerTrack[disk]) {		// ma NON dovrebbe accadere!
-										floppySector[disk]=1;
+									floppySector[fdDisk]++;
+									if(floppySector[fdDisk]>sectorsPerTrack[fdDisk]) {		// ma NON dovrebbe accadere!
+										floppySector[fdDisk]=1;
 
-										if(FloppyContrRegW[1] & B8(10000000)) {		// solo se MT?
+										if(FloppyContrRegW[1] & 0b10000000) {		// solo se MT?
 
-											floppyHead[disk]++;
+											floppyHead[fdDisk]++;
 
-											if(floppyHead[disk]>=2) {
-												floppyHead[disk]=0;
-												floppyTrack[disk]++;
+											if(floppyHead[fdDisk]>=2) {
+												floppyHead[fdDisk]=0;
+												floppyTrack[fdDisk]++;
 												}
 											}
 										}
@@ -2215,145 +2055,152 @@ endFDcommandWithIRQ3:
 								i8237DMACurAddr[2]+=i8237DMACurLen[2]+1;
 								i8237DMACurLen[2]=0;
 								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[6] = floppySector[fdDisk]; //FloppyFIFO[4];		//R
+								FloppyFIFO[5] = floppyHead[fdDisk]; //FloppyFIFO[3];		//H
+								FloppyFIFO[4] = floppyTrack[fdDisk]; //FloppyFIFO[2];		//C
+								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
 
-                goto endFDcommandWithIRQ2;
+								FloppyFIFOPtrR=1;
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR);
+								floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read
+								FloppyFIFOPtrW=0;
+								floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY) | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x0d:			// format track
+
+						case FLOPPY_FORMAT_TRACK:			// format track
 							if(FloppyFIFOPtrW==6) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
 
 								FloppyFIFO[2];		// bytes per sector	ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
 								FloppyFIFO[3];		// sector per track
 								FloppyFIFO[4];		// gap3
 								FloppyFIFO[5];		// filler byte
-								floppySector[disk]=1;
+								floppySector[fdDisk]=1;
 								addr=i8237DMACurAddr[2]=i8237DMAAddr[2];
 								i8237DMACurLen[2]=i8237DMALen[2];
 								n=i8237DMALen[2]   +1;		// 1ff ...
 								do {
-								  msdosDisk=((uint8_t*)MSDOS_DISK[disk])+getDiscSector(disk)*SECTOR_SIZE;
+								  msdosDisk=((uint8_t*)MSDOS_DISK[fdDisk])+getDiscSector(fdDisk)*SECTOR_SIZE;
 
 									// SIMULO DMA qua... o forse no?
-									if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-										i8237RegR[8] |= ((1 << 2) << 4);  // request??...
-										if(!(i8237RegW[15] & (1 << 2)))	{	// mask...
-											switch(i8237Mode[2] & B8(00001100)) {		// DMA mode
-												case B8(00000000):			// verify
+									if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+										i8237RegR[8] |= DMA_REQUEST2;  // request??...
+										if(!(i8237RegW[15] & DMA_MASK2))	{	// mask...
+                 			switch((i8237Mode[2] & 0b00001100) >> 2) {		// DMA mode
+												case DMA_MODEVERIFY:			// verify
 													memcmp(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[2]);
 													break;
-												case B8(00001000):			// write
+												case DMA_MODEWRITE:			// write
 // bah non è chiaro, ma SET funziona!													memcpy(msdosDisk,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[2]);
-													memset(msdosDisk,FloppyFIFO[5],0x80 << FloppyFIFO[2]);
-													break;
-												case B8(00000100):			// read
 													memcpy(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[2]);
+													break;
+												case DMA_MODEREAD:			// read
+													memset(msdosDisk,FloppyFIFO[5],0x80 << FloppyFIFO[2]);
 													break;
 												}
 											}
-										i8237Mode[2] & B8(00001100) == B8(00001000);		// Write
-										i8237Mode[2] & B8(11000000) == B8(01000000);		// Single mode
-										i8237RegR[8] |= 1 << 2;  // fatto, TC 2
-										i8237RegR[8] &= ~((1 << 2) << 4);  // request finita
+										i8237Mode[2] & DMA_TYPE == DMA_READ;		// Write
+										i8237Mode[2] & DMA_MODE == DMA_SINGLE;		// Single mode
+										i8237RegR[8] |= DMA_TC2;  // fatto, TC 2
+										i8237RegR[8] &= ~DMA_REQUEST2;  // request finita
 										i8237RegR[13]=ram_seg[(0x80 << FloppyFIFO[2])-1]; // ultimo byte trasferito :)
 										}
 
-									floppySector[disk]++;
+									floppySector[fdDisk]++;
 									addr+=0x80 << FloppyFIFO[2];
 									// current address... serve registro specchio?? i8237DMAAddr[2]+=0x80 << FloppyFIFO[5];
-									} while(floppySector[disk]<=FloppyFIFO[3]);
+									} while(floppySector[fdDisk]<=FloppyFIFO[3]);
 
 								i8237DMACurAddr[2]+=i8237DMACurLen[2]+1;
 								i8237DMACurLen[2]=0;
 								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[6] = floppySector[fdDisk]; //FloppyFIFO[4];		//R
+								FloppyFIFO[5] = floppyHead[fdDisk]; //FloppyFIFO[3];		//H
+								FloppyFIFO[4] = floppyTrack[fdDisk]; //FloppyFIFO[2];		//C
+								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
 
-                goto endFDcommandWithIRQ2;
+								FloppyFIFOPtrW=0;
+								FloppyFIFOPtrR=1;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY) | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x09:			// write deleted data
+
+						case FLOPPY_WRITE_DELETED_DATA:			// write deleted data
 							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
 
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
+								floppyTrack[fdDisk]=FloppyFIFO[2];
+								floppyHead[fdDisk]=FloppyFIFO[3];
+								floppySector[fdDisk]=FloppyFIFO[4];
 								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
 								addr=i8237DMACurAddr[2]=i8237DMAAddr[2];
 								i8237DMACurLen[2]=i8237DMALen[2];
 								n=i8237DMALen[2]   +1;		// 1ff ...
 								do {
-								  msdosDisk=((uint8_t*)MSDOS_DISK[disk])+getDiscSector(disk)*SECTOR_SIZE;
+								  msdosDisk=((uint8_t*)MSDOS_DISK[fdDisk])+getDiscSector(fdDisk)*SECTOR_SIZE;
 
 									// SIMULO DMA qua...
-									if(!(i8237RegW[8] & B8(00000001))) {			// controller enable
-										i8237RegR[8] |= ((1 << 2) << 4);  // request??...
-										if(!(i8237RegW[15] & (1 << 2)))	{	// mask...
-											switch(i8237Mode[2] & B8(00001100)) {		// DMA mode
-												case B8(00000000):			// verify
+									if(!(i8237RegW[8] & DMA_DISABLED)) {			// controller enable
+										i8237RegR[8] |= DMA_REQUEST2;  // request??...
+										if(!(i8237RegW[15] & DMA_MASK2))	{	// mask...
+                 			switch((i8237Mode[2] & 0b00001100) >> 2) {		// DMA mode
+												case DMA_MODEVERIFY:			// verify
 													memcmp(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
 													break;
-												case B8(00001000):			// write
-													memcpy(msdosDisk,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
-													break;
-												case B8(00000100):			// read
+												case DMA_MODEWRITE:			// write
 													memcpy(&ram_seg[MAKELONG(addr,DMApage[2])],sectorData,0x80 << FloppyFIFO[5]);
+													break;
+												case DMA_MODEREAD:			// read
+													memcpy(msdosDisk,&ram_seg[MAKELONG(addr,DMApage[2])],0x80 << FloppyFIFO[5]);
 													break;
 												}
 											}
-										i8237Mode[2] & B8(00001100) == B8(00001000);		// Write
-										i8237Mode[2] & B8(11000000) == B8(01000000);		// Single mode
-										i8237RegR[8] |= 1 << 2;  // fatto, TC 2
-										i8237RegR[8] &= ~((1 << 2) << 4);  // request finita
+										i8237Mode[2] & DMA_TYPE == DMA_READ;		// Write
+										i8237Mode[2] & DMA_MODE == DMA_SINGLE;		// Single mode
+										i8237RegR[8] |= DMA_TC2;  // fatto, TC 2
+										i8237RegR[8] &= ~DMA_REQUEST2;  // request finita
 										i8237RegR[13]=ram_seg[(0x80 << FloppyFIFO[5])-1]; // ultimo byte trasferito :)
 										}
 
-									floppySector[disk]++;
-									if(floppySector[disk]>sectorsPerTrack[disk]) {		// ma NON dovrebbe accadere!
-										floppySector[disk]=1;
+									floppySector[fdDisk]++;
+									if(floppySector[fdDisk]>sectorsPerTrack[fdDisk]) {		// ma NON dovrebbe accadere!
+										floppySector[fdDisk]=1;
 
-										if(FloppyContrRegW[1] & B8(10000000)) {		// solo se MT?
+										if(FloppyContrRegW[1] & 0b10000000) {		// solo se MT?
 
-											floppyHead[disk]++;
+											floppyHead[fdDisk]++;
 
-											if(floppyHead[disk]>=2) {
-												floppyHead[disk]=0;
-												floppyTrack[disk]++;
+											if(floppyHead[fdDisk]>=2) {
+												floppyHead[fdDisk]=0;
+												floppyTrack[fdDisk]++;
 												}
 											}
 										}
@@ -2366,358 +2213,200 @@ endFDcommandWithIRQ3:
 								i8237DMACurAddr[2]+=i8237DMACurLen[2]+1;
 								i8237DMACurLen[2]=0;
 								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[6] = floppySector[fdDisk]; //FloppyFIFO[4];		//R
+								FloppyFIFO[5] = floppyHead[fdDisk]; //FloppyFIFO[3];		//H
+								FloppyFIFO[4] = floppyTrack[fdDisk]; //FloppyFIFO[2];		//C
+								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
 
-                goto endFDcommandWithIRQ2;
+								FloppyFIFOPtrW=0;
+								FloppyFIFOPtrR=1;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY) | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x11:			// scan equal
+
+						case FLOPPY_SCAN_EQUAL:			// scan equal
+						case FLOPPY_SCAN_LOW_OR_EQUAL:			// scan low or equal
+						case FLOPPY_SCAN_HIGH_OR_EQUAL:			// scan high or equal
+							// finire...
 							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+								FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
 
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
+								floppyTrack[fdDisk]=FloppyFIFO[2];
+								floppyHead[fdDisk]=FloppyFIFO[3];
+								floppySector[fdDisk]=FloppyFIFO[4];
 								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
 
 								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[6] = floppySector[fdDisk]; //FloppyFIFO[4];		//R
+								FloppyFIFO[5] = floppyHead[fdDisk]; //FloppyFIFO[3];		//H
+								FloppyFIFO[4] = floppyTrack[fdDisk]; //FloppyFIFO[2];		//C
+								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
 								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
 
-                goto endFDcommandWithIRQ2;
+								FloppyFIFOPtrW=0;
+								FloppyFIFOPtrR=1;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
+								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? ((FLOPPY_STATUS_REQ | FLOPPY_STATUS_BUSY) | (1 << fdDisk)) : FLOPPY_STATUS_REQ;		// busy
 								}
 							break;
-						case 0x19:			// scan low or equal
-							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
+						case FLOPPY_RECALIBRATE:			// recalibrate
+						case FLOPPY_SPECIFY:			// specify
+						case FLOPPY_SEEK:			// seek (goto cylinder
+							FloppyContrRegR[0]=FLOPPY_STATUS_BUSY | (1 << fdDisk);		// busy, lo vuole qua
+							if(floppyState[fdDisk] & FLOPPY_STATE_XFER) {
+								FloppyContrRegR[0] |= FLOPPY_STATUS_REQ;		// ok to xfer
+//								FloppyFIFOPtrW=0; 
+								if((((FloppyContrRegW[1] & 0b00011111 /*vuole extra parentesi PD*/) == FLOPPY_RECALIBRATE) && FloppyFIFOPtrW==2)
+									|| (FloppyFIFOPtrW==3)) {
+// ma a volte non fa una extra lettura alla fine straporcamadonna morte ai programmatori
 
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
-								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
-
-								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
-								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
-								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
-                goto endFDcommandWithIRQ2;
-								}
-							else if(FloppyFIFOPtrR) {
-								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									FloppyFIFOPtrW=0;
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_XFER);	// xfer ora basta
 									}
-								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
 								}
-							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
-								}
+							floppyState[fdDisk] |= FLOPPY_STATE_XFER;	// xfer dopo la prima lettura (award286...
 							break;
-						case 0x1d:			// scan high or equal
-							if(FloppyFIFOPtrW==9) {
-
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
-
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
-								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
-
-								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
-								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
-								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
-
-                goto endFDcommandWithIRQ2;
-								}
-							else if(FloppyFIFOPtrR) {
-								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
-									}
-								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
-								}
-							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
-								}
-							break;
-						case 0x07:			// recalibrate
-							if(FloppyFIFOPtrW==2) {
-								// in FIFO[1] : x x x x x 0 US1 US0									00h
-								disk=FloppyFIFO[1] & 3;
-
-
-#ifdef _DEBUG
-#ifdef DEBUG_FD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: RECALIBRATE\n",timeGetTime()
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
-
-
-								FloppyContrRegR[0]=B8(00010000) | (1 << disk);					// busy
-								// __delay_ms(12*floppyTrack[disk])
-								floppyTrack[disk]=0;
-								FloppyContrRegR[0]=B8(01000000);					// finito :)  NON 11000000 per phoenix manco PCXTbios...
-								// si potrebbe provare a ritardare b7, mettendolo in floppytimer...
-
-								FloppyFIFOPtrR=0;
-
-//								if(!(floppyState[disk] & B8(10000000)))		// forzo errore se disco non c'è... se ne sbatte qua
-//									FloppyFIFO[1] |= B8(11000000);
-
-                goto endFDcommandWithIRQ3;
-
-								}
-							else if(FloppyFIFOPtrR) {
-								}
-							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
-								}
-							break;
-						case 0x08:			// sense interrupt status	
+						
+						case FLOPPY_SENSE_INTERRUPT:			// sense interrupt status	
+							
 							if(!FloppyFIFOPtrR) {
 
-								switch(floppylastCmd[disk]) {		// https://wiki.osdev.org/Floppy_Disk_Controller#Sense_Interrupt
-									case 0x0f: // seek
-									case 0x07: // recalibrate
-										FloppyFIFO[1] = B8(00100000) | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								switch(floppylastCmd[fdDisk]) {		// https://wiki.osdev.org/Floppy_Disk_Controller#Sense_Interrupt
+									case FLOPPY_SEEK: // seek
+										FloppyFIFO[1] = FLOPPY_ERROR_SEEKEND | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+										break;
+									case FLOPPY_RECALIBRATE: // recalibrate
+										FloppyFIFO[1] = FLOPPY_ERROR_SEEKEND | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 										break;
 									case 0xff: // uso io per reset
-										FloppyFIFO[1] = B8(11000000) | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+										FloppyFIFO[1] = 0b11000000 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 								// v. anomalia link froci del cazzo (OVVIAMENTE è strano, ma ESIGE 1100xxxx ... boh
-								FloppyFIFO[1] &= B8(11100000); // vaffanculo
+								FloppyFIFO[1] &= 0b11100000; // vaffanculo
 										break;
 									default:
-										FloppyFIFO[1] = B8(00000000) | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+										FloppyFIFO[1] = 0b00000000 | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 										break;
 									}
 
-
-								FloppyFIFO[2] = floppyTrack[disk];
-//								FloppyFIFO[3] = floppyTrack[disk];
+								FloppyFIFO[2] = floppyTrack[fdDisk];
+//								FloppyFIFO[3] = floppyTrack[fdDisk];
 								FloppyFIFOPtrR=1;
-//								if(!(floppyState[disk] & B8(10000000)))		// forzo errore se disco non c'è... QUA dà errore POST!
-//									FloppyFIFO[1] |= B8(11000000);
+//								if(!(floppyState[fdDisk] & 0b10000000)))		// forzo errore se disco non c'è... QUA dà errore POST!
+//									FloppyFIFO[1] |= FLOPPY_ERROR_INVALID | FLOPPY_ERROR_ABNORMAL;
 
-//								FloppyContrRegR[0]=B8(00000000);
-								FloppyContrRegR[0]=B8(11000000); // con 11000000 phoenix si schianta a cazzo!! ma si blocca cmq...
+//								FloppyContrRegR[0]=0b00000000);
+								FloppyContrRegR[0]=FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY; // (con 11000000 phoenix si schianta a cazzo!! ma si blocca cmq...
 
-								goto endFDcommandWithIRQ3;
+//								goto endFDcommandWithIRQ3;
 								}
-							else if(FloppyFIFOPtrR) {
+							else {
 								if(FloppyFIFOPtrR > 2) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);					// busy
 								}
 							break;
-						case 0x03:			// specify
-							if(FloppyFIFOPtrW==3) {
-								// in FIFO[1] : StepRateTime[7..4] | HeadUnloadTime[3..0]				20h
-								// in FIFO[2] : HeadLoadTime[7..1] | NonDMAMode[0]							07h
-								FloppyFIFOPtrR=0;
 
-//								if(!(floppyState[disk] & B8(10000000)))		// forzo errore se disco non c'è... se ne sbatte qua
-//									FloppyFIFO[0] |= B8(11000000);
-
-                goto endFDcommandWithIRQ;
+						case FLOPPY_SENSE_DRIVE_STATUS:			// sense drive status
+							if(FloppyFIFOPtrR) {
+								floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read
+								}
+							if(FloppyFIFOPtrR>1) {		// 1 byte da inviare al pc
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR | FLOPPY_STATE_XFER);	// passo a write, tolgo xfer
+								FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
+								FloppyFIFOPtrW=0;
 								}
 							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
-								}
-							break;
-						case 0x04:			// sense drive status
-							if(FloppyFIFOPtrW==2) {
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
-								FloppyFIFO[0] = B8(00100000) | (!floppyTrack ? B8(00010000) : 0) | 
-									(FloppyFIFO[1] & B8(00000111));		//ST3: B7 Fault, B6 Write Protected, B5 Ready, B4 Track 0, B3 Two Side, B2 Head (side select), B1:0 Disk Select (US1:0)
-
-//								if(!(floppyState[disk] & B8(10000000)))		// forzo errore se disco non c'è... se ne sbatte
-//									FloppyFIFO[0] |= B8(11000000);
-
-								FloppyFIFOPtrR=1;
-                goto endFDcommandWithIRQ;
-								}
-							else if(FloppyFIFOPtrR) {		// NO! glabios lo fa, PCXTbios no: pensavo ci passasse più volte dopo la fine preparazione, ma non è così quindi si può togliere if
-								if(FloppyFIFOPtrR > 1) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+								if(FloppyFIFOPtrW > 0) {
+									FloppyContrRegR[0]=FLOPPY_STATUS_BUSY | (1 << fdDisk);	// busy
+									if(floppyState[fdDisk] & FLOPPY_STATE_XFER) {
+										FloppyContrRegR[0] |= FLOPPY_STATUS_REQ;		// ok to xfer
+										}
+									floppyState[fdDisk] |= FLOPPY_STATE_XFER;	// xfer dopo la prima lettura (award286...
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=0b00000000 | (1 << fdDisk);		// non busy
 								}
-							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
-								}
+							FloppyContrRegR[0] |= (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 							break;
-						case 0x1b:			// scan high or equal
-							if(FloppyFIFOPtrW==9) {
 
-								FloppyContrRegR[0]=B8(11010000);		// Busy :) (anche 1=A??
-
-								floppyTrack[disk]=FloppyFIFO[2];
-								floppyHead[disk]=FloppyFIFO[3];
-								floppySector[disk]=FloppyFIFO[4];
-								FloppyFIFO[5];		// N ossia 1=256, 2=512, 3=1024 se MFM, metà se FM
-
-								FloppyFIFO[7] = FloppyFIFO[5];		//N
-								FloppyFIFO[6] = floppySector[disk]; //FloppyFIFO[4];		//R
-								FloppyFIFO[5] = floppyHead[disk]; //FloppyFIFO[3];		//H
-								FloppyFIFO[4] = floppyTrack[disk]; //FloppyFIFO[2];		//C
-								FloppyFIFO[1] = 0 | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
-								FloppyFIFO[2] = 0;		//ST1: B7 End of Cyl/Track, B5 CRC Error, B4 Overrun, B2 No Data (can't find sector), B1 Write Protect, B0 Missing Address Mark
-								FloppyFIFO[3] = 0;		//ST2: B6 Control Mark (Deleted Data), B5 Data Error, B4 Wrong Cyl/Track, B3 Scan Equal, B2 Scan not satisfied, B1 Bad Cyl, B0 Missing Address Mark
-
-                goto endFDcommandWithIRQ2;
-								}
-							else if(FloppyFIFOPtrR) {
-								if(FloppyFIFOPtrR > 7) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
-									}
-								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
-								}
-							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
-								}
-							break;
-						case 0x0f:			// seek (goto cylinder
-							if(FloppyFIFOPtrW==3) {
-								// in FIFO[1] : x x x x x Head US1 US0						00h
-								// in FIFO[2] : New Cylinder Number								00h
-								if(FloppyFIFO[2] < totalTracks) {
-									FloppyContrRegR[0]=B8(00010000) | (1 << disk);					// busy
-									floppyTrack[disk]=FloppyFIFO[2];
-								// __delay_ms(12*tracce)
-									FloppyContrRegR[0]=B8(10000000);					// finito :)
-									}
-								else {
-									}
-								FloppyFIFOPtrR=0;
-								floppyState[disk] |= B8(01000000);		// passo a read cmq
-
-//								if(!(floppyState[disk] & B8(10000000)))		// forzo errore se disco non c'è... se ne sbatte
-//									FloppyFIFO[0] |= B8(11000000);
-
-                goto endFDcommandWithIRQ3;
-								}
-							else {
-								FloppyContrRegR[0]=FloppyFIFOPtrW>0 ? B8(10010000) : B8(10000000);		// busy
-								}
-							break;
-						case 0x10:		// version
+						case FLOPPY_VERSION:		// version
 							if(!FloppyFIFOPtrR) {
 
 								FloppyFIFO[1] = 0x90;		// 82077A
 								FloppyFIFOPtrR=1;
 
-                goto endFDcommandWithIRQ;
 								}
 							else if(FloppyFIFOPtrR) {
 								if(FloppyFIFOPtrR > 1) {
-									floppyState[disk] &= ~B8(01000000);	// passo a write
-									FloppyContrRegR[0]=B8(10000000);
+									floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR);	// passo a write
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 									}
 								else
-									FloppyContrRegR[0]=B8(11010000);					// busy
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY;					// busy, qua no fdDisk direi, è controller
 								}
 							break;
-						case 0x20:		// lock...
+						case FLOPPY_LOCK:		// lock...
 							break;
-						case 0x18:		// perpendicular
+						case FLOPPY_PERPENDICULAR_MODE:		// perpendicular
 							break;
-						case 0x14:		// dumpreg
+						case FLOPPY_DUMPREG:		// dumpreg
 							break;
 						case 0x00:			// (all'inizio comandi...
 
-#ifdef _DEBUG
-#ifdef DEBUG_FD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: COMANDO 00\n",timeGetTime()
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
-
-							FloppyContrRegR[0]=B8(10000000)	|
-								(floppyState[disk] & B8(01000000));
+							FloppyContrRegR[0]=FLOPPY_STATUS_REQ | (floppyState[fdDisk] & FLOPPY_STATE_DDR);
 								// b7=1 ready!;	b6 è direction (0=write da CPU a FDD, 1=read); b4 è busy/ready=0
 
-							floppyState[disk] |= B8(01000000);		// passo a read
+//							floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read NO
 							FloppyFIFOPtrW=0;
-//							floppylastCmd[disk]=FloppyContrRegW[1] & B8(00011111);
+//							floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111);
 							break;
 						default:		// invalid, 
 							FloppyFIFO[0];
-//								FloppyContrRegR[4] |= B8(10000000);		// 
+//								FloppyContrRegR[4] |= 0b10000000);		// 
 							if(!FloppyFIFOPtrR) {
-								FloppyFIFO[1] = B8(10000000) | (FloppyFIFO[1] & B8(00000111));		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
+								FloppyFIFO[1] = FLOPPY_ERROR_INVALID | (FloppyFIFO[1] & 0b00000111);		//ST0: B7:B6 error code, B5=1 dopo seek, B4=FAULT, B3=Not Ready, B2=Head, B1:0 US1:0 (drive #)
 
 
-#pragma message("verificare ST0")
+//#pragma message("verificare ST0")
 
-								if(FloppyContrRegW[0] & B8(00001000 /*in asm dice che questo è "Interrupt ON"*/))
+								if(FloppyContrRegW[0] & 0b00001000 /*in asm dice che questo è "Interrupt ON"*/)
 									setFloppyIRQ(SEEK_FLOPPY_DELAYED_IRQ);
 								// anche qua??
 
 
-								floppylastCmd[disk]=FloppyContrRegW[1] & B8(00011111);
+								floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
 								}
 							FloppyContrRegR[0]=FloppyFIFO[FloppyFIFOPtrR++];
 							if(FloppyFIFOPtrR==1) {
 								FloppyFIFOPtrW=0;
-								floppyState[disk] |= B8(01000000);		// passo a read
+								floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read
 								}
 							break;
 						}
@@ -2726,43 +2415,54 @@ endFDcommandWithIRQ3:
 
         case 5:   // Read/Write: FDC command/data register
 //        case 6:   // ************ TEST BUG GLABIOS 0.4
-					disk=FloppyContrRegW[0] & 3;
-					switch(FloppyContrRegW[1] & B8(00011111)) {		// i 3 bit alti sono MT (multitrack), MF (MFM=1 o FM=0), SK (Skip deleted)
+					switch(FloppyContrRegW[1] & 0b00011111) {		// i 3 bit alti sono MT (multitrack), MF (MFM=1 o FM=0), SK (Skip deleted)
 						case 0x01:
-						case 0x02:
-						case 0x05:
-						case 0x06:
-						case 0x08:
-						case 0x09:
-						case 0x0a:
-						case 0x0c:
-						case 0x0d:
-						case 0x19:
-						case 0x1b:
-						case 0x1d:
-						case 0x10:
+						case FLOPPY_READ_TRACK:
+						case FLOPPY_WRITE_DATA:
+						case FLOPPY_READ_DATA:
+						case FLOPPY_SENSE_INTERRUPT:
+						case FLOPPY_WRITE_DELETED_DATA:
+						case FLOPPY_READ_ID:
+						case FLOPPY_READ_DELETED_DATA:
+						case FLOPPY_FORMAT_TRACK:
+						case FLOPPY_SCAN_EQUAL:
+						case FLOPPY_SCAN_LOW_OR_EQUAL:
+						case FLOPPY_SCAN_HIGH_OR_EQUAL:
+						case FLOPPY_VERSION:
+						case FLOPPY_SENSE_DRIVE_STATUS:
 							FloppyContrRegR[1]=FloppyFIFO[FloppyFIFOPtrR++];
 							break;
-						case 0x03:
-						case 0x07:
-						case 0x0f:
-							FloppyContrRegR[1]=B8(11000000);
+						case FLOPPY_SPECIFY:
+						case FLOPPY_RECALIBRATE:
+						case FLOPPY_SEEK:
+							FloppyContrRegR[1]=FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR;
 							break;
 						default:
-							FloppyContrRegR[1]=B8(10000000);
+							FloppyContrRegR[1]=FLOPPY_STATUS_REQ;
 							break;
 						}
 					i=FloppyContrRegR[1];
           break;
 
+#ifdef PCAT
+				case 0:		// 
+					break;
+				case 1:		// digital output
+					i=0;		// AMI legge, fa and con F8h e confronta con 50h...
+					break;
+				case 6:		// dice come HD status register... boh?? sarebbe 1f7?? secondo granite, cmq https://www.mjm.co.uk/how-hard-disk-ata-registers-work.html
+					i=hdState;
+					break;
 				case 7:		// solo AT http://isdaman.com/alsos/hardware/fdc/floppy.htm
-					if(floppyState[disk] & B8(00000010)) {			// disk changed
-						i=B8(10000000);
-						floppyState[disk] &= ~B8(00000010);
+					if(floppyState[fdDisk] & FLOPPY_STATE_DISKCHANGED) {			// disk changed
+						i=0b10000000;
+						floppyState[fdDisk] &= ~FLOPPY_STATE_DISKCHANGED;
 						}
 					else
-						i=B8(00000000);
+						i=0b00000000;
           break;
+#endif
+
 
     //_UART0_DATA      .equ $FF80        		 ; data
     //_UART0_DLAB_0    .equ $FF80        		 ; divisor latch low uint8_t
@@ -2791,9 +2491,9 @@ endFDcommandWithIRQ3:
 				      mouseState |= 128;  // marker 
 							}
 						else {							     // ri-simulo per altre 2/4 volte!
-							i8250Reg[2] |= B8(00000001);
-							if(i8250Reg[1] & B8(00000001))			// se IRQ attivo
-								i8259IRR |= B8(00010000);
+							i8250Reg[2] |= 0b00000001;
+							if(i8250Reg[1] & 0b00000001)			// se IRQ attivo
+								i8259IRR |= 0b00010000;
 							}
 #endif
             }
@@ -2877,16 +2577,6 @@ endFDcommandWithIRQ3:
           break;
         }
 
-#ifdef _DEBUG
-#ifdef DEBUG_FD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read at 3F%X  : %02X  cmd=%02X, fifoW=%u fifoR=%u\n",timeGetTime(),
-				_ip,t,i,FloppyContrRegW[1],FloppyFIFOPtrW,FloppyFIFOPtrR);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       break;
 		default:
 			i=(BYTE)UNIMPLEMENTED_MEMORY_VALUE;
@@ -2905,24 +2595,19 @@ skippa:
 			break;
     }
   
-#endif
 	return i;
 	}
 
-uint16_t _fastcall InShortValue(uint16_t t) {
+uint16_t InShortValue(uint16_t t) {
 	register uint16_t i;
 
-#if DEBUG_TESTSUITE
-	return 0xffff;
-#else
-return MAKEWORD(InValue(t),InValue(t+1));			// per ora, v. cmq GLABios e trident vga
+return MAKEWORD(InValue(t),InValue(t+1));			// per ora, v. cmq GLABios
 	return i;
-#endif
 	}
 
-uint16_t _fastcall GetShortValue(struct REGISTERS_SEG *seg,uint16_t ofs) {
+uint16_t GetShortValue(struct REGISTERS_SEG *seg,uint16_t ofs) {
 	register union DWORD_BYTES i;
-	DWORD t,t1;
+	uint32_t t,t1;
 
 #ifdef EXT_80286
 	if(_msw.PE) {
@@ -2939,6 +2624,10 @@ uint16_t _fastcall GetShortValue(struct REGISTERS_SEG *seg,uint16_t ofs) {
 // secondo i test V20 è uguale all'altro...
 #else
 	t=MAKE20BITS(seg->s.x,ofs);
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
 	t1=t+1;
 #endif
 #ifdef EXT_80286
@@ -2949,10 +2638,6 @@ uint16_t _fastcall GetShortValue(struct REGISTERS_SEG *seg,uint16_t ofs) {
 #endif
 		}
 
-#if DEBUG_TESTSUITE
-	i.b.l=ram_seg[t];
-	i.b.h=ram_seg[t1];
-#else
 #ifdef EXT_80286
 	if(t >= 0x100000L && t < 0x100000L+RAM_SIZE_EXTENDED) {
 		i.b.l=ram_seg[t-0x100000L+RAM_SIZE];
@@ -3038,36 +2723,12 @@ exception286:
     Exception86.descr.in=1;
     Exception86.descr.rw=1;
 
-skippa:
+skippa: ;
 #endif
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x:%04x  UNIMPLEMENTED memoryR W %08X : %04X \n",timeGetTime(),
-#ifdef EXT_80286
-				_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip,t,i.w.l);
-#else
-				_cs,_ip,t,i.w.l);
-#endif
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
 	}
   
-#endif
-
-/*	if(t==0x472) {
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  read 472 : %04X \n",timeGetTime(),
-				_ip,i.w.l);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-		}*/
-
-
-
 	return i.w.l;
 	}
-
 
 #ifdef EXT_80386
 uint32_t GetIntValue(struct struct REGISTERS_SEG *seg,uint32_t ofs) {
@@ -3076,19 +2737,16 @@ uint32_t GetIntValue(struct struct REGISTERS_SEG *seg,uint32_t ofs) {
 
 	if(_msw.PE) {
 		ADDRESS_286_R();
-		t1=t+1;
 		}
 	else {
 		t=MAKE20BITS(seg->x,ofs);
-		t1=t+1;
 		}
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
+		t1=t+1;
 
-#if DEBUG_TESTSUITE
-	i.b.l=ram_seg[t];
-	i.b.h=ram_seg[t+1];
-	i.b.u=ram_seg[t+2];
-	i.b.u2=ram_seg[t+3];
-#else
 #ifdef EXT_80286
 	else if(t >= 0x100000L && t < 0x100000L+RAM_SIZE_EXTENDED) {
 		i.b.l=ram_seg[t-0x100000L+RAM_SIZE];
@@ -3168,14 +2826,13 @@ exception286:
     Exception86.descr.rw=1;
 
 skippa:
-#endif
 
 	return i;
 	}
 #endif
 
-uint8_t _fastcall GetPipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
-	DWORD t,t1;
+uint8_t GetPipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
+	uint32_t t,t1;
 
 #ifdef EXT_80286
 	if(_msw.PE) {
@@ -3191,17 +2848,14 @@ uint8_t _fastcall GetPipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
 // secondo i test V20 è uguale all'altro...
 #else
 	t=MAKE20BITS(seg->s.x,ofs);
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
 	t1=t+1;
 #endif
 	}
 
-#if DEBUG_TESTSUITE
-	  Pipe1=ram_seg[t++];
-		Pipe2.b.l=ram_seg[t++];
-		Pipe2.b.h=ram_seg[t++];
-		Pipe2.b.u=ram_seg[t];
-//		Pipe2.b.u2=ram_seg[t];
-#else
 #ifdef EXT_80286
 	if(t >= 0x100000L && t < 0x100000L+RAM_SIZE_EXTENDED) {
 		Pipe1=ram_seg[t++ -0x100000L+RAM_SIZE];
@@ -3295,13 +2949,12 @@ exception286:
 skippa: ;
 #endif
 		}
-#endif
 
 	return Pipe1;
 	}
 
-uint8_t _fastcall GetMorePipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
-	DWORD t,t1;
+uint8_t GetMorePipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
+	uint32_t t,t1;
 
 #ifdef EXT_80286
 	if(_msw.PE) {
@@ -3317,16 +2970,14 @@ uint8_t _fastcall GetMorePipe(struct REGISTERS_SEG *seg,uint16_t ofs) {
 // secondo i test V20 è uguale all'altro...
 #else
 	t=MAKE20BITS(seg->s.x,ofs);
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
 	t1=t+1;
 #endif
 	}
 
-#if DEBUG_TESTSUITE
-    t+=4;
-		Pipe2.bd[3]=ram_seg[t++];
-		Pipe2.bd[4]=ram_seg[t++];
-		Pipe2.bd[5]=ram_seg[t];
-#else
 #ifdef EXT_80286
 	if(t >= 0x100000L && t < 0x100000L+RAM_SIZE_EXTENDED) {
 		Pipe2.bd[3]=ram_seg[t++ -0x100000L+RAM_SIZE];
@@ -3399,13 +3050,12 @@ exception286:
 skippa: ;
 #endif
 		}
-#endif
 
 	return Pipe1;
 	}
 
-void _fastcall PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
-	DWORD t;
+void PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
+	uint32_t t;
 
 #ifdef EXT_80286
 	if(_msw.PE) {
@@ -3414,18 +3064,11 @@ void _fastcall PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
 	else
 #endif
 	t=MAKE20BITS(seg->s.x,ofs);
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
 
-/*	if(t==0xf400)
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write f400 : %02X \n",timeGetTime(),
-				_ip,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}*/
-
-#if DEBUG_TESTSUITE
-	  ram_seg[t]=t1;
-#else
 // printf("ram_seg: %04x, p: %04x\n",rom_seg,p);
 #ifdef RAM_DOS
 	if(t >= 0x7c000 && t < 0x80000) {
@@ -3438,19 +3081,6 @@ void _fastcall PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
 		BYTE t2,t3,t4;
 		DWORD vgaBase,vgaSegm,vgaPlane;
 
-#ifdef _DEBUG
-#ifdef DEBUG_VGA
-//if(t==0xb8140) 
-{		char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  writeRAMV %08X : %02X  memCfg=%u,rMemMd=%X, wFSel=%u,rot=%u,wMode=%02X,sR=%X,%X planes=%X\n",timeGetTime(),
-				_ip,t,t1,(VGAgraphReg[6] & 0x0c) >> 2,VGAseqReg[4] & 0xf,
-				(VGAgraphReg[3] & 0x18) >> 3,VGAgraphReg[3] & 0x7, VGAgraphReg[5],VGAgraphReg[0],VGAgraphReg[1],
-
-				VGAseqReg[2] & 0xf);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 		switch(VGAgraphReg[6] & 0x0c) {
 			case 0x00:
 				vgaBase=0xA0000L-VGA_BASE;
@@ -3501,7 +3131,7 @@ void _fastcall PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
 				t4=VGAlatch.bd[3];
 				mask=255;
 
-				// NO mask qua???
+				// NO mask qua??? pare di no v.granite
 
 				break;
 			case 0x02:
@@ -3509,6 +3139,11 @@ void _fastcall PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
 				t3=t1 & 4 ? 255 : 0;
 				t2=t1 & 2 ? 255 : 0;
 				t1=t1 & 1 ? 255 : 0;
+
+
+				t1 = (t1 >> (VGAgraphReg[3] & 0x7)) | (t1 << (8-(VGAgraphReg[3] & 0x7)));		// rotate viene prima di tutto, dice https://wiki.osdev.org/VGA_Hardware#The_Latches
+// secondo granite, rotate c'è anche qua, DOPO
+
 				mask=VGAgraphReg[8];
 				break;
 			case 0x03:
@@ -3521,7 +3156,7 @@ void _fastcall PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
 				break;
 			}
 		switch(VGAgraphReg[5] & 0x03) {			// write mode
-			case 0x00:
+//granite			case 0x00:
 
 
 			case 0x01:
@@ -3529,7 +3164,7 @@ void _fastcall PutValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint8_t t1) {
 
 
 			case 0x02:
-			case 0x03:
+// granite			case 0x03:
 				switch(VGAgraphReg[3] & 0x18) {			// function select
 					case 0x00:
 						break;
@@ -3641,24 +3276,14 @@ exception286:
     Exception86.descr.in=1;
     Exception86.descr.rw=0;
 
-skippa:
+skippa: ;
 #endif
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x:%04x  UNIMPLEMENTED memoryW B %08X : %02X \n",timeGetTime(),
-#ifdef EXT_80286
-				_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip,t,t1);
-#else
-				_cs,_ip,t,(WORD)t1);
-#endif
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
+
 		}
 	}
 
-void _fastcall PutShortValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint16_t t2) {
-	DWORD t,t1;
+void  PutShortValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint16_t t2) {
+	uint32_t t,t1;
 
 #ifdef EXT_80286
 	if(_msw.PE) {
@@ -3675,6 +3300,10 @@ void _fastcall PutShortValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint16_t t2)
 // secondo i test V20 è uguale all'altro...
 #else
 	t=MAKE20BITS(seg->s.x,ofs);
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
 	t1=t+1;
 #endif
 #ifdef EXT_80286
@@ -3684,20 +3313,6 @@ void _fastcall PutShortValue(struct REGISTERS_SEG *seg,uint16_t ofs,uint16_t t2)
 		}
 #endif
 	}
-
-/*	if(t==0x472)
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write 472 W : %04X \n",timeGetTime(),
-				_ip,t2);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}*/
-
-
-#if DEBUG_TESTSUITE
-	  ram_seg[t]=LOBYTE(t2);
-	  ram_seg[t1]=HIBYTE(t2);
-#else
 
 #ifdef RAM_DOS
 	if(t >= 0x7c000 && t < 0x80000) {
@@ -3739,18 +3354,7 @@ exception286:
     Exception86.descr.in=1;
     Exception86.descr.rw=0;
 
-skippa:
-#endif
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x:%04x  UNIMPLEMENTED memoryW W %08X : %04X \n",timeGetTime(),
-#ifdef EXT_80286
-				_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip,t,(WORD)t2);
-#else
-				_cs,_ip,t,(WORD)t2);
-#endif
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
+skippa: ;
 #endif
 		}
 
@@ -3758,27 +3362,24 @@ skippa:
 
 
 #ifdef EXT_80386
-void _fastcall PutIntValue(struct struct REGISTERS_SEG *seg,uint32_t ofs,uint32_t t1) {
+void PutIntValue(struct struct REGISTERS_SEG *seg,uint32_t ofs,uint32_t t1) {
 	register uint16_t i;
 	DWORD t,t1;
 
 	if(_msw.PE) {
 		ADDRESS_286_W();
-		t1=t+1;
 		}
 	else {
 		t=MAKE20BITS(seg->x,ofs);
-		t1=t+1;
 		}
+#ifdef EXT_80286
+	if(!(i8042Output & 2))/*A20*/
+		t &= 0xffefffff;
+#endif
+	t1=t+1;
 
 // printf("rom_seg: %04x, p: %04x\n",rom_seg,p);
 
-#if DEBUG_TESTSUITE
-	  ram_seg[t++]=LOBYTE(LOWORD(t1));
-	  ram_seg[t++]=HIBYTE(LOWORD(t1));
-	  ram_seg[t++]=LOBYTE(HIWORD(t1));
-	  ram_seg[t]=HIBYTE(HIWORD(t1));
-#else
 #ifdef VGA_BASE
 	if(t >= CGA_BASE && t < CGA_BASE+CGA_SIZE) {
 		PutValue(seg,ofs,LOBYTE(LOWORD(t2)));		// faccio così, date tutte le complicazioni; 
@@ -3826,32 +3427,17 @@ exception286:
 skippa:
 #endif
 		}
-#endif
 	}
 #endif
 
-void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_AT_and_PS/2_I/O_port_addresses
+void OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_AT_and_PS/2_I/O_port_addresses
 	register uint16_t i;
   int j;
 
-#if DEBUG_TESTSUITE
-#else
   switch(t >> 4) {
     case 0:        // 00-1f DMA 8237 controller (usa il 2 per il floppy
     case 1:				// solo PS2 dice!
       t &= 0xf;
-#ifdef _DEBUG
-#ifdef DEBUG_8237
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 0%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 			switch(t) {
 				case 0:
 				case 2:
@@ -3885,20 +3471,20 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
 		      /*i8237RegR[8]=*/i8237RegW[8]=t1;
 					break;
 				case 0xa:			// set/clear Mask
-					if(t1 & B8(00000100))
-						i8237RegW[15] |= (1 << (t1 & B8(00000011)));
+					if(t1 & 0b00000100)
+						i8237RegW[15] |= (1 << (t1 & 0b00000011));
 					else
-						i8237RegW[15] &= ~(1 << (t1 & B8(00000011)));
+						i8237RegW[15] &= ~(1 << (t1 & 0b00000011));
 					i8237RegR[15]=i8237RegW[15];
 		      i8237RegR[0xa]=i8237RegW[0xa]=t1;
 					break;
 				case 0xb:			// Mode
-					i8237Mode[t1 & B8(00000011)]= t1 & B8(11111100);
-					i8237DMACurAddr[t1 & B8(00000011)]=i8237DMAAddr[t1 & B8(00000011)];			// bah credo, qua
-					i8237DMACurLen[t1 & B8(00000011)]=i8237DMALen[t1 & B8(00000011)];
+					i8237Mode[t1 & 0b00000011]= t1 & 0b11111100;
+					i8237DMACurAddr[t1 & 0b00000011]=i8237DMAAddr[t1 & 0b00000011];			// bah credo, qua
+					i8237DMACurLen[t1 & 0b00000011]=i8237DMALen[t1 & 0b00000011];
 		      i8237RegR[0xb]=i8237RegW[0xb]=t1;
 
-					i8237RegR[8] |= ((1 << t1 & (B8(00000011))) << 4);  // request??... boh
+					i8237RegR[8] |= ((1 << t1 & (0b00000011)) << 4);  // request??... boh
 
 					break;
 				case 0xc:			// clear Byte Pointer Flip-Flop
@@ -3908,15 +3494,15 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
 				case 0xd:			// Reset
 					memset(i8237RegR,0,sizeof(i8237RegR));
 					memset(i8237RegW,0,sizeof(i8237RegW));
-					i8237RegR[15]=i8237RegW[15] = B8(00001111);
-					i8237RegR[8]=B8(00000000);
+					i8237RegR[15]=i8237RegW[15] = 0b00001111;
+					i8237RegR[8]=0b00000000;
 		      i8237RegR[0xd]=i8237RegW[0xd]=t1;
 					break;
 				case 0xe:			//  Clear Masks
-					i8237RegR[15]=i8237RegW[15] &= ~B8(00001111);
+					i8237RegR[15]=i8237RegW[15] &= ~0b00001111;
 					break;
 				case 0xf:			//  Masks
-					i8237RegR[15]=i8237RegW[15] = (t1 & B8(00001111));
+					i8237RegR[15]=i8237RegW[15] = (t1 & 0b00001111);
 					break;
 				default:
 		      i8237RegR[t]=i8237RegW[t]=t1;
@@ -3926,37 +3512,25 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
 
     case 2:         // 20-21 PIC 8259 controller
 //https://en.wikibooks.org/wiki/X86_Assembly/Programmable_Interrupt_Controller
-#if defined(EXT_80286)
+#ifdef PCAT
       t &= 0x3;		// DTK legge/scrive a 22 23
 #else
       t &= 0x1;
 #endif
-#ifdef _DEBUG
-#ifdef DEBUG_8259
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 02%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0:     // 0x20 per EOI interrupt, 0xb per "chiedere" quale... subito dopo c'è lettura a 0x20
           i8259RegW[0]=t1;      // 
-					if(t1 & B8(00010000)) {// se D4=1 qua (0x10) è una sequenza di Init,
+					if(t1 & 0b00010000) {// se D4=1 qua (0x10) è una sequenza di Init,
 						i8259OCW[2] = 2;		// dice, default su lettura IRR
 //						i8259RegR[0]=0;
 						// boh i8259IMR=0xff; disattiva tutti
 						i8259ICW[0]=t1;
 						i8259ICWSel=2;		// >=1 indica che siamo in scrittura ICW
 						}
-					else if(t1 & B8(00001000)) {// se D3=1 qua (0x8) è una richiesta
+					else if(t1 & 0b00001000) {// se D3=1 qua (0x8) è una richiesta
 						// questa è OCW3 
 						i8259OCW[2]=t1;
-						switch(i8259OCW[2] & B8(00000011)) {		// riportato anche sopra, serve (dice, in polled mode)
+						switch(i8259OCW[2] & 0b00000011) {		// riportato anche sopra, serve (dice, in polled mode)
 							case 2:
 								i8259RegR[0]=i8259IRR;
 								break;
@@ -3971,10 +3545,10 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
           else {
 						// questa è OCW2 "di lavoro" https://k.lse.epita.fr/internals/8259a_controller.html
 						i8259OCW[1]=t1;
-						switch(i8259OCW[1] & B8(11100000)) {
-							case B8(00000000):// rotate pty in automatic (set clear
+						switch(i8259OCW[1] & 0b11100000) {
+							case 0b00000000:// rotate pty in automatic (set clear
 								break;
-							case B8(00100000):			// non-spec, questo pulisce IRQ con priorità + alta in essere (https://rajivbhandari.wordpress.com/wp-content/uploads/2014/12/unitii_8259.pdf
+							case 0b00100000:			// non-spec, questo pulisce IRQ con priorità + alta in essere (https://rajivbhandari.wordpress.com/wp-content/uploads/2014/12/unitii_8259.pdf
 //						i8259ISR=0;		// MIGLIORARE! pulire solo il primo
 								for(i=1; i; i<<=1) {
 									if(i8259ISR & i) {
@@ -3984,18 +3558,18 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
 									}
 //				      CPUPins &= ~DoIRQ;		// SEMPRE! non serve + v. di là
 								break;
-							case B8(01000000):			// no op
+							case 0b01000000:			// no op
 								break;
-							case B8(01100000):			// 0x60 dovrebbe indicare uno specifico IRQ, nei 3bit bassi 0..7
+							case 0b01100000:			// 0x60 dovrebbe indicare uno specifico IRQ, nei 3bit bassi 0..7
 								i8259ISR &= ~(1 << (t1 & 7));
 								break;
-							case B8(10000000):			// rotate pty in automatic (set
+							case 0b10000000:			// rotate pty in automatic (set
 								break;
-							case B8(10100000):			// rotate pty on non-specific
+							case 0b10100000:			// rotate pty on non-specific
 								break;
-							case B8(11000000):			// set pty
+							case 0b11000000:			// set pty
 								break;
-							case B8(11100000):			// rotate pty on specific
+							case 0b11100000:			// rotate pty on specific
 								break;
 							}
 
@@ -4014,7 +3588,7 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
 						case 3:
 							i8259ICWSel++;
 							i8259ICW[2]=t1;			
-							if(!(i8259ICW[0] & B8(00000001))) 		// ICW4 needed?
+							if(!(i8259ICW[0] & 0b00000001)) 		// ICW4 needed?
 								i8259ICWSel=0;
 							break;
 						case 4:
@@ -4028,6 +3602,14 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
 						}
 
           break;
+#ifdef PCAT
+				case 2:			// DTK 286 scrive 6a a 22 e legge a 23 al boot!
+// v. datasheet chipset 82C211 (Neat-286), ci sono cose tipo fast-reset e fast gate A20
+
+					break;
+				case 3:
+					break;
+#endif
         }
       break;
 
@@ -4038,185 +3620,129 @@ void _fastcall OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuma
  	//outb(0x43, 0xb6);
  	//outb(0x42, (uint8_t) (Div) );
  	//outb(0x42, (uint8_t) (Div >> 8));
-#ifdef _DEBUG
-#ifdef DEBUG_8253
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 4%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0:
-          switch((i8253Mode[0] & B8(00110000)) >> 4) {
-            case 0:
-              // latching operation... v. sotto
-              break;
-            case 2:
-              i8253TimerW[0]=MAKEWORD(LOBYTE(i8253TimerW[0]),t1);
-//							i8253Mode[0] |= B8(01000000);          // reloaded OCCHIO FORSE SOLO QUANDO BYTE ALTO, verificare
-              i8253ModeSel = 0;
-							goto reload0;
-              break;
-            case 1:
-              i8253TimerW[0]=MAKEWORD(t1,HIBYTE(i8253TimerW[0]));
-              i8253ModeSel = 0;
-#ifndef PCAT		// per AWARD286, patch per ora (non si capisce, doc a cazzo
-// solo byte alto?				
-							goto reload0;
-#else
-							goto reload0_;
-#endif
-              break;
-            case 3:
-              if(i8253ModeSel)
-                i8253TimerW[0]=MAKEWORD(LOBYTE(i8253TimerW[0]),t1);
-              else
-                i8253TimerW[0]=MAKEWORD(t1,HIBYTE(i8253TimerW[0]));
-              i8253ModeSel++;
-              i8253ModeSel &= 1;
-							if(!i8253ModeSel) {		// qua, se carico entrambi i byte
-reload0:
-								i8253Mode[0] |= B8(01000000);          // reloaded
-reload0_:
-								i8253TimerL[0]=i8253TimerR[0]=i8253TimerW[0];
-								if(((i8253Mode[0] & B8(00001110)) >> 1) == 3)
-									i8253TimerR[0] &= 0xfffe;
-								}
-              break;
-            }
-          i8253RegW[0]=t1;
-//          PR4=i8253TimerW[0] ? i8253TimerW[0] : 65535;
-          break;
         case 1:
-          switch((i8253Mode[1] & B8(00110000)) >> 4) {
-            case 0:
-              // latching operation... v. sotto
-              break;
-            case 2:
-              i8253TimerW[1]=MAKEWORD(LOBYTE(i8253TimerW[1]),t1); 
-              i8253ModeSel = 0;
-							goto reload1;
-              break;
-            case 1:
-              i8253TimerW[1]=MAKEWORD(t1,HIBYTE(i8253TimerW[1]));
-              i8253ModeSel = 0;
-#ifndef PCAT		// per AWARD286, patch per ora (non si capisce, doc a cazzo
-// solo byte alto?		no, per Award 286
-							goto reload1;
-#else
-							goto reload1_;
-#endif
-              break;
-            case 3:
-              if(i8253ModeSel)
-                i8253TimerW[1]=MAKEWORD(LOBYTE(i8253TimerW[1]),t1);
-              else
-                i8253TimerW[1]=MAKEWORD(t1,HIBYTE(i8253TimerW[1]));
-              i8253ModeSel++;
-              i8253ModeSel &= 1;
-							if(!i8253ModeSel) {		// qua, se carico entrambi i byte
-reload1:
-								i8253Mode[1] |= B8(01000000);          // reloaded
-reload1_:
-								i8253TimerL[1]=i8253TimerR[1]=i8253TimerW[1];
-								if(((i8253Mode[1] & B8(00001110)) >> 1) == 3)
-									i8253TimerR[1] &= 0xfffe;
-								}
-              break;
-            }
-          i8253RegW[1]=t1;
-//          PR5=i8253TimerW[1] ? i8253TimerW[1] : 65535;
-          break;
         case 2:
-          switch((i8253Mode[2] & B8(00110000)) >> 4) {
-            case 0:
+					// NO, v. sopra (non si capisce un cazzo, ma diciamo che caricamenti singoli ATTIVANO sempre, il doppio disattiva su low e attiva su high
+					// e scrittura a Mode attiva
+          switch((i8253Mode[t] & 0b00110000) >> 4) {
+            case PIT_LATCH:
               // latching operation... v. sotto
               break;
-            case 2:
-              i8253TimerW[2]=MAKEWORD(LOBYTE(i8253TimerW[2]),t1);  
-              i8253ModeSel = 0;
-							goto reload2;
-              break;
-            case 1:
-              i8253TimerW[2]=MAKEWORD(t1,HIBYTE(i8253TimerW[2]));
-              i8253ModeSel = 0;
-#ifndef PCAT		// per AWARD286, patch per ora (non si capisce, doc a cazzo
-// solo byte alto?		
-							goto reload2;
-#else
-							goto reload2_;
+            case PIT_LOADLOW:
+              i8253TimerL[t]=i8253TimerR[t]=i8253TimerW[t]=MAKEWORD(t1,HIBYTE(i8253TimerW[t]));
+//		          i8253Flags[t] &= ~PIT_LOHIBYTE;
+							i8253Flags[t] &= ~(PIT_ACTIVE | PIT_LOHIBYTE);          // 
+#ifdef PC_IBM5150
+								i8253Flags[t] |= PIT_ACTIVE;          // award del c, 5150 di merda PATCH perché così vanno tutti gli altri @#£$%
 #endif
+							goto reload0;
               break;
-            case 3:
-              if(i8253ModeSel)
-                i8253TimerW[2]=MAKEWORD(LOBYTE(i8253TimerW[2]),t1);
+            case PIT_LOADHIGH:
+              i8253TimerL[t]=i8253TimerR[t]=i8253TimerW[t]=MAKEWORD(LOBYTE(i8253TimerW[t]),t1);
+//		          i8253Flags[t] &= ~PIT_LOHIBYTE;
+							i8253Flags[t] &= ~(PIT_ACTIVE | PIT_LOHIBYTE);          // 
+							goto reload0;
+              break;
+            case PIT_LOADBOTH:
+		          if(i8253Flags[t] & PIT_LOHIBYTE)
+                i8253TimerW[t]=MAKEWORD(LOBYTE(i8253TimerW[t]),t1);
               else
-                i8253TimerW[2]=MAKEWORD(t1,HIBYTE(i8253TimerW[2]));
-              i8253ModeSel++;
-              i8253ModeSel &= 1;
-							if(!i8253ModeSel) {		// qua, se carico entrambi i byte
-reload2:
-								i8253Mode[2] |= B8(01000000);          // reloaded
-reload2_:
-								i8253TimerL[2]=i8253TimerR[2]=i8253TimerW[2];
-								if(((i8253Mode[2] & B8(00001110)) >> 1) == 3)
-									i8253TimerR[2] &= 0xfffe;
+                i8253TimerW[t]=MAKEWORD(t1,HIBYTE(i8253TimerW[t]));
+		          i8253Flags[t] ^= PIT_LOHIBYTE;
+							if(!(i8253Flags[t] & PIT_LOHIBYTE)) {		// qua, se carico entrambi i byte
+								i8253TimerL[t]=i8253TimerR[t]=i8253TimerW[t];
+
+								i8253Flags[t] |= PIT_ACTIVE;          // award del c, 5150 di merda
+
+reload0:
+		          i8253Flags[t] |= PIT_LOADED;		// USARE di là per fare ACTIVE SOLO dopo un clock?!
+
+			          i8253Flags[t] &= ~PIT_LATCHED;
+//								i8253Flags[t] |= PIT_ACTIVE;          // award del c
+
+
+reload0_:
+
+								switch((i8253Mode[t] & 0b00001110) >> 1) {
+									case PIT_MODE_INTONTERMINAL:
+										i8253Flags[t] &= ~PIT_OUTPUT;          // OUT=0
+										break;
+									case PIT_MODE_ONESHOT:
+										i8253Flags[t] &= ~PIT_OUTPUT;          // OUT=0
+										break;
+									case PIT_MODE_FREECOUNTER:
+										i8253Flags[t] |= PIT_OUTPUT;          // OUT=1
+										break;
+									case PIT_MODE_SQUAREWAVEGEN:
+										i8253Flags[t] |= PIT_OUTPUT;          // OUT=1
+										i8253TimerR[t] &= 0xfffe;
+										break;
+									case PIT_MODE_SWTRIGGERED:
+										break;
+									case PIT_MODE_HWTRIGGERED:
+										break;
+									}
+
 								}
               break;
             }
-          i8253RegW[2]=t1;
-//          PR2=i8253TimerW[2] ? i8253TimerW[2] : 65535;
+
+          i8253RegW[t]=t1;
+//          PR4=i8253TimerW[0] ? i8253TimerW[0] : 65535;
           break;
         case 3:
 					i=t1 >> 6;
           if(i < 3) {
-            i8253Mode[i]= (i8253Mode[i] & 0xc0) | (t1 & 0x3f);
-						switch(t1 & B8(00110000)) {
-							case B8(00000000):
+						switch((t1 & 0b00110000) >> 4) {
+							case PIT_LATCH:
 								i8253TimerL[i]=i8253TimerR[i];		// 
+			          i8253Flags[i] |= PIT_LATCHED;
+/*								if(t1 & B8(00000010)) METTERE verificare
+									i8253TimerL[0]=i8253TimerR[0];		// 
+								if(t1 & B8(00000100))
+									i8253TimerL[1]=i8253TimerR[1];		// 
+								if(t1 & B8(00000100))
+									i8253TimerL[2]=i8253TimerR[2];		// 
+									*/
+//						i8253TimerL[i]=i8253TimerR[i]=i8253TimerW[i];		// 
 								break;
-							case B8(00010000):		// 
+							case PIT_LOADLOW:		// 
+							case PIT_LOADHIGH:		// 
+            i8253Mode[i]= t1 & 0x3f;
+						i8253TimerL[i]=i8253TimerR[i]=i8253TimerW[i];		// 
+			          i8253Flags[i] &= ~PIT_LATCHED;
+
+						i8253Flags[i] |= PIT_ACTIVE;          // se lo metto va DTK e si pianta award, e viceversa PORCODDIO v.sopra
 								break;
-							case B8(00100000):		// 
-								break;
-							case B8(00110000):
+							case PIT_LOADBOTH:
+            i8253Mode[i]= t1 & 0x3f;
+						i8253TimerL[i]=i8253TimerR[i]=i8253TimerW[i];		// 
+			          i8253Flags[i] &= ~PIT_LATCHED;
+						i8253Flags[i] |= PIT_ACTIVE;          // 
 								break;
 							}
+	          i8253Flags[i] &= ~PIT_LOHIBYTE;
 						}
 					else {
-						switch(t1 & B8(00110000)) {
-							case B8(00000000):
+						switch(t1 & 0b00110000) {
+							case 0b00000000:
 								break;
-							case B8(00010000):		// Status (8254)
+#ifdef PCAT
+							case 0b00010000:		// Status (8254)
 								;		// 
 								break;
-							case B8(00100000):		// Control
+#endif
+							case 0b00100000:		// Control
 								;
 								break;
-							case B8(00110000):
+							case 0b00110000:
 								break;
 							}
 						}
 
           i8253RegR[3]=i8253RegW[3]=t1;
-          i8253ModeSel=0;
-#ifdef _DEBUG
-#ifdef DEBUG_8253
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  TIMER %u : mode %02X, count=%04x / %04x/%04x\n",timeGetTime(),
-				_ip,t1 >> 6,t1 & 0x3f, i8253TimerW[t1 >> 6],i8253TimerR[t1 >> 6],i8253TimerL[t1 >> 6]);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
           break;
         }
       break;
@@ -4224,18 +3750,6 @@ reload2_:
     case 6:        // 60-6F 8042/8255 keyboard; speaker; config byte
 #ifndef PCAT		// bah, chissà... questo dovrebbe usare 8255 e AT 8042...
       t &= 0x3;
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 6%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0:     // solo read
           break;
@@ -4249,36 +3763,37 @@ reload2_:
 					// 0x54c da GLAbios al boot, 0x390-484 in SPEED test (???
           if(t1 & 2) {
             if(t1 & 1) {
-//              PR2 = j;		 // 
+              PR2 = j;		 // 
+  #ifdef ST7735
+              OC1RS = j/2;		 // 
+              OC1CONbits.ON = 1;
+  #endif
+  #ifdef ILI9341
+              OC7RS = j/2;		 // 
+              OC7CONbits.ON = 1;
+  #endif
               }
             else {
-//              PR2 = j;
+              PR2 = j;
+  #ifdef ST7735
+              OC1RS = j;		 // bah
+              OC1CONbits.ON = 1;
+  #endif
+  #ifdef ILI9341
+              OC7RS = j;		 // bah
+              OC7CONbits.ON = 1;
+  #endif
               }
-						PlayResource(MAKEINTRESOURCE(IDR_WAVE_SPEAKER),FALSE);
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			if((t1 & B8(00000010)) && !(i8255RegW[1] & B8(00000010))) {
-				extern HFILE spoolFile;
-				char myBuf[256];
-				wsprintf(myBuf,"%u  BEEP\n",timeGetTime());
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-				}
-#endif
-#endif
             }
           else {
-//            PR2 = j;		 // 
-						PlayResource(NULL,FALSE);
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			if(!(t1 & B8(00000010)) && (i8255RegW[1] & B8(00000010))) {
-				extern HFILE spoolFile;
-				char myBuf[256];
-				wsprintf(myBuf,"%u  endBEEP\n",timeGetTime());
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-				}
-#endif
-#endif
+            PR2 = j;		 // 
+  #ifdef ST7735
+            OC1RS = 0;		 // 
+  #endif
+  #ifdef ILI9341
+            OC7RS = 0;		 // 
+  #endif
+// lascio cmq acceso...
             }
 //          MachineFlags=t1;
 					// A5 non-turbo E070 (pcxtbios
@@ -4291,40 +3806,27 @@ reload2_:
 					// AD KB hold low+disable, NMI on, spkr off (glabios E0AE
 
 // così va (STRAPUTTANODIO) anche se alcuni BIOS danno ancora errore nonostante la sequenza sia ok (forse mettere ritardo dopo reset??
-					if((t1 & B8(10000000)) && !(i8255RegW[1] & B8(10000000))) {		// ack kbd, clear (b7)
-						KBStatus &= ~B8(00000001);
+					if((t1 & 0b10000000) && !(i8255RegW[1] & 0b10000000)) {		// ack kbd, clear (b7)
+						KBStatus &= ~KB_OUTPUTFULL;
 						Keyboard[0]=0;
-			/*{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"clear kb \n");
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}*/
 						}
-					if(t1 & B8(01000000)) {		// reset (b6 sale)
-						if(!(i8255RegW[1] & B8(01000000))) {
-							KBStatus |= B8(00000001);			// output disponibile
+					if(t1 & 0b01000000) {		// reset (b6 sale)
+						if(!(i8255RegW[1] & 0b01000000)) {
+							KBStatus |= KB_OUTPUTFULL;			// output disponibile
 							Keyboard[0]=0xAA;			//
 							//    KBDIRQ=1;
-							i8259IRR |= B8(00000010);
-			/*{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"reset kb \n");
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}*/
+							i8259IRR |= 0b00000010;
 							}
 						}
 
-
-					if(t1 & B8(00001000))
+/*
+					if(t1 & 0b00001000)
 //						SendMessage(hWnd,WM_COMMAND,ID_OPZIONI_VELOCIT_LENTO,0,0);
 						CPUDivider=pcFrequency.QuadPart/(CPU_CLOCK_DIVIDER);
 					else
 //						SendMessage(hWnd,WM_COMMAND,ID_OPZIONI_VELOCIT_VELOCE,0,0);
 						CPUDivider=pcFrequency.QuadPart/(CPU_CLOCK_DIVIDER*2);
+          */
 
 					i8255RegR[1]=i8255RegW[1]=t1;
 					}
@@ -4332,7 +3834,7 @@ reload2_:
           break;
         case 2:     // machine settings... (da V20), NMI
 					i8255RegR[2]=i8255RegW[2]=t1;
-					i8255RegR[2] &= ~B8(11000000);		// bah direi! questi sarebbero parity error ecc, da settare in HW
+					i8255RegR[2] &= ~0b11000000;		// bah direi! questi sarebbero parity error ecc, da settare in HW
           break;
         case 3:     // PIA 8255, port A & C dice, a E06C...  però sarebbe anche a 0x61 per machineflags
 					i8255RegR[3]=i8255RegW[3]=t1;		// glabios mette 0x99 ossia PA=input, PC=tutta input, PB=output
@@ -4341,73 +3843,131 @@ reload2_:
 
 #else
 
-			// https://wiki.osdev.org/A20_Line
-
       t &= 0x7;
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 6%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0:     // 
-          if(i8042RegW[1]==0x60) {
-            KBCommand=t1;
-						KBStatus &= ~B8(00000100);
-						KBStatus |= KBCommand & B8(00000100);
+					KBStatus &= ~KB_COMMAND;		// è dato (non comando)
+          switch(i8042RegW[1]) {
+						case 0x60:
+							KBCommand=t1;
+							KBStatus &= ~KB_POWERON;
+							KBStatus |= KBCommand & 0b00000100;
+							break;
+						case 0xD1:
+							i8042Output=t1;			// https://wiki.osdev.org/A20_Line
+/*							if(i8042Output & 0b00010000))
+								KBStatus |= 0b00000001);
+							else
+								KBStatus &= ~0b00000001);
+							if(i8042Output & 0b00100000))
+								KBStatus |= 0b00000010);
+							else
+								KBStatus &= ~0b00000010);*/
+							break;
+						case 0xD0:			//read output port
+							break;
+						case 0xD3:			// write aux/2nd
+							break;
+						case 0xD4:			// write aux/2nd
+							break;
+						case 0xED:			// LED, patch per ricevere secondo byte
+							t1;
+							break;
+						case 0xF3:			// set typematic, patch per ricevere secondo byte
+							t1;
+							break;
+						default:
+							if(!i8042RegW[1]) {     //comandi inviati qua (per la vera tastiera, sarebbero)
+								i8042RegW[0]=t1;     // 
+								i8042RegW[1]=0;     // direi, così pulisco
+		// qualsiasi byte qua che non segue un comando RIABILITA la tastiera https://www.os2museum.com/wp/ibm-pcat-8042-keyboard-controller-commands/
+								KBCommand &= ~0b00010000;
+								switch(t1) {
+									case 0xED:     //led 
+		//            LED1 = t1 & 1;
+		//            LED2 = t1 & 2 ? 1 : 0;
+		//            LED3 = t1 & 4 ? 1 : 0;
 
-						/* patch award, no... if(KBCommand & 1) {
-							KBStatus |= 1;				// has data output
-							}
-*/
+		// DEVO ASPETTARE stato led qua!! come fare?
+										i8042RegW[1]=0xED;
 
+kb_sendACK:
+										KBStatus |= KB_OUTPUTFULL;		// command, has data output
+										i8042Output |= 0b00010000;
+										Keyboard[0]=0xFA;		// ACK
+										i8042OutPtr=1;
+										i8042RegW[0]=t1;  		
+										goto kb_setirq;
+										break;
+									case 0xFE:     //resend (sarebbe ultimo byte a meno che non fosse Resend...
+										i8042OutPtr=1;
+										i8042RegW[0]=t1;  		i8042RegW[1]=0;
+										goto kb_setirq;
+										break;
+									case 0xEE:     //echo
+										Keyboard[0]=i8042RegW[1];
+										i8042RegW[1]=0;
+										goto kb_sendACK;
+										break;
+									case 0xF4:     //enable QUESTO enable cmq è ENABLE SCANNING e sarebbe diverso da KBCommand<4>...
+										i8042RegW[1]=0;
+										goto kb_sendACK;
+										break;
+									case 0xF5:     //disable
+										KBCommand |= 0b00010000;
+										i8042RegW[1]=0;
+										goto kb_sendACK;
+										break;
+									case 0xF6:     //set default
+										i8042RegW[1]=0;
+										goto kb_sendACK;
+										break;
+									case 0xF3:     //set typematic
+										i8042RegW[1]=0xF3;
+										goto kb_sendACK;
+										break;
+									case 0xF2:     //read ID
+										i8042RegW[1]=0xF2;
+										goto kb_sendACK;
+										break;
+//									case 0xF0:     //sarebbe Set translate mode bit , su MCA
+										//KBCommand |= 0b01000000)
+//										break;
+									case 0xFF:     //reset
+										memset(&Keyboard,0,sizeof(Keyboard));
+										KBCommand=0b01010001 /*XT,disabled,irq on  FORSE questo non andrebbe toccato*/;  
+										/*i8042Input=0;*/ i8042Output=2/*A20*/; i8042OutPtr=2 /* power-on e byte AA pronto + ACK*/;
+										Keyboard[0]=0xaa; Keyboard[1]=0xfa;
+										KBStatus |= KB_ENABLED | KB_OUTPUTFULL;		// b4=enabled, data available
+										i8042Output |= 0b00010000;
+										break;
+									default:
+										if((t1>=0xef && t1<=/*0xf2 read ID!*/0xf1) || (t1>=0xf7 && t1<=0xfd)) {	// nop
+											i8042RegW[1]=0;
+											goto kb_sendACK;
+											}
+										break;
+									}
+								}
+							else if(i8042RegW[1]>=0x60 && i8042RegW[1]<0x80) {		// write ram
+kb_writeram_:
+								KBRAM[i8042RegW[1] & 0x1f]=t1;
+								}
+							else if(i8042RegW[1]>=0x40 && i8042RegW[1]<0x60) {		// alias AMI
+								goto kb_writeram_;
+								}
+							else if(i8042RegW[1]>0x60 && i8042RegW[1]<0x80) {  // boh... 2024
+								//KBRAM[i8042RegW[1] & 0x1f]
+								}
+							break;
 
+//							i8042RegW[1]
 
-            }
-          else if(i8042RegW[1]>0x60 && i8042RegW[1]<0x80) {  // boh... 2024
-            //KBRAM[i8042RegW[1] & 0x1f]
-            }
-          else if(i8042RegW[1]==0xD1) {
-						i8042Output=t1;
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  A20=%u\n",timeGetTime(),
-				_ip,i8042Output & 2 ? 1 : 0);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-
-//			if(i8042Output & 2)
-//				debug=1;
-			}
-            }
-          else if(i8042RegW[1]==0xD2) {			//write output port
-            }
-          else if(i8042RegW[1]==0xD3) {
-            }
-          else if(i8042RegW[1]==0xD4) {
-            }
-          else if(i8042RegW[1]==0xED) {     //led 
-//            LED1 = t1 & 1;
-//            LED2 = t1 & 2 ? 1 : 0;
-//            LED3 = t1 & 4 ? 1 : 0;
-            }
-          else if(i8042RegW[1]==0xEE) {     //echo
-            Keyboard[0]=i8042RegW[1];
-						i8042OutPtr=1;
-            }
-          else if(i8042RegW[1]>=0xF0 && i8042RegW[1]<=0xFF) {
             }
           i8042RegW[0]=t1;     // 
           i8042RegW[1]=0;     // direi, così pulisco
           break;
+
         case 1:     // brutalmente, per buzzer!  		system control port
 		 /*		 bit 7	(1= IRQ 0 reset )
 		 bit 6-4    reserved
@@ -4416,6 +3976,9 @@ reload2_:
 		 bit 1 = 1  speaker data enable
 		 bit 0 = 1  timer 2 gate to speaker enable*/
 					{
+						// secondo granite questo va salvato in i8042input, i 4 bit bassi
+						i8042Input= (i8042Input & 0xf0) | (t1 & 0xf);
+
              /*PB1 0 turn off speaker
              1 enable speaker data
              PB0 0 turn off timer 2
@@ -4423,159 +3986,195 @@ reload2_:
           j=i8253TimerW[2]/3  /* vale 0x528 vado a 0x190=400 */;      // 2025 (was: 980Hz 5/12/19
           if(t1 & 2) {
             if(t1 & 1) {
-//              PR2 = j;		 // 
+              PR2 = j;		 // 
+  #ifdef ST7735
+              OC1RS = j/2;		 // 
+              OC1CONbits.ON = 1;
+  #endif
+  #ifdef ILI9341
+              OC7RS = j/2;		 // 
+              OC7CONbits.ON = 1;
+  #endif
               }
             else {
-//              PR2 = j;
+              PR2 = j;
+  #ifdef ST7735
+              OC1RS = j;		 // bah
+              OC1CONbits.ON = 1;
+  #endif
+  #ifdef ILI9341
+              OC7RS = j;		 // bah
+              OC7CONbits.ON = 1;
+  #endif
               }
-						PlayResource(MAKEINTRESOURCE(IDR_WAVE_SPEAKER),FALSE);
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			if(t1 & B8(00000010)) {
-			extern HFILE spoolFile;
-			char myBuf[256];
-			wsprintf(myBuf,"%u  BEEP\n",timeGetTime());
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
             }
           else {
-//            PR2 = j;		 // 
-						PlayResource(NULL,FALSE);
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			if(!(t1 & B8(00000010))) {
-			extern HFILE spoolFile;
-			char myBuf[256];
-			wsprintf(myBuf,"%u  endBEEP\n",timeGetTime());
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
+            PR2 = j;		 // 
+  #ifdef ST7735
+            OC1RS = 0;		 // 
+  #endif
+  #ifdef ILI9341
+            OC7RS = 0;		 // 
+  #endif
+// lascio cmq acceso...
             }
 					}
 
           break;
+
         case 4:     // 
+					KBStatus |= KB_COMMAND;		// è comando
+					if(t1 & 0b00001000)
+						KBStatus |= KB_ENABLED;		// fa override di KB inhibit
           i8042RegW[1]=t1;
-          if(i8042RegW[1]==0xAA) {					// self test
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-//            Keyboard[1]=0x55; Keyboard[0]=0x55 /*ribadisco*/ /*1 /*ID*/; i8042OutPtr=2;
-            Keyboard[0]=0x55; i8042OutPtr=1;
-						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xA9) {			// test lines aux / #2 device
-            KBStatus |= B8(00001011);				// command, data input full, has data output
+          switch(i8042RegW[1]) {
+						case 0xAA: 					// self test
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_POWERON | KB_COMMAND;				// command, data input full, has data output, alzo power-on
+							i8042Output |= 0b00010000;
+	            Keyboard[1]=0x55; Keyboard[0]=0x55 /*ribadisco*/ /*1 /*ID*/; i8042OutPtr=2;  //(su AMI si incula tutto!
+//							Keyboard[0]=0x55; i8042OutPtr=1;
+							goto kb_setirq;
+							break;
+						case 0xA9:			// test lines aux / #2 device
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
 
-						// FARE!
-						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xAB) {			// test lines 
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xAD) {			// disable
-						KBStatus |= B8(00001010);		// command,data input full, 
-//						KBStatus &= ~1;				// pulisco, pare!
-//						i8259IRR &= ~B8(00000010);	// tutto
-            KBCommand |= B8(00010000);
-            }
-          else if(i8042RegW[1]==0xAE) {			// enable
-						KBStatus |= B8(00001010);		// command,data input full, 
-            KBCommand &= ~B8(00010000);
-            }
-          else if(i8042RegW[1]==0x20) { // r/w control
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-            Keyboard[0]=i8042RegW[1]; i8042OutPtr=1;
-						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0x60) { // r/w control
-						KBStatus |= B8(00001010);		// command,data input full, 
-            }
-          else if(i8042RegW[1]>0x60 && i8042RegW[1]<0x80) {
-            //KBRAM[i8042RegW[1] & 0x1f]
-						KBStatus |= B8(00001010);		// command
-						goto kb_setirq;
-            }
-
-
-          else if(i8042RegW[1]==0xA1) {		//BOH ami286
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-            Keyboard[0]=0;
-						i8042OutPtr=1;
-						goto kb_setirq;
-            }
-
-
-          else if(i8042RegW[1]==0xC0) {		//read output data (ossia MAchineSettings, DIVERSI da XT!
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-            Keyboard[0]=MachineSettings;
-						i8042OutPtr=1;
+							// FARE!
+							goto kb_setirq;
+							break;
+						case 0xAB:			// test lines 
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+	//gestito sopra cmq, UNIRE            Keyboard[0]=0 /*ok*/; i8042OutPtr=1;
+							goto kb_setirq;
+							break;
+						case 0xAD:			// disable
+							KBStatus |= KB_COMMAND | KB_INPUTFULL;		// command,data input full, 
+//							KBStatus &= ~0b00000001);				// pulisco NO! il coso lo manda dopo ogni tasto ricevuto...
+	//						i8259IRR &= ~0b00000010);	// tutto
+              KBRAM[0] |= 0x10; //set bit 4 -> disable kbd  da granite...
+//							KBCommand |= 0b00010000);
+							break;
+						case 0xAE:			// enable
+							KBStatus |= KB_COMMAND | KB_INPUTFULL;				// command, data input full
+//							KBStatus &= ~0b00000001);				// pulisco
+              KBRAM[0] &= ~0x10; //clear bit 4 -> enable kbd  da granite...
+//							KBCommand &= ~0b00010000);
+							break;
+						case 0x20: // r/w control
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							Keyboard[0]=i8042RegW[1]; i8042OutPtr=1;
+							goto kb_setirq;
+							break;
+						case 0x60: // r/w control
+							KBStatus |= KB_COMMAND | KB_INPUTFULL;				// command, data input full, has data output
+							break;
+						case 0xA1:		//firmware version  https://aeb.win.tue.nl/linux/kbd/scancodes-11.html#inputport
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							Keyboard[0]= 1 /*smartest blob*/;	i8042OutPtr=1;
+							goto kb_setirq;
+							break;
+						case 0xC0:		//read output data (ossia MAchineSettings, DIVERSI da XT!
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							Keyboard[0]=MachineSettings;
+							i8042OutPtr=1;
 // forse no						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xC1) {		//read output data (ossia MAchineSettings 0..3
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-            Keyboard[0]=MachineSettings << 4;
-						i8042OutPtr=1;
+							break;
+						case 0xC1:		//read output data (ossia MAchineSettings 0..3
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							Keyboard[0]=MachineSettings << 4;
+							i8042OutPtr=1;
 // forse no						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xC2) {		//read output data (ossia MAchineSettings, 4..7
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-            Keyboard[0]=MachineSettings & 0xf0;
-						i8042OutPtr=1;
+							break;
+						case 0xC2:		//read output data (ossia MAchineSettings, 4..7
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							Keyboard[0]=MachineSettings & 0xf0;
+							i8042OutPtr=1;
 // forse no						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xD0) {		// read output port
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-            Keyboard[0]=i8042Output;
-						i8042OutPtr=1;
+							break;
+						case 0xD0:		// read output port
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							Keyboard[0]=i8042Output;		i8042OutPtr=1;
 // forse no						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xD1) {		// write output port
-						if(KBCommand & B8(00010000))			// se disabilitata
-							i8042Output=t1;
-						else
-							i8042Output=t1;				// boh...
-						KBStatus |= B8(00001010);		// command, data input full
-            Keyboard[0]=i8042RegW[1];		// bah ok
-						i8042OutPtr=1;
-            }
-          else if(i8042RegW[1]==0xD2) {		// https://stanislavs.org/helppc/8042.html
-						goto kb_echo;
-            }
-          else if(i8042RegW[1]==0xED) {     //led 
-						KBStatus |= B8(00001010);		// command,data input full, 
-						goto kb_setirq;
-            }
-          else if(i8042RegW[1]==0xEE) {     //echo, ora non lo vedo nella pagina 8042 ma ok
+							break;
+						case 0xD1:		// write output port
+/*							if(KBCommand & 0b00010000))			// se disabilitata
+								i8042Output=t1;
+							else
+								i8042Output=t1;				// boh...*/
+							// e in teoria b0 è RESET CPU, fisso :D ovviamente
+							KBStatus |= KB_COMMAND | KB_INPUTFULL;		// command, data input full
+//							Keyboard[0]=i8042RegW[1];		// bah ok
+//							i8042OutPtr=1;
+							break;
+						case 0xD2:		// https://stanislavs.org/helppc/8042.html
+							goto kb_echo;
+							break;
+            case 0xDF: //enable A20 (hp vectra) / (quadtel?)  da granite/smartestblob
+//							i8042Output |= 2;
+							break;
+            case 0xDD: //disable A20 (hp vectra) / (quadtel?)
+//							i8042Output &= ~2;
+							break;
+						case 0xE0:		// read test lines
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							if(!(KBStatus & KB_ENABLED) /*KBRAM[0] & 0b00000100)*/)
+								Keyboard[0]=0;		// ovvio
+							else
+								Keyboard[0]=rand() & 3;		// ideuzza di smartestblob :)
+							i8042OutPtr=1;
+							goto kb_setirq;
+							break;
+						case 0xEE:     //echo, ora non lo vedo nella pagina 8042 ma ok
 kb_echo:
-            Keyboard[0]=i8042RegW[1];
-            KBStatus |= B8(00001011);				// command, data input full, has data output
-						i8042OutPtr=1;
-						goto kb_setirq;
-            }
-          else if(i8042RegW[1]>=0xF0 && i8042RegW[1]<=0xFF) {		// pulse output pin
-						KBStatus |= B8(00001010);		// command,data input full, 
-// FE equivale a pulsare il bit 0 ossia RESET!
-
-						if(!(t1 & 1)) {
-							CPUPins |= DoReset;
-//			debug=0;
-			_lwrite(spoolFile,"*------ RESET!!\r\n",17);
-
-
-//			ram_seg[0x472]=0x34;
-//			ram_seg[0x473]=0x12; forzo warm boot STRAPUTTANO dio che non muore insieme a crosetto
-						}
+							Keyboard[0]=i8042RegW[1];
+							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
+							i8042Output |= 0b00010000;
+							i8042OutPtr=1;
 
 kb_setirq:
-						if(KBCommand & B8(00000001)) {     //..e se interrupt attivi...
-						//    KBDIRQ=1;
-							i8259IRR |= B8(00000010);
-							}
+							if(KBCommand & 0b00000001) {     //..e se interrupt attivi...
+							//    KBDIRQ=1;
+								i8259IRR |= 0b00000010;
+								}
+							break;
+						default:
+							if(i8042RegW[1]>=0x00 && i8042RegW[1]<0x20) {		// read ram
+kb_readram:
+								//KBRAM[i8042RegW[1] & 0x1f]
+								KBStatus |= KB_COMMAND | KB_INPUTFULL;		// command
+//								goto kb_setirq;
+								}
+							else if(i8042RegW[1]>=0x20 && i8042RegW[1]<0x40) {		// alias AMI
+								goto kb_readram;
+								}
+							else if(i8042RegW[1]>=0x60 && i8042RegW[1]<0x80) {		// write ram
+kb_writeram:
+								//KBRAM[i8042RegW[1] & 0x1f]
+								KBStatus |= KB_COMMAND | KB_INPUTFULL;		// command
+//								goto kb_setirq;
+								}
+							else if(i8042RegW[1]>=0x40 && i8042RegW[1]<0x60) {		// alias AMI
+								goto kb_writeram;
+								}
+							else if(i8042RegW[1]>=0xF0 && i8042RegW[1]<=0xFF) {		// pulse output pin
+								KBStatus |= KB_COMMAND | KB_INPUTFULL;		// command,data input full, 
+		// FE equivale a pulsare il bit 0 ossia RESET!
+
+								if(!(t1 & 1)) {
+									CPUPins |= DoReset;
+									}
+								}
+							break;
 	          }
-//        KBStatus &= ~B8(00000010);    // vabbe' :)
+//        KBStatus &= ~0b00000010);    // vabbe' :)
         break;
         }
 #endif
@@ -4587,18 +4186,6 @@ kb_setirq:
 			// anche (TD3300, superXT) Port 070h
 			// Controls the wait state for board RAM, ROM, I/O and also bus RAM and I/O. See (page B-1, B-2) from the UX-12 manual.
       t &= 0x1;
-#ifdef _DEBUG
-#ifdef DEBUG_RTC
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 7%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0:     // il bit 7 attiva/disattiva NMI  https://www.singlix.com/trdos/archive/pdf_archive/real-time-clock-nmi-enable-paper.pdf
           i146818RegR[0]=i146818RegW[0]=t1;
@@ -4610,27 +4197,27 @@ kb_setirq:
           i146818RegW[t]=t1;
           switch(i146818RegW[0] & 0x3f) {
             case 0:
-              currentDateTime.tm_sec=t1;
+              currentTime.sec=t1;
               break;
               // in mezzo c'è Alarm...
             case 2:
-              currentDateTime.tm_min=t1;
+              currentTime.min=t1;
               break;
             case 4:
-              currentDateTime.tm_hour=t1;
+              currentTime.hour=t1;
               break;
             case 6:
             // 6 è day of week... si può scrivere??
-              currentDateTime.tm_wday=t1;
+              currentDate.weekday=t1;
               break;
             case 7:
-              currentDateTime.tm_mday=t1;
+              currentDate.mday=t1;
               break;
             case 8:
-              currentDateTime.tm_mon=t1;
+              currentDate.mon=t1;
               break;
             case 9:
-              currentDateTime.tm_year=t1;
+              currentDate.year=t1;
               break;
             case 10:
               t1 &= 0x7f;     // vero hardware!
@@ -4660,19 +4247,6 @@ kb_setirq:
 writeRegRTC:            
               i146818RAM[i146818RegW[0] & 0x3f] = t1;
 
-/*							if((i146818RegW[0] & 0x3f) == 14 || (i146818RegW[0] & 0x3f)==15)
-							{	char myBuf[256],myBuf2[32];
-							wsprintf(myBuf,"%u RTCRAM W: ",timeGetTime());
-							for(i=0; i<64; i++) {		// 
-								wsprintf(myBuf2,"%02X ",i146818RAM[i]);
-								strcat(myBuf,myBuf2);
-								if(i==9 || i==13)
-									strcat(myBuf," ");
-								}
-							strcat(myBuf,"\r\n");
-							_lwrite(spoolFile,myBuf,strlen(myBuf));
-							}*/
-
               break;
             }
           break;
@@ -4681,18 +4255,6 @@ writeRegRTC:
 
     case 8:
       t &= 0xf;
-#ifdef _DEBUG
-#ifdef DEBUG_8237
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 8%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 #ifndef PCAT
       switch(t) {
 				case 0:			// POST diag code (v. anche 300...
@@ -4733,22 +4295,12 @@ writeRegRTC:
 					//if(t==0x80 /*t>=0x108 && t<=0x10f*/) {      // diag display, uso per led qua!
     // https://www.intel.com/content/www/us/en/support/articles/000005500/boards-and-kits.html
 		// https://blog.theretroweb.com/2024/01/20/award-bios-beep-and-post-codes-list/#Version_33
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  DIAG status %02X ---------------------------------- A20=%u\n",timeGetTime(),
-				_ip,t1,i8042Output & 2 ? 1 : 0);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			wsprintf(myBuf,"DIAG status %02X",t1);
-			SetWindowText(hStatusWnd,myBuf);
-			}
 
 
 /*			if(t1==0x24)
-				debug=1;
-			if(t1==0x25)
-				debug=0;*/
+				debug=1;*/
+			/*if(t1==0x70)
+				debug=1;*/
 
 
 
@@ -4816,8 +4368,9 @@ writeRegRTC:
 			//If port 90h == 0, send 3 (0011b) for Turbo -> Normal
 					CPUDivider=2000000L/CPU_CLOCK_DIVIDER;		// finire! v. 61h sopra pure
 					break;
-				case 2:
+				case 2:		//https://wiki.osdev.org/Non_Maskable_Interrupt
 			// linea A20 in alcuni computer http://independent-software.com/operating-system-development-enabling-a20-line.html
+//0 	Alternate hot reset, 1 	Alternate gate A20,2 	Reserved,3 	Security Lock,4* 	Watchdog timer status,5 	Reserved,6 	HDD 2 drive activity,7 	HDD 1 drive activity
 #ifdef PCAT
 					if(t1 & 2)
             i8042Output=t1;
@@ -4826,7 +4379,7 @@ writeRegRTC:
 #endif
 					break;
 				case 9:
-					// PCAT scrive 0 al boot
+					// PCAT , AMI scrive 0 al boot
 					break;
 				}
 			break;
@@ -4834,32 +4387,20 @@ writeRegRTC:
     case 0xa:        // PIC 8259 controller #2 su AT; machine settings su XT
 #ifdef PCAT
       t &= 0x1;
-#ifdef _DEBUG
-#ifdef DEBUG_8259
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at A%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0:     // 0x20 per EOI interrupt, 0xb per "chiedere" quale... subito dopo c'è lettura a 0x20
           i8259Reg2W[0]=t1;      // 
-					if(t1 & B8(00010000)) {// se D4=1 qua (0x10) è una sequenza di Init,
+					if(t1 & 0b00010000) {// se D4=1 qua (0x10) è una sequenza di Init,
 						i8259OCW2[2] = 2;		// dice, default su lettura IRR
 //						i8259RegR[0]=0;
 						// boh i8259IMR=0xff; disattiva tutti
 						i8259ICW2[0]=t1;
 						i8259ICW2Sel=2;		// >=1 indica che siamo in scrittura ICW
 						}
-					else if(t1 & B8(00001000)) {// se D3=1 qua (0x8) è una richiesta
+					else if(t1 & 0b00001000) {// se D3=1 qua (0x8) è una richiesta
 						// questa è OCW3 
 						i8259OCW2[2]=t1;
-						switch(i8259OCW2[2] & B8(00000011)) {		// riportato anche sopra, serve (dice, in polled mode)
+						switch(i8259OCW2[2] & 0b00000011) {		// riportato anche sopra, serve (dice, in polled mode)
 							case 2:
 								i8259Reg2R[0]=i8259IRR2;
 								break;
@@ -4874,10 +4415,10 @@ writeRegRTC:
           else {
 						// questa è OCW2 "di lavoro" https://k.lse.epita.fr/internals/8259a_controller.html
 						i8259OCW2[1]=t1;
-						switch(i8259OCW2[1] & B8(11100000)) {
-							case B8(00000000):// rotate pty in automatic (set clear
+						switch(i8259OCW2[1] & 0b11100000) {
+							case 0b00000000:// rotate pty in automatic (set clear
 								break;
-							case B8(00100000):			// non-spec, questo pulisce IRQ con priorità + alta in essere (https://rajivbhandari.wordpress.com/wp-content/uploads/2014/12/unitii_8259.pdf
+							case 0b00100000:			// non-spec, questo pulisce IRQ con priorità + alta in essere (https://rajivbhandari.wordpress.com/wp-content/uploads/2014/12/unitii_8259.pdf
 //						i8259ISR=0;		// MIGLIORARE! pulire solo il primo
 								for(i=1; i; i<<=1) {
 									if(i8259ISR2 & i) {
@@ -4887,18 +4428,18 @@ writeRegRTC:
 									}
 //				      CPUPins &= ~DoIRQ;		// SEMPRE! non serve + v. di là
 								break;
-							case B8(01000000):			// no op
+							case 0b01000000:			// no op
 								break;
-							case B8(01100000):			// 0x60 dovrebbe indicare uno specifico IRQ, nei 3bit bassi 0..7
+							case 0b01100000:			// 0x60 dovrebbe indicare uno specifico IRQ, nei 3bit bassi 0..7
 								i8259ISR2 &= ~(1 << (t1 & 7));
 								break;
-							case B8(10000000):			// rotate pty in automatic (set
+							case 0b10000000:			// rotate pty in automatic (set
 								break;
-							case B8(10100000):			// rotate pty on non-specific
+							case 0b10100000:			// rotate pty on non-specific
 								break;
-							case B8(11000000):			// set pty
+							case 0b11000000:			// set pty
 								break;
-							case B8(11100000):			// rotate pty on specific
+							case 0b11100000:			// rotate pty on specific
 								break;
 							}
 
@@ -4914,7 +4455,7 @@ writeRegRTC:
 						case 3:
 							i8259ICW2Sel++;
 							i8259ICW2[2]=t1;			
-							if(!(i8259ICW2[0] & B8(00000001))) 		// ICW4 needed?
+							if(!(i8259ICW2[0] & 0b00000001)) 		// ICW4 needed?
 								i8259ICW2Sel=0;
 							break;
 						case 4:
@@ -4941,18 +4482,6 @@ writeRegRTC:
 		case 0xd:		//  Phoenix 286 scrive C0 a D6 all'inizio
       t &= 0x1f;
 			t >>=1 ;
-#ifdef _DEBUG
-#ifdef DEBUG_8237
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at C%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 			switch(t) {
 				case 0:
 				case 2:
@@ -4986,20 +4515,20 @@ writeRegRTC:
 		      /*i8237RegR[8]=*/i8237Reg2W[8]=t1;
 					break;
 				case 0xa:			// set/clear Mask
-					if(t1 & B8(00000100))
-						i8237Reg2W[15] |= (1 << (t1 & B8(00000011)));
+					if(t1 & 0b00000100)
+						i8237Reg2W[15] |= (1 << (t1 & 0b00000011));
 					else
-						i8237Reg2W[15] &= ~(1 << (t1 & B8(00000011)));
+						i8237Reg2W[15] &= ~(1 << (t1 & 0b00000011));
 					i8237Reg2R[15]=i8237Reg2W[15];
 		      i8237Reg2R[0xa]=i8237Reg2W[0xa]=t1;
 					break;
 				case 0xb:			// Mode
-					i8237Mode2[t1 & B8(00000011)]= t1 & B8(11111100);
-					i8237DMACurAddr2[t1 & B8(00000011)]=i8237DMAAddr2[t1 & B8(00000011)];			// bah credo, qua
-					i8237DMACurLen2[t1 & B8(00000011)]=i8237DMALen2[t1 & B8(00000011)];
+					i8237Mode2[t1 & 0b00000011]= t1 & 0b11111100;
+					i8237DMACurAddr2[t1 & 0b00000011]=i8237DMAAddr2[t1 & 0b00000011];			// bah credo, qua
+					i8237DMACurLen2[t1 & 0b00000011]=i8237DMALen2[t1 & 0b00000011];
 		      i8237Reg2R[0xb]=i8237Reg2W[0xb]=t1;
 
-					i8237Reg2R[8] |= ((1 << t1 & (B8(00000011))) << 4);  // request??... boh
+					i8237Reg2R[8] |= ((1 << t1 & (0b00000011)) << 4);  // request??... boh
 
 					break;
 				case 0xc:			// clear Byte Pointer Flip-Flop
@@ -5009,15 +4538,15 @@ writeRegRTC:
 				case 0xd:			// Reset
 					memset(i8237Reg2R,0,sizeof(i8237Reg2R));
 					memset(i8237Reg2W,0,sizeof(i8237Reg2W));
-					i8237Reg2R[15]=i8237Reg2W[15] = B8(00001111);
-					i8237Reg2R[8]=B8(00000000);
+					i8237Reg2R[15]=i8237Reg2W[15] = 0b00001111;
+					i8237Reg2R[8]=0b00000000;
 		      i8237Reg2R[0xd]=i8237Reg2W[0xd]=t1;
 					break;
 				case 0xe:			//  Clear Masks
-					i8237Reg2R[15]=i8237Reg2W[15] &= ~B8(00001111);
+					i8237Reg2R[15]=i8237Reg2W[15] &= ~0b00001111;
 					break;
 				case 0xf:			//  Masks
-					i8237Reg2R[15]=i8237Reg2W[15] = (t1 & B8(00001111));
+					i8237Reg2R[15]=i8237Reg2W[15] = (t1 & 0b00001111);
 					break;
 				default:
 		      i8237Reg2R[t]=i8237Reg2W[t]=t1;
@@ -5057,7 +4586,253 @@ writeRegRTC:
 			break;
 
 #ifdef PCAT
-    case 0x1f:      // 1f0-1ff   // hard disc 0 su AT		http://www.techhelpmanual.com/897-at_hard_disk_ports.html   http://www.techhelpmanual.com/892-i_o_port_map.html
+    case 0x17:      // 170-177   // hard disc 1 su AT		
+    case 0x1f:      // 1f0-1f7   // hard disc 0 su AT		http://www.techhelpmanual.com/897-at_hard_disk_ports.html   http://www.techhelpmanual.com/892-i_o_port_map.html
+			if(t & 0x80)
+				hdDisc &= ~2;
+			else
+				hdDisc |= 2;
+      t &= 0x7;
+      switch(t) {
+        case 0:			// data  MA è 16bit!
+/*					sectorData[HDFIFOPtrW]=t1;
+					HDFIFOPtrW++;
+					if(HDFIFOPtrW >= SECTOR_SIZE) {
+						msdosHDisk=((uint8_t*)MSDOS_HDISK)+getHDiscSector(disk)*SECTOR_SIZE;
+						memcpy(msdosHDisk,&sectorData,SECTOR_SIZE);
+						HDFIFOPtrW=0;
+						}
+					hdState &= ~HD_AT_STATUS_BUSY;		// tolgo busy :)*/
+          break;
+        case 1:			// precomp o anche feature se comando 0xB0
+					hdPrecomp=t1;
+					// hdSmart=
+          break;
+        case 2:			// sector count
+					numSectors=t1;
+          break;
+        case 3:			// sector number o LBA-lo  FINIRE!
+					if(hdSector<=HD_SECTORS_PER_CYLINDER)
+//					if(LBA)
+//						;
+						hdSector=t1    -1;
+					else {
+						hdError=0b00000100;		// aborted
+						hdState |= HD_AT_STATUS_ERROR;		// error
+						hdSector=0;
+						}
+          break;
+        case 4:			// cyl high [FROCIO pagina errata]  o LBA-mid
+					hdCylinder=MAKEWORD(t1,HIBYTE(hdCylinder));
+					if(hdCylinder>HD_CYLINDERS) {
+						hdError=0b00000100;		// aborted
+						hdState |= HD_AT_STATUS_ERROR;		// error
+						hdCylinder=0;
+						}
+          break;
+        case 5:			// cyl low  o LBA-hi  FINIRE!
+//					if(LBA)
+//						;
+					hdCylinder=MAKEWORD(LOBYTE(hdCylinder),(t1 & 3));
+					if(hdCylinder>HD_CYLINDERS) {
+						hdError=0b00000100;		// aborted
+						hdState |= HD_AT_STATUS_ERROR;		// error
+						hdCylinder=0;
+						}
+          break;
+        case 6:			// drive & head
+					hdHead=t1 & 0xf;
+					if(hdHead>HD_HEADS) {
+						hdError=0b00000100;		// aborted
+						hdState |= HD_AT_STATUS_ERROR;		// error
+						}
+					if(t1 & 0x10)
+						hdDisc |= 1;
+					else
+						hdDisc &= ~1;
+					// drive è 0xa opp 0xb... high nibble! il controller # è nell'address 170 1f0
+					// 1 	LBA 	1 	Drive 	Head
+					if(!hdDisc)
+						hdState = HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK;		// sì xché sembra usarlo anche come "test" ogni tanto
+					else
+						hdState = 0b00000000;
+					if(t1 & 0b01000000)		// se LBA...
+						;
+          break;
+        case 7:
+					switch(t1 >> 4) {
+						case HD_AT_RESTORE>>4:		// restore
+							hdCylinder=0;
+							hdHead=0;
+							hdError=0;
+							hdState=HD_AT_STATUS_BUSY | HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK;		// busy, ok, seek ok
+
+endHDcommandWithIRQ:
+							if(!(hdControl & 0b00000010))
+								setHDIRQ(SLOW_HD_DELAYED_IRQ /* maggiore per phoenix*/);
+							break;
+						case HD_AT_READ_DATA>>4:		// read
+							encodeHDiscSector(hdDisc);
+
+							HDFIFOPtrR=0;
+							hdState |= HD_AT_STATUS_BUSY | HD_AT_STATUS_DRQ;		// busy, aspetta data
+							hdState &= ~(HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK);		// not ready
+							goto endHDcommandWithIRQ;
+							break;
+						case HD_AT_SEEK>>4:		// seek
+							hdState &= ~HD_AT_STATUS_READYTOSEEK;
+							hdState |= HD_AT_STATUS_BUSY;
+// attesa...
+							hdState |= HD_AT_STATUS_READYTOSEEK;
+							hdState &= ~(HD_AT_STATUS_BUSY | HD_AT_STATUS_ERROR);	// ok
+							hdError=0;
+							goto endHDcommandWithIRQ;
+							break;
+						case HD_AT_WRITE_DATA>>4:		// write
+							msdosHDisk=((uint8_t*)MSDOS_HDISK)+getHDiscSector(hdDisc,0)*SECTOR_SIZE;
+							HDFIFOPtrW=0;
+							hdState |= HD_AT_STATUS_BUSY | HD_AT_STATUS_DRQ;		// busy, aspetta data
+							hdState &= ~0b01010001;		// not ready, ok
+							hdError=0;
+							goto endHDcommandWithIRQ;
+							break;
+						case 4:		// read verify
+							encodeHDiscSector(hdDisc);
+							// è una verifica tutta interna! confronta BYTE con ECC ecc
+
+							HDFIFOPtrR=0;
+							hdState |= HD_AT_STATUS_BUSY;		// busy
+							hdState &= ~(HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK);		// not ready
+// :)
+							hdState &= ~(HD_AT_STATUS_BUSY | HD_AT_STATUS_ERROR);		// not busy, ok
+							hdState |= HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK;		// ready
+							hdError=1;		// v. award
+							goto endHDcommandWithIRQ;
+							break;
+						case HD_AT_WRITE_MULTIPLE>>4:		// read, write multiple
+							break;
+						case HD_AT_FORMAT>>4:		// format, secondo granite è Identify!!
+							// aspettare 256 con info per format, come in Write direi
+							HDFIFOPtrW=0;
+							hdState |= HD_AT_STATUS_BUSY | HD_AT_STATUS_DRQ;		// busy, aspetta data
+							hdState &= ~(HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK | HD_AT_STATUS_ERROR);		// not ready, ok
+							hdError=0;
+
+							goto endHDcommandWithIRQ;
+
+							break;
+						case HD_AT_DIAGNOSE>>4:		// diagnose/set parameters
+							if(!(t1 & 1)) {		// diagnose
+								if(!hdDisc) {
+									hdState=HD_AT_STATUS_BUSY | HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK;		// busy, ok, seek ok
+									hdPrecomp=32;		//dice
+									hdError=1;
+									goto endHDcommandWithIRQ;		// dice anche IRQ SOLO se ok, no se errore...
+									}
+								else {
+									hdState |= 0b00000000;		// error qua??
+									hdError=0;
+									}
+								}
+							else {		// set parm
+								hdState=HD_AT_STATUS_BUSY | HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK;		// busy, ok, seek ok
+								hdError=0;
+								goto endHDcommandWithIRQ;
+								}
+
+							break;
+						case HD_AT_DEVICE_CONTROL>>4:		// device control  https://www.mjm.co.uk/how-hard-disk-ata-registers-work.html
+
+							break;
+						case HD_AT_IDENTIFY>>4:		// identify ecc https://www.os2museum.com/wp/whence-identify-drive/
+							//https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ata/ns-ata-_identify_device_data
+							switch(t1 & 0xf) {
+								case 0xc:			// IDentify
+									if(!hdDisc) {
+										sectorData[0]=0b01000010;	sectorData[1]=0b00000001;		// General configuration
+/*							General configuration bit-significant information:
+15 0 reserved for non-magnetic drives
+14 1=format speed tolerance gap required
+13 1=track offset option available
+12 1=data strobe offset option available
+11 1=rotational speed tolerance is > 0,5%
+10 1=disk transfer rate > 10 Mbs
+ 9 1=disk transfer rate > 5Mbs but <= 10Mbs
+ 8 1=disk transfer rate <= 5Mbs
+ 7 1=removable cartridge drive
+ 6 1=fixed drive
+ 5 1=spindle motor control option implemented
+ 4 1=head switch time > 15 usec
+ 3 1=not MFM encoded
+ 2 1=soft sectored
+ 1 1=hard sectored
+ 0 0=reserved*/
+										memset(&sectorData[20],0,54+40-20);
+										sectorData[2]=LOBYTE(HD_CYLINDERS);	sectorData[3]=HIBYTE(HD_CYLINDERS);		// cilindri
+										sectorData[4]=LOBYTE(HD_CYLINDERS);	sectorData[5]=HIBYTE(HD_CYLINDERS);		// reserved ma v. HDINFO.EXE
+										sectorData[6]=LOBYTE(HD_HEADS);	sectorData[7]=HIBYTE(HD_HEADS);		// testine
+										sectorData[8]=LOBYTE(HD_SECTORS_PER_CYLINDER*SECTOR_SIZE);	sectorData[9]=HIBYTE(HD_SECTORS_PER_CYLINDER*SECTOR_SIZE);		// byte unformatted per track
+										sectorData[10]=LOBYTE(SECTOR_SIZE);	sectorData[11]=HIBYTE(SECTOR_SIZE);		// dimensione settore
+										sectorData[12]=LOBYTE(HD_SECTORS_PER_CYLINDER);	sectorData[13]=HIBYTE(HD_SECTORS_PER_CYLINDER);		// settori per cilindro
+			//							sectorData[14]=LOBYTE(0);	sectorData[15]=HIBYTE();		// byte in inter-sector gaps
+			//							sectorData[16]=LOBYTE(0);	sectorData[17]=HIBYTE();		// byte in sync fields
+										sectorData[42]=LOBYTE(64/*vabbe'!*/);	sectorData[43]=HIBYTE(0);		// dim. buffer controller, *512 e /1024
+										sectorData[44]=LOBYTE(4/*boh*/);	sectorData[45]=HIBYTE(0);		// byte ECC
+										sectorData[94]=LOBYTE(32/*boh*/);	sectorData[95]=HIBYTE(0);		// settori/interrupt per letture multiple
+										sectorData[96]=LOBYTE(0);	sectorData[97]=HIBYTE(0);		// double-word transfer capable (1=sì)
+										sectorData[120]=LOBYTE(LOWORD(HD_SECTORS_PER_CYLINDER*HD_CYLINDERS*HD_HEADS));	sectorData[121]=HIBYTE(LOWORD(HD_SECTORS_PER_CYLINDER*HD_CYLINDERS*HD_HEADS));		// settori in modo LBA28
+										sectorData[122]=LOBYTE(HIWORD(HD_SECTORS_PER_CYLINDER*HD_CYLINDERS*HD_HEADS));	sectorData[123]=HIBYTE(HIWORD(HD_SECTORS_PER_CYLINDER*HD_CYLINDERS*HD_HEADS));		// settori in modo LBA28
+										sectorData[166]=0b00000000;	sectorData[167]=0b00000000;		// B10=1 se LBA48
+										sectorData[176]=0b00000001;	sectorData[177]=0b00000000;		// DMA mode: lo-byte quelli supportati e hi-byte quelli attivi (dovrebbero essere uguali, tipo 3 e 3 per Mode 1 e 2  https://wiki.osdev.org/ATA_PIO_Mode#Interesting_information_returned_by_IDENTIFY
+										// OCCHIO se usiamo poi un BIOS che usa davvero DMA!!
+										sectorData[186]=0b00000000;	sectorData[187]=0b00000000;		// se Master drive, B11 indica cavo 80 pin presente
+										sectorData[200]=LOBYTE(LOWORD(0));	sectorData[201]=HIBYTE(LOWORD(0));		// settori in modo LBA48
+										sectorData[202]=LOBYTE(HIWORD(0));	sectorData[203]=HIBYTE(HIWORD(0));		// settori in modo LBA48
+										sectorData[204]=LOBYTE(LOWORD(0));	sectorData[205]=HIBYTE(LOWORD(0));		// settori in modo LBA48
+										sectorData[206]=LOBYTE(HIWORD(0));	sectorData[207]=HIBYTE(HIWORD(0));		// settori in modo LBA48
+		sectorData[212];		// multiple sector per logical sector  https://f.osdev.org/viewtopic.php?t=40956
+
+										strcpyhl(&sectorData[20],"0123456789");		// 20 char
+										{char myBuf[128];
+										sprintf(myBuf,"8086win HD %uMB (Dario's Automation)",
+											HD_SECTORS_PER_CYLINDER*HD_CYLINDERS*HD_HEADS*SECTOR_SIZE/1048576L);		// 40 char
+										strcpyhl(&sectorData[54],myBuf);		// 40 char
+										}
+										strcpyhl(&sectorData[46],"0001");		// 8 char
+
+										HDFIFOPtrR=0;
+										hdState |= HD_AT_STATUS_BUSY | HD_AT_STATUS_DRQ;		// busy, aspetta data
+										hdState &= ~(HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK);		// not ready
+										hdError=0;
+										goto endHDcommandWithIRQ;
+										}
+									else {
+										hdState &= ~(HD_AT_STATUS_READY | HD_AT_STATUS_READYTOSEEK);		// not ready
+										hdState |= HD_AT_STATUS_ERROR;		// error
+										hdError=99;
+										}
+									break;
+								case 0x7:			// flush cache
+								case 0xf:			// flush cache boh
+									hdState |= HD_AT_STATUS_BUSY;		// busy
+
+
+									break;
+								case 0x4:			// read buffer
+									break;
+								case 0x8:			// write buffer
+									break;
+								case 0x0:			// raw ESDI command
+									break;
+								}
+							break;
+						default:
+							break;
+						}
+          break;
+				}
+			HDContrRegR[t]=HDContrRegW[t]=t1;
+
       break;
 #endif
     
@@ -5073,22 +4848,22 @@ writeRegRTC:
         case 0:
           break;
         case 1:     // 
-          currentDateTime.tm_sec=t1;
+          currentTime.sec=t1;
           break;
         case 2:
-          currentDateTime.tm_min=t1;
+          currentTime.min=t1;;
           break;
         case 3:
-          currentDateTime.tm_hour=t1;
+          currentTime.hour=t1;
           break;
         case 4:
-          currentDateTime.tm_mday=t1;
+          currentDate.mday=t1;
           break;
         case 5:
-          currentDateTime.tm_mon=t1;
+          currentDate.mon=t1;
           break;
         case 6:
-          currentDateTime.tm_year=t1;
+          currentDate.year=t1;
           break;
         default:
           break;
@@ -5115,23 +4890,10 @@ writeRegRTC:
 				legge a 1 e aspetta 0d
 
 			*/
+
+#ifdef ROM_HD_BASE
     case 0x32:    // 320- (hard disk su XT  http://www.techhelpmanual.com/898-xt_hard_disk_ports.html   https://forum.vcfed.org/index.php?threads/ibm-xt-i-o-addresses.1237247/
       t &= 3;
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 32%X : %02x  cmd=%02X; fifoW=%u fifoR=%u  %s %s\n",timeGetTime(),
-				_ip,t,t1,HDContrRegW[1] & B8(00011111),HDFIFOPtrW,HDFIFOPtrR,
-				t==0 ? "CMD" : "",
-				(HDContrRegW[1] & B8(00011111))==8 ? "READ" : ((HDContrRegW[1] & B8(00011111))==3 ? "SENSE" : 
-				((HDContrRegW[1] & B8(00011111))==0x06 ? "FORMAT" : ((HDContrRegW[1] & B8(00011111))==0xa ? "WRITE" : ""))));
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0:			// WRITE DATA
 					if(!HDFIFOPtrW) {
@@ -5142,13 +4904,13 @@ writeRegRTC:
 						HDFIFOW[HDFIFOPtrW++] = t1;
 
 						if(HDFIFOPtrW==6) {
-							switch(HDContrRegW[0] & B8(00011111)) {
+							switch(HDContrRegW[0] & 0b00011111) {
 								case 0xc:
-									hdState &= ~B8(00001111);			// 
+									hdState &= ~0b00001111;			// 
 									break;
 								default:
-									hdState &= ~B8(00000101);			// handshake, e passo a Status
-									hdState |= B8(00000010);		// passo a write
+									hdState &= ~0b00000101;			// handshake, e passo a Status
+									hdState |= 0b00000010;		// passo a write
 		//						hdTimer=100;
 									break;
 								}
@@ -5156,15 +4918,15 @@ writeRegRTC:
 							}
 
 						else {		// comandi con dati a seguire (tipo 0xC
-							switch(HDContrRegW[0] & B8(00011111)) {
+							switch(HDContrRegW[0] & 0b00011111) {
 								case 0xc:
 									if(HDFIFOPtrW==14) {		// 8 byte, v.
 
 												// restituire 4 in Error code poi (però tanto non lo chiede, non arriva SENSE...
 		//										HDFIFO[1]=4;
 
-										hdState &= ~B8(00100101);			// handshake, e passo a status, no IRQ
-										hdState |= B8(00000010);		// passo a write
+										hdState &= ~0b00100101;			// handshake, e passo a status, no IRQ
+										hdState |= 0b00000010;		// passo a write
 //											goto endHDcommand;
 										}
 
@@ -5187,7 +4949,7 @@ writeRegRTC:
 					hdCylinder=0;
 					hdSector=0;
 					hdState=hdControl=0;
-					hdState=B8(00010101);			// mah; e basare DMA su hdControl<1>
+					hdState=0b00010101;			// mah; e basare DMA su hdControl<1>
 
 //					debug=1;
 
@@ -5197,7 +4959,7 @@ writeRegRTC:
 						sets the Busy bit in the Status Register and prepares
 						it to receive a command. When writing to port
 						322, the data byte is ignored.*/
-					hdState=B8(00001101);			// ESIGE BSY e C/D (strano.. sarà doc sbagliato ancora); e basare DMA su hdControl<1>
+					hdState=0b00001101;			// ESIGE BSY e C/D (strano.. sarà doc sbagliato ancora); e basare DMA su hdControl<1>
 					HDFIFOPtrW=HDFIFOPtrR=0;
 					HDContrRegW[2]=t1;
           break;
@@ -5205,8 +4967,8 @@ writeRegRTC:
 					hdControl=HDContrRegW[3]=t1;
           break;
 				}
-
 			break;
+#endif
 
     case 0x37:    // 370-377 (secondary floppy, AT http://www.techhelpmanual.com/896-diskette_controller_ports.html); 378-37A  LPT1
       t &= 3;
@@ -5215,11 +4977,11 @@ writeRegRTC:
         case 0:
 //  #ifndef ILI9341
 //          LATE = (LATE & 0xff00) | t1;
-//          LATGbits.LATG6 = t1 & B8(00010000) ? 1 : 0;   // perché LATE4 è led...
+//          LATGbits.LATG6 = t1 & 0b00010000) ? 1 : 0;   // perché LATE4 è led...
 //  #endif
           break;
         case 2:    // qua c'è lo strobe
-//          LATGbits.LATG7 = t1 & B8(00000001) ? 1 : 0;   // strobe, FARE gli altri :)
+//          LATGbits.LATG7 = t1 & 0b00000001) ? 1 : 0;   // strobe, FARE gli altri :)
           break;
         }
       break;
@@ -5281,18 +5043,6 @@ writeRegRTC:
 			break;
     case 0x3c:    // 3c0-3cf  VGA http://wiki.osdev.org/VGA_Hardware#Port_0x3C0
       t &= 0xf;
-#ifdef _DEBUG
-#ifdef DEBUG_VGA
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 3C%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 			// http://www.osdever.net/FreeVGA/vga/vgareg.htm tutti i registri...
       switch(t) {
 				case 0:		// write index & data actl reg
@@ -5348,18 +5098,6 @@ writeRegRTC:
       break;
     case 0x3d:    // 
       t &= 0xf;
-#ifdef _DEBUG
-#ifdef DEBUG_VGA
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 3D%X : %02x \n",timeGetTime(),
-				_ip,t,t1);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
       switch(t) {
         case 0x4:
           CGAreg[4]=t1;		// compatibilità CGA...
@@ -5421,7 +5159,7 @@ writeRegRTC:
       t &= 0xf;
       switch(t) {
         case 0xb:
-          CGAreg[0xa] &= ~B8(00000110);      // pulisco trigger light pen
+          CGAreg[0xa] &= ~0b00000110;      // pulisco trigger light pen
           break;
         case 4:     // 3d4, 3d5 sono reg. 6845..
         case 0xc:
@@ -5443,75 +5181,49 @@ writeRegRTC:
 									// https://wiki.osdev.org/Floppy_Disk_Controller#Accessing_Floppies_in_Real_Mode
       t &= 0xf;
 
-#ifdef _DEBUG
-#ifdef DEBUG_FD
-			{
-			extern HFILE spoolFile;
-			extern uint16_t _ip;
-			char myBuf[256];
-			wsprintf(myBuf,"%u: %04x  write at 3F%X : %02x  cmd=%02X; fifoW=%u fifoR=%u  %s %s\n",timeGetTime(),
-				_ip,t,t1,FloppyContrRegW[1] & B8(00011111),FloppyFIFOPtrW,FloppyFIFOPtrR,
-				t==2 ? "CMD" : "",
-				(FloppyContrRegW[1] & B8(00011111))==6 ? "READ" : ((FloppyContrRegW[1] & B8(00011111))==8 ? "SENSE" : 
-				((FloppyContrRegW[1] & B8(00011111))==0x0b ? "FORMAT" : ((FloppyContrRegW[1] & B8(00011111))==5 ? "WRITE" : ""))));
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
-
       switch(t) {
-				uint8_t disk;
         case 2:   // Write: digital output register (DOR)  MOTD MOTC MOTB MOTA DMA ENABLE SEL1 SEL0
 					// questo registro in effetti non appartiene al uPD765 ma è esterno...
 					// ma secondo ASM 8 è Interrupt on e 4 è reset ! direi che sono 2 diciture per la stessa cosa £$%@#
-					disk=t1 & 3;
+					fdDisk=t1 & 3;
 					/*FloppyContrRegR[0]=*/FloppyContrRegW[0]=t1;
 					FloppyContrRegW[1]=0;
-					if(!(FloppyContrRegW[0] & B8(00000100))) {		// così è RESET!
-						floppylastCmd[disk]=0xff;
+					floppyState[fdDisk] &= ~(FLOPPY_STATE_XFER);	// xfer dopo la prima lettura (award286...
+					if(!(FloppyContrRegW[0] & 0b00000100)) {		// così è RESET!
+						floppylastCmd[fdDisk]=0xff;
 						FloppyFIFOPtrW=FloppyFIFOPtrR=0;
-						floppyHead[disk]=0;
-						floppyTrack[disk]=0;
-						floppySector[disk]=0,
+						floppyHead[fdDisk]=0;
+						floppyTrack[fdDisk]=0;
+						floppySector[fdDisk]=0,
 						floppyTimer=0;
 
-/* no.. lascio in InitHW						if(disk <= ((MachineSettings & B8(11000000)) >> 6))		// (2 presenti!
-							floppyState[disk]=0x00; // b0=stepdir,b1=disk-switch,b2=motor,b6=DIR,b7=diskpresent
+/* no.. lascio in InitHW						if(disk <= ((MachineSettings & 0b11000000)) >> 6))		// (2 presenti!
+							floppyState[fdDisk]=0x00; // b0=stepdir,b1=disk-switch,b2=motor,b6=DIR,b7=diskpresent
 						else
-							floppyState[disk]=0x00; //
+							floppyState[fdDisk]=0x00; //
 						*/
 
-#ifdef _DEBUG
-#ifdef DEBUG_FD
-			{
-			extern HFILE spoolFile;
-			char myBuf[256];
-			wsprintf(myBuf,"  RESET FDC!\n");
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
 						}
-else  /*					boh */{
+					else  {		// interrupt su rilascio del reset, ok
 //						FloppyFIFOPtrW=FloppyFIFOPtrR=0;
-						floppyState[disk] &= ~B8(01000000);	// passo a write
-						if(FloppyContrRegW[0] & B8(00010000))	
-							floppyState[0] |= B8(00000100);		// motor
+						floppyState[fdDisk] &= ~(FLOPPY_STATE_DDR);	// passo a write
+						if(FloppyContrRegW[0] & 0b00010000)	
+							floppyState[0] |= 0b00000100;		// motor
 						else
-							floppyState[0] &= ~B8(00000100);
-						if(FloppyContrRegW[0] & B8(00100000))
-							floppyState[1] |= B8(00000100);
+							floppyState[0] &= ~0b00000100;
+						if(FloppyContrRegW[0] & 0b00100000)
+							floppyState[1] |= 0b00000100;
 						else
-							floppyState[1] &= ~B8(00000100);
-						if(FloppyContrRegW[0] & B8(01000000))
-							floppyState[2] |= B8(00000100);
+							floppyState[1] &= ~0b00000100;
+						if(FloppyContrRegW[0] & 0b01000000)
+							floppyState[2] |= 0b00000100;
 						else
-							floppyState[2] &= ~B8(00000100);
-						if(FloppyContrRegW[0] & B8(10000000))
-							floppyState[3] |= B8(00000100);
+							floppyState[2] &= ~0b00000100;
+						if(FloppyContrRegW[0] & 0b10000000)
+							floppyState[3] |= 0b00000100;
 						else
-							floppyState[3] &= ~B8(00000100);
-						if(FloppyContrRegW[0] & B8(00001000 /*in asm dice che questo è "Interrupt ON"*/))
+							floppyState[3] &= ~0b00000100;
+						if(FloppyContrRegW[0] & 0b00001000 /*in asm dice che questo è "Interrupt ON"*/)
 							setFloppyIRQ(SEEK_FLOPPY_DELAYED_IRQ);
 						}
           break;
@@ -5520,30 +5232,35 @@ else  /*					boh */{
         case 5:   // Read/Write: FDC command/data register
 					if(!FloppyFIFOPtrW) {
 						FloppyContrRegW[1]=t1;
-						switch(t1 & B8(00011111)) {		// i 3 bit alti sono MT (multitrack), MF (MFM=1 o FM=0), SK (Skip deleted)
-							case 0x06:			// read data
-							case 0x02:			// read track
-							case 0x0c:			// read deleted
-							case 0x0a:			// read ID
-							case 0x05:			// write data
-							case 0x0b:			// format track
-							case 0x09:			// write deleted data
-							case 0x11:			// scan equal
-							case 0x19:			// scan low or equal
-							case 0x07:			// recalibrate
-							case 0x03:			// specify
-							case 0x04:			// sense drive status
-							case 0x1b:			// scan high or equal
-							case 0x0f:			// seek (goto cylinder
+						floppyState[fdDisk] &= ~(FLOPPY_STATE_XFER);	// xfer tolgo
+						switch(t1 & 0b00011111) {		// i 3 bit alti sono MT (multitrack), MF (MFM=1 o FM=0), SK (Skip deleted)
+							case FLOPPY_READ_DATA:			// read data
+							case FLOPPY_READ_TRACK:			// read track
+							case FLOPPY_READ_DELETED_DATA:			// read deleted
+							case FLOPPY_READ_ID:			// read ID
+							case FLOPPY_WRITE_DATA:			// write data
+							case FLOPPY_FORMAT_TRACK:			// format track
+							case FLOPPY_WRITE_DELETED_DATA:			// write deleted data
+							case FLOPPY_SCAN_EQUAL:			// scan equal
+							case FLOPPY_SCAN_LOW_OR_EQUAL:			// scan low or equal
+							case FLOPPY_SCAN_HIGH_OR_EQUAL:			// scan high or equal
+							case FLOPPY_RECALIBRATE:			// recalibrate
+							case FLOPPY_SPECIFY:			// specify
+							case FLOPPY_SEEK:			// seek (goto cylinder
+							case FLOPPY_SENSE_DRIVE_STATUS:			// sense drive status
+							case FLOPPY_VERSION:
 								FloppyFIFOPtrW=1; FloppyFIFOPtrR=0;
 								break;
-							case 0x20:		// lock...
-							case 0x18:		// perpendicular
-							case 0x14:		// dumpreg
+							case FLOPPY_LOCK:		// lock...
+							case FLOPPY_PERPENDICULAR_MODE:		// perpendicular
+							case FLOPPY_DUMPREG:		// dumpreg
 								FloppyFIFOPtrW=1; FloppyFIFOPtrR=0;
 								break;
-							case 0x08:			// sense interrupt status
+							case FLOPPY_SENSE_INTERRUPT:			// sense interrupt status
 								FloppyFIFOPtrW=0; FloppyFIFOPtrR=0;
+								FloppyContrRegR[0]=FLOPPY_STATUS_REQ;
+								if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+									setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
 								break;
 							case 0x00:			// arriva a inizio comandi, sopra: ossia dopo una write a 3F2, la gestisco così...
 								FloppyFIFOPtrW=1; FloppyFIFOPtrR=0;
@@ -5551,21 +5268,190 @@ else  /*					boh */{
 							default:		// invalid, 
 								FloppyFIFOPtrW=1; FloppyFIFOPtrR=0;
 								FloppyFIFO[0];
-	//								FloppyContrRegR[4] |= B8(10000000);		// 
+	//								FloppyContrRegR[4] |= 0b10000000);		// 
 								break;
 							}
 						}
 					else {
 						FloppyFIFO[FloppyFIFOPtrW++] = t1;
 						FloppyFIFOPtrW &= 15;		// safety! errore ev.
+						floppyState[fdDisk] &= ~(FLOPPY_STATE_XFER);	// tolgo xfer
+
+						switch(FloppyContrRegW[1] & 0b00011111) {		// i 3 bit alti sono MT (multitrack), MF (MFM=1 o FM=0), SK (Skip deleted)
+							case FLOPPY_WRITE_DATA:			// write data
+							case FLOPPY_READ_DATA:			// read data
+							case FLOPPY_READ_TRACK:			// read track
+							case FLOPPY_READ_DELETED_DATA:			// read deleted
+							case FLOPPY_WRITE_DELETED_DATA:			// write deleted data
+							case FLOPPY_SCAN_EQUAL:			// scan equal
+							case FLOPPY_SCAN_LOW_OR_EQUAL:			// scan low or equal
+							case FLOPPY_SCAN_HIGH_OR_EQUAL:			// scan high or equal
+							case FLOPPY_VERSION:
+								fdDisk=FloppyFIFO[1] & 3;	//serve?
+								if(FloppyFIFOPtrW==9) {
+									floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read
+//									FloppyFIFOPtrW=0;
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+//									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR);
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+									}
+								break;
+							case FLOPPY_FORMAT_TRACK:			// format track
+								fdDisk=FloppyFIFO[1] & 3;	//serve?
+								if(FloppyFIFOPtrW==6) {
+									floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read
+//									FloppyFIFOPtrW=0;
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+//									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR);
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+									}
+								break;
+							case FLOPPY_SENSE_DRIVE_STATUS:			// sense drive status
+								fdDisk=FloppyFIFO[1] & 3;	//serve?
+								if(FloppyFIFOPtrW==2) {
+									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR | FLOPPY_STATUS_BUSY) | (1 << fdDisk);		// Busy :) (anche 1=A??
+									FloppyFIFO[1] = 0b00100000 | (!floppyTrack ? 0b00010000 : 0) | 
+										// 2 side come?? head & 1 forse?
+										(FloppyFIFO[1] & 0b00000111);		//ST3: B7 Fault, B6 Write Protected, B5 Ready, B4 Track 0, B3 Two Side, B2 Head (side select), B1:0 Disk Select (US1:0)
+
+	//								if(!(floppyState[fdDisk] & 0b10000000)))		// forzo errore se disco non c'è... se ne sbatte
+	//									FloppyFIFO[0] |= 0b11000000);
+
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ;
+//									FloppyFIFOPtrW=0;
+									FloppyFIFOPtrR=1;
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+									}
+								break;
+							case FLOPPY_SPECIFY:			// specify
+								if(FloppyFIFOPtrW==3) {
+								// in FIFO[1] : StepRateTime[7..4] | HeadUnloadTime[3..0]				20h
+								// in FIFO[2] : HeadLoadTime[7..1] | NonDMAMode[0]							07h
+									floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read
+//									FloppyFIFOPtrW=0;
+//									FloppyFIFOPtrR=0;
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+									FloppyContrRegR[0]=FLOPPY_STATUS_REQ;
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+									}
+								break;
+							case FLOPPY_RECALIBRATE:			// recalibrate
+								fdDisk=FloppyFIFO[1] & 3;	//serve?
+								if(FloppyFIFOPtrW==2) {
+								// in FIFO[1] : x x x x x 0 US1 US0									00h
+									FloppyContrRegR[0]=FLOPPY_STATUS_BUSY | (1 << fdDisk);					// busy
+									// __delay_ms(12*floppyTrack[fdDisk])
+									floppyTrack[fdDisk]=0;
+									FloppyContrRegR[0]=0b00000000;					// v.read sopra
+
+//									FloppyFIFOPtrW=0;
+//									FloppyFIFOPtrR=0;
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+									}
+								break;
+							case FLOPPY_SEEK:			// seek (goto cylinder
+								fdDisk=FloppyFIFO[1] & 3;	//serve?
+								if(FloppyFIFOPtrW==3) {
+									// in FIFO[1] : x x x x x Head US1 US0						00h
+									// in FIFO[2] : New Cylinder Number								00h
+									if(FloppyFIFO[2] < totalTracks) {
+										FloppyContrRegR[0]=FLOPPY_STATUS_BUSY | (1 << fdDisk);					// busy
+										floppyTrack[fdDisk]=FloppyFIFO[2];
+									// __delay_ms(12*tracce)
+										FloppyContrRegR[0]=FLOPPY_STATUS_REQ;					// finito :)
+										}
+									else {
+										FloppyContrRegR[0]=FLOPPY_STATUS_REQ;
+										}
+//									FloppyFIFOPtrW=0;
+//									FloppyFIFOPtrR=0;
+									floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read cmq
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+									}
+								break;
+							case FLOPPY_READ_ID:			// read ID
+								fdDisk=FloppyFIFO[1] & 3;	//serve?
+								if(FloppyFIFOPtrW==2) {
+									floppyState[fdDisk] |= FLOPPY_STATE_DDR;		// passo a read
+//									FloppyFIFOPtrW=0;
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+//									FloppyContrRegR[0]=(FLOPPY_STATUS_REQ | FLOPPY_STATUS_DDR);
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+
+									if(FloppyContrRegW[0] & FLOPPY_CONTROL_IRQ)
+										setFloppyIRQ(DEFAULT_FLOPPY_DELAYED_IRQ);
+									floppylastCmd[fdDisk]=FloppyContrRegW[1] & 0b00011111;
+									}
+								break;
+
+							case FLOPPY_LOCK:		// lock...
+							case FLOPPY_PERPENDICULAR_MODE:		// perpendicular
+							case FLOPPY_DUMPREG:		// dumpreg
+								
+								break;
+							case FLOPPY_SENSE_INTERRUPT:			// sense interrupt status
+								break;
+							case 0x00:			// arriva a inizio comandi, sopra: ossia dopo una write a 3F2, la gestisco così...
+								
+								break;
+							default:		// invalid, 
+								
+								
+	
+								break;
+							}
+
 						}
-//            i8259IRR |= B8(01000000);		// simulo IRQ...
-//					if(FloppyContrRegW[0] & B8(10000000))		// RESET si autopulisce
-//						FloppyContrRegW[0] &= ~B8(10000000);		// 
-//					FloppyContrRegR[0] &= ~B8(00010000);		// non BUSY :)
+//            i8259IRR |= 0b01000000);		// simulo IRQ...
+//					if(FloppyContrRegW[0] & 0b10000000))		// RESET si autopulisce
+//						FloppyContrRegW[0] &= ~0b10000000);		// 
+//					FloppyContrRegR[0] &= ~0b00010000);		// non BUSY :)
           break;
+#ifdef PCAT
+				case 1:		// 
+					break;
+				case 6:		// 3F6 (dice come HD status register... boh?? sarebbe 1f7
+//					AMI scrive 00, 04 a caso, phoenix pure 04 00
+					hdControl=t1;
+					if(t1 & 4) {		// Reset, secondo PDF WD1003 e https://www.mjm.co.uk/how-hard-disk-ata-registers-work.html
+//						hdState=0b01010000); // NO per Diagnose  hdError=0;
+
+						// (PARE RESETTARE ANCHE IL FLOPPY!! verificare
+						HDFIFOPtrR=HDFIFOPtrW=0;
+						memset(HDContrRegR,0,sizeof(HDContrRegR));		
+						memset(HDContrRegW,0,sizeof(HDContrRegW));
+						hdHead=0;
+						hdCylinder=0;
+						hdSector=0;
+						hdState=hdControl=0;
+
+						FloppyFIFOPtrW=FloppyFIFOPtrR=0;
+						memset(floppylastCmd,0,sizeof(floppylastCmd));
+						memset(floppyHead,0,sizeof(floppyHead));
+						memset(floppyTrack,0,sizeof(floppyTrack));
+						memset(floppySector,0,sizeof(floppySector));
+						memset(floppylastCmd,0xff,sizeof(floppylastCmd));
+						for(i=0; i<4; i++)
+							floppyState[i] &= FLOPPY_STATE_DISKPRESENT;
+						floppyTimer=0;
+
+						}
+					// b1 se set disattiva IRQ HD...  b7 per leggere LBA
+					break;
 				case 7:		// solo AT http://isdaman.com/alsos/hardware/fdc/floppy.htm
+					// b0 e b1 dovrebbero essere data trasnfer rate del floppy
           break;
+#endif
 
           
   //_UART0_DATA      .equ $FF80        		 ; data
@@ -5638,28 +5524,23 @@ set_uart1:
         }
       break;
     }
-#endif
 
 	}
 
-void _fastcall OutShortValue(uint16_t t,uint16_t t1) {
+void OutShortValue(uint16_t t,uint16_t t1) {
 	register uint16_t i;
 
-//	i=1;
 
-#if DEBUG_TESTSUITE
-#else
-	OutValue(t,LOBYTE(t1));			// per ora (usato da GLAbios, trident VGA
+	OutValue(t,LOBYTE(t1));			// per ora (usato da GLAbios
 	OutValue(t+1,HIBYTE(t1));			// 
-#endif
 	}
 
 
-void setFloppyIRQ(uint16_t delay) {
+void setFloppyIRQ(uint8_t delay) {
 
 	// mah non aiuta con phoenix e ami e a volte fa incazzare PCXTbios
-//										i8259IRR |= B8(01000000);		// simulo IRQ...
-	floppyTimer=delay;
+					i8259IRR |= 0x40;		// simulo IRQ...
+//	floppyTimer=delay;
 	}
 
 uint32_t getDiscSector(uint8_t d) {
@@ -5675,7 +5556,6 @@ uint32_t getDiscSector(uint8_t d) {
     n+=sectorsPerTrack[d];
   
   n+= (floppySector[d] -1 /* PARTE DA 1....*/);
-// usare, da smartestblob		n=((hdCylinder*HD_HEADS+hdHead)*HD_SECTORS_PER_CYLINDER+hdSector)-1;
 
   return n;  
 	}
@@ -5685,14 +5565,15 @@ uint8_t *encodeDiscSector(BYTE disk) {
   int i;
   uint8_t c;
 
-  msdosDisk=((uint8_t*)MSDOS_DISK[disk])+getDiscSector(disk)*SECTOR_SIZE;
+  msdosDisk=((uint8_t*)MSDOS_DISK[disk])+getDiscSector(disk)*512;
 
-	memcpy(sectorData,msdosDisk,SECTOR_SIZE);
- 
+	memcpy(sectorData,msdosDisk,512);
+  
   return sectorData;
   }
 
-uint32_t getHDiscSector(uint8_t d) {
+#if defined(PCAT) || defined(ROM_HD_BASE)
+uint32_t getHDiscSector(uint8_t d,uint8_t lba) {
   uint8_t i;
   uint32_t n;
 
@@ -5706,70 +5587,50 @@ uint32_t getHDiscSector(uint8_t d) {
   
   n+= (hdSector);*/
 
-	n=((hdCylinder*HD_HEADS+hdHead)*HD_SECTORS_PER_CYLINDER+hdSector);		//da smartestblob
-	/* PARTE DA 0....*/
+	if(!lba)
+		n=((hdCylinder*HD_HEADS+hdHead)*HD_SECTORS_PER_CYLINDER+hdSector);		//da smartestblob
+		/* PARTE DA 0....*/
+	else
+		n=MAKELONG(MAKEWORD(hdSector,LOBYTE(hdCylinder)),MAKEWORD(HIBYTE(hdCylinder),0));
+	// finire, v.sopra
 
   return n;  
 	}
   
+void setHDIRQ(uint8_t delay) {
+
+#ifdef PCAT
+	//										i8259IRR2 |= 0b01000000);		// simulo IRQ...
+#else
+//											i8259IRR |= 0b00100000);		// simulo IRQ...
+#endif
+
+	hdTimer=delay;
+	}
+
 uint8_t *encodeHDiscSector(uint8_t disk) {
   int i;
   uint8_t c;
 
-  msdosHDisk=((uint8_t*)MSDOS_HDISK)+getHDiscSector(disk)*SECTOR_SIZE;
+  msdosHDisk=((uint8_t*)MSDOS_HDISK)+getHDiscSector(disk,0)*SECTOR_SIZE;
 
 	memcpy(sectorData,msdosHDisk,SECTOR_SIZE);
  
   return sectorData;
   }
+#endif
 
 
-
-BOOL PlayResource(LPSTR lpName,BOOL bStop) { 
-  BOOL bRtn; 
-  LPSTR lpRes; 
-  HANDLE hResInfo, hRes; 
-
-	if(!lpName) {
-    sndPlaySound(NULL, 0);
-		return TRUE;
-		}
-
-  // Find the WAVE resource.  
-  hResInfo = FindResource(g_hinst, lpName, "WAVE"); 
-  if(hResInfo == NULL) 
-    return FALSE; 
-
-  // Load the WAVE resource. 
-  hRes = LoadResource(g_hinst, hResInfo); 
-  if(hRes == NULL) 
-    return FALSE; 
-
-  // Lock the WAVE resource and play it. 
-  lpRes = LockResource(hRes); 
-  if(lpRes != NULL) { 
-    bRtn = sndPlaySound(lpRes, SND_MEMORY | SND_ASYNC | SND_NODEFAULT | (bStop ? 0 : SND_NOSTOP));
-    UnlockResource(hRes); 
-		} 
-  else 
-    bRtn = 0; 
- 
-  // Free the WAVE resource and return success or failure. 
- 
-  FreeResource(hRes); 
-  return bRtn; 
-	}
 
 void initHW(void) {
 	int i;
-	DWORD l;
   
-	MachineSettings=B8(01101101);			//2 floppy
+	MachineSettings=0b00101101;			//1 floppy
 #ifdef MDA 
-	MachineSettings=B8(01111101);			//2 floppy
+	MachineSettings=0b01111101;			//2 floppy
 #endif
 #ifdef VGA
-	MachineSettings=B8(01001101);		// 2 floppy
+	MachineSettings=0b00001101;
 #endif
 #ifdef EXT_80x87 
 	MachineSettings |= 2;
@@ -5777,18 +5638,18 @@ void initHW(void) {
 		// b0=floppy (0=sì); b1=FPU; bits 2,3 memory size (64K bytes); b5:4 tipo video: 11=Mono, 10=CGA 80x25, 01=CGA 40x25; b7:6 #floppies-1
 		// ma su IBM5160 b0=1 SEMPRE dice!
 #ifdef PC_IBM5150
-	MachineSettings=B8(00101101);		// 64KB, v.sopra
-//	MachineSettings=B8(00100001);		// 640KB
+	MachineSettings=0b00101101);		// 64KB, v.sopra
+//	MachineSettings=0b00100001);		// 640KB
 #endif
 #ifdef PCAT
-	MachineSettings=B8(10110000);		// non cambia un c su Award ma anche sugli altri, il video si autogestisce  https://stanislavs.org/helppc/8042.html
+	MachineSettings=0b10110000;		// non cambia un c su Award ma anche sugli altri, il video si autogestisce  https://stanislavs.org/helppc/8042.html
 //BASE_MEM8	EQU	00001000B	; BASE PLANAR R/W MEMORY EXTENSION 640/X
 //BASE_MEM	EQU	00010000B	; BASE PLANAR R/W MEMORY SIZE 256/512		0=256
 //MFG_LOOP	EQU	00100000B	; LOOP POST JUMPER BIT FOP MANUFACTURING  0=installed
 //DSP_JMP		EQU	01000000B	; DISPLAY TYPE SWITCH JUMPER BIT, 0=CGA 1=MDA
 //KEY_BD_INHIB	EQU	10000000B	; KEYBOARD INHIBIT SWITCH BIT, 0=inibita
 #endif
-	MachineFlags=B8(00000000);
+	MachineFlags=0b00000000;
 		// b0-1=Speaker on; b2-3=TURBO PC (o select); b4-5=Parity/I/O errors su TINYBIOS; b66= 0:KC clk low; b7= 0 enable KB    https://wiki.osdev.org/Non_Maskable_Interrupt
   memset(CGAreg,0,sizeof(CGAreg));
   CGAreg[0]=0;              // disattivo video, default cmq
@@ -5799,21 +5660,21 @@ void initHW(void) {
   memset(&VGAcrtcReg,0,sizeof(VGAcrtcReg)); 
   memset(&VGAactlReg,0,sizeof(VGAactlReg)); 
   memset(&VGAgraphReg,0,sizeof(VGAgraphReg)); 
-	memset(&VGAseqReg,0,sizeof(VGAseqReg)); 
 	VGAFF=VGAptr=0;
-	VGAgraphReg[6]=0x0c;		// RAM addr=B8000
 #endif
   
   memset(i8237RegR,0,sizeof(i8237RegR));
   memset(i8237RegW,0,sizeof(i8237RegW));
-	i8237RegR[15]=i8237RegW[15] = B8(00001111);
+	i8237RegR[15]=i8237RegW[15] = 0b00001111;
 #ifdef PCAT
   memset(i8237Reg2R,0,sizeof(i8237Reg2R));
   memset(i8237Reg2W,0,sizeof(i8237Reg2W));
-	i8237Reg2R[15]=i8237Reg2W[15] = B8(00001111);
+	i8237Reg2R[15]=i8237Reg2W[15] = 0b00001111;
 #endif
 	memset(DMApage,0,sizeof(DMApage));
-	DMArefresh=0;
+#ifdef PCAT
+	memset(DMApage2,0,sizeof(DMApage2));
+#endif
   i8259RegR[0]=i8259RegW[0]=0x00; i8259RegR[1]=i8259RegW[1]=0xff; i8259IMR=0xff; i8259ISR=i8259IRR=0;
 	memset(i8259ICW,0,sizeof(i8259ICW));
 	memset(i8259OCW,0,sizeof(i8259OCW));
@@ -5827,8 +5688,9 @@ void initHW(void) {
   memset(i8253RegR,0,sizeof(i8253RegR));
   memset(i8253RegW,0,sizeof(i8253RegW));
   memset(i8253Mode,0,sizeof(i8253Mode));
-  i8253ModeSel=0;
+  memset(i8253Flags,0,sizeof(i8253Flags));
   memset(i8253TimerR,0,sizeof(i8253TimerR));
+  memset(i8253TimerL,0,sizeof(i8253TimerL));
   memset(i8253TimerW,0,sizeof(i8253TimerW));
   memset(i8250Reg,0,sizeof(i8250Reg));
   memset(i8250Regalt,0,sizeof(i8250Regalt));
@@ -5847,11 +5709,11 @@ void initHW(void) {
 #endif
 	memset(&Keyboard,0,sizeof(Keyboard));
 #ifdef PCAT
-  KBCommand=B8(01010000) /*XT,disabled*/;  i8042Input=i8042Output=0; i8042OutPtr=1 /* power-on*/;
+  KBCommand=0b01010000 /*XT,disabled*/;  i8042Input=0; i8042Output=2/*A20*/; i8042OutPtr=1 /* power-on, manda 00*/;
 //	KBStatus=0x00;		b2=0 al power, 1 dopo
-	KBStatus |= 0x00;		// b4=enabled(switch/key
+	KBStatus |= 0b00010001;		// b4=enabled(switch/key 
 #else
-  KBCommand=B8(01000000) /* enabled */; KBStatus=0x00;
+  KBCommand=0b01000000 /* enabled */; KBStatus=0x00;
 #endif
 
   memset(FloppyContrRegR,0,sizeof(FloppyContrRegR));
@@ -5865,63 +5727,83 @@ void initHW(void) {
 		floppySector[i]=0;
 		floppylastCmd[i]=0;
 		}
-	floppyState[0]=0x80;			// 00 per boot da HD!
+	floppyState[0]=FLOPPY_STATE_DISKPRESENT;			// 00 per boot da HD!
+#ifdef PCAT
+	floppyState[1]=FLOPPY_STATE_DISKPRESENT;
+#else
 	floppyState[1]=0x00;
+#endif
 	floppyState[2]=0;
 	floppyState[3]=0;
+#if defined(PCAT) || defined(ROM_HD_BASE)
 	memset(HDContrRegR,0,sizeof(HDContrRegR));
 	memset(HDContrRegW,0,sizeof(HDContrRegW));
+#ifdef ROM_HD_BASE
 	memset(HDFIFOR,0,sizeof(HDFIFOR));
 	memset(HDFIFOW,0,sizeof(HDFIFOW));
+#endif
 	HDFIFOPtrR=HDFIFOPtrW=0;
 	hdHead=0;
 	hdCylinder=0;
 	hdSector=0;
 	hdState=hdControl=0;
-	
-	mouseState=128;
+#ifdef PCAT
+	hdDisc=0;
+	hdError=0;
+	hdPrecomp=0;
+#endif
+#endif
+  
+	mouseState=0b10000000;
 	memset(COMDataEmuFifo,0,sizeof(COMDataEmuFifo));
 	COMDataEmuFifoCnt=0;
   
-	ColdReset=0;
-	ExtIRQNum.x=IntIRQNum.x=0;
-	memset(&currentDateTime,0,sizeof(currentDateTime));
-	{
-		struct tm *myt;
-		DWORD l;
-		l=time(NULL);
-		myt=localtime(&l);
-		currentDateTime=*myt;
-#ifndef PCAT
-		i146818RAM[13] = B8(10000000);		// VRT RTC batt ok! forzato per XT/glatick ma 286 fa lui
-#endif
+	i146818RAM[13] = 0b10000000;		// VRT RTC batt ok!
 
-		if(!(i146818RAM[11] & B8(00000100))) {			// BCD sarebbe b2 del registro 11 ma al boot non c'è...
-			currentDateTime.tm_hour=to_bcd(currentDateTime.tm_hour);
-			currentDateTime.tm_min=to_bcd(currentDateTime.tm_min);
-			currentDateTime.tm_sec=to_bcd(currentDateTime.tm_sec);
-			i146818RAM[0x32] = to_bcd((((WORD)currentDateTime.tm_year)+1900) / 100);		// secolo
-			currentDateTime.tm_year=to_bcd(currentDateTime.tm_year % 100);			// anno, e v. secolo in RAM[32], GLATick
-			currentDateTime.tm_mon=to_bcd(currentDateTime.tm_mon  +1);
-			currentDateTime.tm_mday=to_bcd(currentDateTime.tm_mday);
-			}
+	if(!(i146818RAM[11] & 0b00000100)) {			// sarebbe b2 del registro 11 ma al boot non c'è...
+/*    currentTime.hour=to_bcd(currentTime.hour);
+    currentTime.min=to_bcd(currentTime.min);
+    currentTime.sec=to_bcd(currentTime.sec);*/
+    
+    i146818RAM[0x32] = 0x19; //to_bcd((((WORD)currentDate.year)+1900) / 100);		// secolo NON c'è in PICC_DATE :)
+// ok  #warning GLATICK dà clock error.... boh 7/8/25    provare 19!
+    
+/*    currentDate.year=to_bcd(currentDate.year % 100);			// anno, e v. secolo in RAM[32], GLATick
+    currentDate.mon=to_bcd(currentDate.mon  +1);
+    currentDate.mday=to_bcd(currentDate.mday);
+ * qua sono già BCD... v init in main */
+    }
+
 #ifdef PCAT
-		{const uint8_t valori_cmos[64]= {
-			/*00:*/ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x02, 0xD0, 0x80, 0x00, 0x00, 
-			/*10:*/ /*fdd1*/0x33,  0x00, 0x00, 0x00,  0x41, 0x80, 0x02, 0x80,  0x05,  /*tipo hd*/0x00,  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-			/*20:*/ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /*cylhd*/0x01,0x7b, 
-			/*30:*/ 0x80, 0x05, 0x20, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00
+		{const uint8_t valori_cmos[64]= {		// https://wiki.nox-rhea.org/back2root/ibm-pc-ms-dos/hardware/informations/cmos_ram#floppy
+//      448KB base 64 extended
+  /*00:*/ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA6, 0x02, 0x50, 0x80, 0x20, 0x02, 
+  /*10:*/ 0x30, 0x00, 0x00, 0x00, 0x21, 0xC0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+  /*20:*/ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x12, 
+  /*30:*/ 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x32, 0x00, 0x01, 0x00, 0x00, 0x00, 
 			};
 		memcpy(&i146818RAM[16],&valori_cmos[16],48);
-
-		}
+    }
 #endif
 
-	}
   
-//  OC7CONbits.ON = 0;   // spengo buzzer
-//  PR2 = 65535;		 // 
-//  OC7RS = 65535;		 // 
+	ColdReset=0;
+	ExtIRQNum.x=IntIRQNum.x=0;
+  
+#ifdef ST7735
+  OC1CONbits.ON = 0;   // spengo buzzer/audio
+  PR2 = 65535;		 // 
+  OC1RS = 65535;		 // 
+#endif
+#ifdef ILI9341
+  OC7CONbits.ON = 0;   // spengo buzzer
+  PR2 = 65535;		 // 
+  OC7RS = 65535;		 // 
+#endif
+
+  IEC0bits.T3IE=1;       // enable Timer 3 interrupt 
+  IEC0bits.T4IE=1;       // enable Timer 4 interrupt 
+  IEC0bits.T5IE=0;       // enable Timer 5 interrupt INUTILE!!! e molto veloce... 0x12, dice 64K in 1mS al DMA fanno 66KHz...
   
   }
 
@@ -5933,5 +5815,26 @@ BYTE to_bcd(BYTE n) {
 BYTE from_bcd(BYTE n) {
 	
 	return (n & 15) + (10*(n >> 4));
+	}
+
+char *strcpyhl(char *dest,const char *src) {
+	char *d=dest;
+	BOOL odd=0;
+
+	while(*src) {
+		if(odd) {
+			*d=*src;
+			d+=2;
+			*d=0;
+			}
+		else {
+			*(d+1)=*src;
+			*(d+2)=0;
+			}
+		odd = !odd;
+		src++;
+		}
+
+	return dest;
 	}
 

@@ -2,46 +2,35 @@
 
 // GC 28/11/2019 -> 2025
 
-//(#warning ANCORA 2024 OCCHIO OVERFLOW, in ADD e in SUB/CMP, verificare con Z80 e 68000 2022
-//(per LSL ecc https://stackoverflow.com/questions/1712744/left-shift-overflow-on-68k-x86
+//#warning ANCORA 2024 OCCHIO OVERFLOW, in ADD e in SUB/CMP, verificare con Z80 e 68000 2022
+//per LSL ecc https://stackoverflow.com/questions/1712744/left-shift-overflow-on-68k-x86
 
-//(v. per Ovf metodo usato su 68000 senza byte alto... provare
+//v. per Ovf metodo usato su 68000 senza byte alto... provare
 // la cosa di inEI... chissà... e anche in Z80; però SERVE su segment override!! (ovvio; dice anche che i primi 8088 avevano questo bug, vedi CPU TEST in BIOS https://cosmodoc.org/topics/processor-detection/ )  
-//  è rimasto il dubbio su MOV SS,nn ... se c'è segment override (cosa ovviamente improbabile, ma...
-
-// sep 25: quickbasic 4, 4.5 si schianta appena in RUN o esegue istruzione immediata o STEP F8
-//   windows VGA si schianta se WIN da solo, va con WIN <file>
-//   setup windows3 si schianta sempre se VGA o EGA, anche patchato; CGA va
-// (alcune istruzioni V20 0F ecc vanno, altre son da finire e/o provare, incluse REPC NC
-// checkit si pianta su test cpu e/o interrupt
-// non è chiaro se i8042Output in quei 2 bit deve replicare KBstatus...e poi KBram[0] è effettivamente KBcommand! dice smartestblob
-
-// fare una Pipe da 8 byte che si riempie ogni tanto e di volta in volta GetPipe (cambiare nome) legge 1-6 byte da lì; con LMSW si ripulisce tutta la pipe
-// risistemare le eccezioni in GetValue ecc, riordinare
 
 
-// riorganizzare comandi floppy, specify recalibrate e chiusure altri tutti; impostare cmq fdDisk su FIFO[1] in certi casi?
-
-
-
-#include <windows.h>
 #include <stdio.h>
-#include <stdint.h>
 #include <ctype.h>
 #include <stdlib.h>
-#include <conio.h>
-#include "8086win.h"
+//#include <graph.h>
+//#include <dos.h>
+//#include <malloc.h>
+//#include <memory.h>
+//#include <fcntl.h>
+//#include <io.h>
+#include <string.h>
+#include <xc.h>
+
+#include "Adafruit_ST77xx.h"
+#include "Adafruit_ST7735.h"
+#include "adafruit_gfx.h"
+
+#include "8086_PIC.h"
 #include "8086_io.h"
-
-#pragma check_stack(off)
-// #pragma check_pointer( off )
-#pragma intrinsic( _enable, _disable )
-
 
 
 BYTE fExit=0;
-HFILE spoolFile;
-extern BYTE debug;
+BYTE debug=0;
 
 BYTE CPUPins=DoReset;
 BYTE CPUDivider=2000000L/CPU_CLOCK_DIVIDER;
@@ -62,7 +51,6 @@ extern uint8_t i8042Input;
 #else
 extern uint8_t i8255RegR[];
 #endif
-extern uint8_t KBStatus;
 extern uint8_t i8237Mode[],i8237Mode2[],i8237Command,i8237Command2;
 extern uint8_t i8237RegR[],i8237RegW[],i8237Reg2R[],i8237Reg2W[];
 extern uint16_t i8237DMAAddr[],i8237DMALen[],i8237DMAAddr2[],i8237DMALen2[];
@@ -77,6 +65,7 @@ BYTE Pipe1;
 union PIPE Pipe2;
 
 volatile BYTE VIDIRQ=0;
+extern uint8_t LCDdirty;
 
 
 
@@ -286,9 +275,8 @@ for ADC it's set_flag(F_AUX_CARRY, (p1&0xF)+(p2&0xF)+flag(F_CARRY) >= 0x10);
 #define _fs &segs.r[4]
 #define _gs &segs.r[5]
 #endif
-	uint16_t _ip;
+	uint16_t _ip=0;
 #ifdef EXT_80286
-	uint16_t oldIp;
 	union _DTR GDTR;
 	union _DTR *LDTR;
 	union _DTR IDTR;
@@ -296,29 +284,10 @@ for ADC it's set_flag(F_AUX_CARRY, (p1&0xF)+(p2&0xF)+flag(F_CARRY) >= 0x10);
 	struct _EXCEPTION Exception86;
 #endif
 	union REGISTRO_F _f;			// mi serve qua per privilegi in Protected...
-#ifdef DEBUG_TESTSUITE
-//	register union REGISTRO_F _f;
-  uint8_t inRep=0;
-	uint8_t inRepStep=0;
-  BYTE segOverride=0,segOverrideIRQ=0,inEI=0;
-	uint8_t inLock=0;
-	struct REGISTERS_SEG *theDs;
-	struct REGISTERS_SEG absSeg	// serve per IRQ table
-#ifdef EXT_80286
-	={0x0000,0x0000,0x0000,0x00,0x93}			// per protected mode
-#else
-	={0}
-#endif
-	;
-#endif
 
-	
 int Emulate(int mode) {
-	MSG msg;
-	BOOL bMsgAvail;
-	HDC hDC;
-  // (su PIC32 in termini di memoria usata, tenere locali le variabili è molto meglio...
-#ifndef DEBUG_TESTSUITE
+  // in termini di memoria usata, tenere locali le variabili è molto meglio... ma mi serve globale per 80286
+	uint16_t _ip,oldIp;
   uint8_t inRep=0;
 	uint8_t inRepStep=0;
   BYTE segOverride=0,segOverrideIRQ=0,inEI=0;
@@ -335,20 +304,18 @@ int Emulate(int mode) {
   BYTE sizeOverride=0,sizeOverrideA=0;
 #endif
 #ifdef EXT_80x87
-  uint16_t status8087=0,control8087=0,tag8087=0;
-  uint16_t dataPtr8087=0,instrPtr8087=0;
-	uint64_t R8087[8];
-#endif
+  uint16_t status8087=0,control8087=0;
 #endif
   register union OPERAND op1,op2;
-  register union RESULT res1,res2,res3;
+  register union RESULT res1,res2;
+  union RESULT res3;
   BYTE immofs;		// usato per dato #imm che segue indirizzamento 0..2 (NON registro)
 		// è collegato a GetMorePipe, inoltre
   register uint16_t i;
 	int c=0;
-	LARGE_INTEGER c3,c4;
   uint8_t screenDivider=0;
 	uint8_t timerDivider=0;
+
 
 
 
@@ -370,89 +337,16 @@ int Emulate(int mode) {
   CPUPins = 0; ExtIRQNum.x=IntIRQNum.x=0; 
 	do {
 
-		QueryPerformanceCounter(&c3);
-		c3.QuadPart+=CPUDivider;			//pcFrequency
-
 		c++;
-
-
-#define VIDEO_DIVIDER 0x0000003f		// sotto 63 non cambia un cazzo... boh
-		if(!(c & VIDEO_DIVIDER)) {        //(~64uS
-
-			bMsgAvail=PeekMessage(&msg,NULL,0,0,PM_REMOVE /*| PM_NOYIELD*/);
-
-			if(bMsgAvail) {
-				if(msg.message == WM_QUIT)
-		  		break;
-				if(msg.message == WM_SYSKEYDOWN)    {
-					decodeKBD(msg.wParam,msg.lParam,0);
-					}
-				else if(msg.message == WM_SYSKEYUP)    {
-					decodeKBD(msg.wParam,msg.lParam,1);
-					}
-				else {
-					if(!TranslateAccelerator(msg.hwnd,hAccelTable,&msg)) {
-						TranslateMessage(&msg); 	 /* Translates virtual key codes			 */
-						DispatchMessage(&msg);		 /* Dispatches message to window			 */
-						}
-					}
-				}
-
-#ifdef CGA
-  	  CGAreg[0xa] ^= B8(00000001);  //retrace H (patch...
-			if(VICRaster < 8)
-				CGAreg[0xa] |= B8(00001000);		// (v. anche in updateVideo
-			else
-				CGAreg[0xa] &= ~B8(00001000);		// 
+#ifdef USING_SIMULATOR
+#define VIDEO_DIVIDER 0x0000000f
+#else
+#define VIDEO_DIVIDER 0x0000007f
 #endif
-#ifdef MDA
-  	  MDAreg[0xa] ^= B8(00000001);  //retrace H (patch...
-			if(VICRaster < 8)
-				MDAreg[0xa] |= B8(00001000);		// (v. anche in updateVideo
-			else
-				MDAreg[0xa] &= ~B8(00001000);		// 
-#endif
-#ifdef VGA
-
-//			VGAstatus0 |= (VICRaster > VERT_SIZE-8) ? 0 : B8(10000000);			// v. anche in updateVideo
-//			VGAstatus1 |= (VICRaster > VERT_SIZE-8) ? B8(00001000) : 0;
-
-	// pare cmq ci sia pure questo, per compatibilità...
-			if(VICRaster < 8) {
-				CGAreg[0xa] |= B8(00001000);		// (v. anche in updateVideo
-			// FINIREEEEEE
-//				VGAstatus0 |= B8(10000000);
-//				VGAstatus1 |= B8(00001000);
-#ifndef PCAT
-		    if((i8259IRR & 0x4) && !(i8259IMR & 0x4)) {
-			// occhio priorità con sopra...
-	/*			if(_f.IF) {			// 
-						CPUPins |= DoIRQ;
-						ExtIRQNum.Vector=i8259ICW[1]+2;      // 
-						i8259ISR2 |= 2;	i8259IRR2 &= ~2;
-						if(i8259ICW2[3] & B8(00000010))		// AutoEOI
-							i8259ISR2 &= ~0x2;
-						}*/
-					}
-#endif
-				}
-			else {
-				CGAreg[0xa] &= ~B8(00001000);		// 
-//				VGAstatus0 &= ~B8(10000000);
-//				VGAstatus1 &= ~B8(00001000);
-				}
-#endif
-
-	    i146818RAM[12] |= B8(01000000);			// RTC output
-			i146818RAM[10] &= ~B8(10000000);		// 
-
-#ifndef PCAT
-				// ev. IRQ ecc come 1secondo
-#endif
-
+    if(!(c & VIDEO_DIVIDER)) {   //~64uS
+  	  CGAreg[0xa] ^= 0b0001;  //retrace H (patch...
       if(!(c & 0xffff)) {
-
-
+        ClrWdt();
 // yield()
         }
       }
@@ -461,12 +355,18 @@ int Emulate(int mode) {
 			ColdReset=0;
 			initHW();
 #ifdef PCAT
-//			KBStatus |= B8(00000100);		// flag power-on VIENE FATTO quando manda 0xAA alla tastiera!
+//			KBStatus |= 000000100);		// flag power-on VIENE FATTO quando manda 0xAA alla tastiera!
 #endif
 			CPUPins = DoReset;
-			SetWindowText(hStatusWnd,"");
 			continue;
 			}
+
+//		if(debug) {
+#ifdef __DEBUG
+//			printf("%04x:%04x    %02x\n",_cs,_ip,GetValue(MAKE20BITS(_cs,_ip)));
+//			printf("%04x:%04x\n",_cs,_ip);
+//    puts("pippo");
+#endif
 
 //			}
 		/*if(kbhit()) {
@@ -478,51 +378,199 @@ int Emulate(int mode) {
 			printf("37-38: %02x %02x\n",*(p1+0x37),*(p1+0x38));
 			}*/
     if(VIDIRQ) {
+#ifndef USING_SIMULATOR
       if(!screenDivider) {
-				hDC=GetDC(ghWnd);
-#ifdef CGA
-	      UpdateScreen(hDC,VICRaster,VICRaster+32 /*MIN_RASTER,MAX_RASTER*/);
+        // usare LCDdirty...
+        UpdateScreen(VICRaster,VICRaster+8 /*MIN_RASTER,MAX_RASTER*/);
+        VICRaster+=8;					 	 // [raster pos count, 200 al sec... v. C64]
+        if(VICRaster >= MAX_RASTER) {		 // 
+          VICRaster=MIN_RASTER; 
+          screenDivider++;
+          }
+#ifdef MOUSE_TYPE 
+      manageTouchScreen();
 #endif
-#ifdef MDA
-	      UpdateScreen(hDC,VICRaster,VICRaster+56+1 /*0,VERT_SIZE*/ /*MIN_RASTER,MAX_RASTER*/);
-#endif
-#ifdef VGA
-	      UpdateScreen(hDC,VICRaster,(uint16_t)(VICRaster+80) /*MIN_RASTER,MAX_RASTER*/);
-#endif
-				ReleaseDC(ghWnd,hDC);
-//        screenDivider++;
         }
-#ifdef CGA
-      VICRaster+=32;					 	 // [raster pos count, 200 al sec... v. C64]
-#endif
-#ifdef MDA
-      VICRaster+=56;					 	 // [raster pos count, 200 al sec... v. C64]
-#endif
-#ifdef VGA
-      VICRaster+=80;					 	 // [raster pos count, 200 al sec... v. C64]
-#endif
-
-// ( ora pare ok, occhio ultima passata in UpdateScreen  (in release non va con 16 o 32!!! @#£$%
-
-
-      if(VICRaster >= MAX_RASTER) {		 // 
-        VICRaster=MIN_RASTER; 
-        screenDivider++;
-        screenDivider %= 2;			// sembra che siamo 10 volte più lenti... 2/10/25 v. ioport.asm test
-//        LED2 ^= 1;      // circa 3.5mS per 8 righe, lo faccio ogni 25mS = ~625mS 13/7/24
+      else {
+        VICRaster+=32;					 	 // più veloce qua, 7 passate
+        if(VICRaster >= MAX_RASTER) {		 // 
+          VICRaster=MIN_RASTER; 
+          LED2 ^= 1;      // VIDIRQ attivato come flag qua, ogni 10mS => 60mS qua
+          screenDivider++;
+          screenDivider %= 4;
+          }
         }
+#endif
       VIDIRQ=0;
+#ifndef PCAT
+    if((i8259IRR & 0x4) && !(i8259IMR & 0x4)) {
+			// occhio priorità con sopra...
+/*			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW[1]+2;      // 
+				i8259ISR2 |= 2;	i8259IRR2 &= ~2;
+				if(i8259ICW2[3] & 0b00000010)		// AutoEOI
+					i8259ISR2 &= ~0x2;
+	      }*/
+      }
+#endif
+      
+	    i146818RAM[12] |= 0b01000000;			// RTC output
+			i146818RAM[10] &= ~0b10000000;		// 
+
+#ifndef PCAT
+				// ev. IRQ ecc come 1secondo
+#endif
           
+      if(!SW1) {       // test tastiera, me ne frego del repeat/rientro :)
+        if(keysFeedPtr==255)      // debounce...
+          keysFeedPtr=254;
+        }
+      if(!SW2) {        // 
+        __delay_ms(100); ClrWdt();
+        CPUPins=DoReset;
+        }
+    
       }
 
+//questa parte equivale a INTA sequenza ecc  http://www.icet.ac.in/Uploads/Downloads/3_mod3.pdf
+    if((i8259IRR & 0x1) && !(i8259IMR & 0x1)) {
+			if(_f.IF) {			// www.brokenthorn.com/Resources/OSDevPic.html  mah, controintuitivo!
+				CPUPins |= DoIRQ;
+	// [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
+				ExtIRQNum.Vector=i8259ICW[1]+0;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
+				// occhio cmq a ev. altri settaggi in ICW, e a MCS8085 mode
+				i8259ISR |= 1;	i8259IRR &= ~1;
+				if(i8259ICW[3] & 0b00000010)		// AutoEOI
+					i8259ISR &= ~0x1;
+	      }
+      }
+    else if((i8259IRR & 0x2) && !(i8259IMR & 0x2)) {
+			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW[1]+1;      // IRQ 9 Keyboard
+				i8259ISR |= 2;	i8259IRR &= ~2;
+				if(i8259ICW[3] & 0b00000010)		// AutoEOI
+					i8259ISR &= ~0x2;
+	      }
+      }
+    else if(!(i8259ICW[2] & 4) && (i8259IRR & 0x4) && !(i8259IMR & 0x4)) {
+//			if(i8259ICW[2] & 4) {			// 4 se c'è slave, quindi evito questo IRQ, direi
+//				}
+			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW[1]+2;      // ev. 2nd PIC IRQ (cascaded) 
+				i8259ISR |= 4;	i8259IRR &= ~4;
+				if(i8259ICW[3] & 0b00000010)		// AutoEOI
+					i8259ISR &= ~0x4;
+	      }
+      }
+//		retrace EGA/VGA! v.
 
+    else if((i8259IRR & 0x10) && !(i8259IMR & 0x10)) {
+			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW[1]+4;      // IRQ 12 COM1
+				i8259ISR |= 0x10;	i8259IRR &= ~0x10;
+				if(i8259ICW[3] & 0b00000010)		// AutoEOI
+					i8259ISR &= ~0x10;
+	      }
+      }
+    else if((i8259IRR & 0x20) && !(i8259IMR & 0x20)) {
+#ifdef _DEBUG
+#ifdef DEBUG_HD
+			{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: IRQ HD %u\n",timeGetTime(),_f.IF
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}
+#endif
+#endif
+			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW[1]+5;      // IRQ 5 Hard disc
+				i8259ISR |= 0x20;	i8259IRR &= ~0x20;
+				if(i8259ICW[3] & 0b00000010)		// AutoEOI
+					i8259ISR &= ~0x20;
+	      }
+      }
+    else if((i8259IRR & 0x40) && !(i8259IMR & 0x40)) {
+#ifdef _DEBUG
+#ifdef DEBUG_FD
+			{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: IRQ floppy %u\n",timeGetTime(),_f.IF
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}
+#endif
+#endif
+			if(_f.IF) {			// fa incazzare PCXTBIOS ora...
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW[1]+6;      // IRQ 6 Floppy disc
+				i8259ISR |= 0x40;	i8259IRR &= ~0x40;
+				if(i8259ICW[3] & 0b00000010)		// AutoEOI
+					i8259ISR &= ~0x40;
+	      }
+      }
+#ifdef PCAT
+    else if((i8259IRR2 & 0x1) && !(i8259IMR2 & 0x1)) {
+			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW2[1]+0;      // IRQ RTC
+				i8259ISR2 |= 1;	i8259IRR2 &= ~1;
+				if(i8259ICW2[3] & 0b00000010)		// AutoEOI
+					i8259ISR2 &= ~0x1;
+	      }
+      }
+    else if((i8259IRR2 & 0x40) && !(i8259IMR2 & 0x40)) {
+#ifdef _DEBUG
+#ifdef DEBUG_HD
+			{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: IRQ HD AT %u\n",timeGetTime(),_f.IF
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}
+#endif
+#endif
+			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW2[1]+6;      // IRQ 14 Hard disc AT #1
+				i8259ISR2 |= 0x40;	i8259IRR2 &= ~0x40;
+				if(i8259ICW2[3] & 0b00000010)		// AutoEOI
+					i8259ISR2 &= ~0x40;
+	      }
+      }
+/* per 2° HD    else if((i8259IRR2 & 0x80) && !(i8259IMR2 & 0x80)) {
+#ifdef DEBUG_HD
+			{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: IRQ HD2 AT %u\n",timeGetTime(),_f.IF
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}
+#endif
+			if(_f.IF) {			// 
+				CPUPins |= DoIRQ;
+				ExtIRQNum.Vector=i8259ICW2[1]+7;      // IRQ 15 Hard disc AT #2
+				i8259ISR2 |= 0x80;	i8259IRR2 &= ~0x80;
+				if(i8259ICW2[3] & 0b00000010)		// AutoEOI
+					i8259ISR2 &= ~0x80;
+	      }
+      }
+			*/
+#endif
+
+      
 #ifdef PCAT			// https://wiki.osdev.org/Non_Maskable_Interrupt
-		if(i8042Input & B8(10000000))		// https://bochs.sourceforge.io/techspec/PORTS.LST
-			if(!(i146818RegW[0] & B8(10000000)))
+		if(i8042Input & 0b10000000)		// https://bochs.sourceforge.io/techspec/PORTS.LST
+			if(!(i146818RegW[0] & 0b10000000))
 
 #else
-		if(i8255RegR[2]/*MachineFlags*/ & B8(11000000))		//https://www.minuszerodegrees.net/5150/misc/5150_nmi_generation.jpg
-//			if(!(port_a0 & B8(10000000)))		// mettere :)
+		if(i8255RegR[2]/*MachineFlags*/ & 0b11000000)		//https://www.minuszerodegrees.net/5150/misc/5150_nmi_generation.jpg
+//			if(!(port_a0 & 0b10000000))		// mettere :)
 #endif
 			CPUPins |= DoNMI;
 		// e sembra che cmq debba essere attivo in i8259Reg2R[0] OPPURE da b7 scritto a 0xA0! (pcxtbios
@@ -533,18 +581,16 @@ int Emulate(int mode) {
 			_f.unused=1; _f.unused2=_f.unused3=0; 
 #ifdef EXT_80x87 
 						// VERIFICARE!
-			status8087=0;
-			control8087=0; tag8087=0;
+			status8087=0; control8087=0; tag8087=0;
 			dataPtr8087=0,instrPtr8087=0;
 			R8087[8];
 #endif
 #if defined(EXT_80386)
 			//https://sandpile.org/x86/initial.htm
 			memset(&GDTR,0,sizeof(union _DTR)); GDTR.access=0x82;
-			LDTR=NULL;
+			memset(&LDTR,0,sizeof(union _DTR));
 			memset(&IDTR,0,sizeof(union _DTR));
-			memset(&_tss,0,sizeof(union SEGMENT_SELECTOR));
-			_tsr=NULL;
+//			memset(&TS ,0,sizeof(union _DTR));
 			memset(&Exception86,0,sizeof(struct _EXCEPTION));
 #elif defined(EXT_80286)
       _ip=0xfff0;
@@ -558,10 +604,9 @@ int Emulate(int mode) {
       _es->s.x=0x0000;		// ossia Selector
 			_es->d.Base=0x0000; _es->d.BaseH=0x00; _es->d.Limit=0xffff; _es->d.Access.b=0x93;
 			memset(&GDTR,0,sizeof(union _DTR));
-			LDTR=NULL;
+			memset(&LDTR,0,sizeof(union _DTR));
 			memset(&IDTR,0,sizeof(union _DTR));
-			memset(&_tss,0,sizeof(union SEGMENT_SELECTOR));
-			_tsr=NULL;
+//			memset(&TS ,0,sizeof(union _DTR));
 			memset(&Exception86,0,sizeof(struct _EXCEPTION));
 			_f.x=0x0002;
 			_f.unused4=0;			// https://en.wikipedia.org/wiki/FLAGS_register
@@ -590,19 +635,14 @@ int Emulate(int mode) {
 #endif
 			}
 
-
 rallenta:
 #ifndef PCAT
-		if(++timerDivider >= 22*1 *CPUDivider) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
+		if(++timerDivider >= 4          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
 #else
-		if(++timerDivider >= 20*1 *CPUDivider) {			// 10~ ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
-
-
-
-//30
-
-
+		if(++timerDivider >= 5          *1/**CPUdivider*/) {			// 10 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (
 #endif
+         
+
       // Ma in effetti se consideriamo che ogni istruzione impiega da 3-4 a 100 cicli, diciamo max 20 http://aturing.umcs.maine.edu/~meadow/courses/cos335/80x86-Integer-Instruction-Set-Clocks.pdf
       // e passiamo di qua dopo ognuna, allora il divisore quasi non ha senso... anzi andrebbe invertito!
       // rimesso 3 per ERSO/DTCBIOS... paiono tutti ok
@@ -611,16 +651,20 @@ rallenta:
 			timerDivider=0;
 			// https://stanislavs.org/helppc/8253.html   http://wiki.osdev.org/Programmable_Interval_Timer#Mode_0_-_Interrupt_On_Terminal_Count
 			// devono andare a ~1.1MHz qua
-			// aggiungere modo BCD a tutti i conteggi!! :)  i8253Mode[0] & PIT_BCD
-
+			// aggiungere modo BCD a tutti i conteggi!! :)  i8253Mode[0] & B8(00000001)
+      
 			for(i=0; i<3; i++) {
-				if(i8253Flags[i] & PIT_ACTIVE) {         // reloaded/attivo
-					switch((i8253Mode[i] & B8(00001110)) >> 1) {// VERIFICARE altri modi a parte i primi 4
+				if(i8253Flags[i] & PIT_LOADED) {
+// PROVARE					i8253Flags[i] | PIT_ACTIVE;
+					i8253Flags[i] &= ~PIT_LOADED;
+					}
+				switch((i8253Mode[i] & 0b00001110) >> 1) {// VERIFICARE altri modi a parte i primi 4
 
-						case PIT_MODE_INTONTERMINAL:		// INTerrupt on terminal count
-							// (continous) output is low and goes high at counting end
-							if(i8253Mode[0] & PIT_BCD)
-								;
+					case PIT_MODE_INTONTERMINAL:		// INTerrupt on terminal count
+						// (continous) output is low and goes high at counting end
+						if(i8253Mode[i] & PIT_BCD)
+							;
+						if(i8253Flags[i] & PIT_ACTIVE) {
 							i8253TimerR[i]--;
 							if(!i8253TimerR[i]) {
 								i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
@@ -633,161 +677,169 @@ rallenta:
 							else {
 								i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
 								}
+							}
 #if 0
-							if(i==2) {
-	//test	5150 cassette				i8253Flags[2] |= B8(10000000);
-							i8253TimerR[2]--;
-							if(!i8253TimerR[2]) {
-								i8253Flags[2] &= ~B8(01000000);
-								i8253Flags[2] |= PIT_OUTPUT;          // OUT=1
-				{
-				char myBuf[256];
-				wsprintf(myBuf,"%u: T2 =1\n",timeGetTime()
-					);
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-				}
+						if(i==2) {
+//test	5150 cassette				i8253Flags[2] |= B8(10000000);
+						if(i8253Flags[i] & PIT_ACTIVE)
+							i8253TimerR[i]--;
+						if(!i8253TimerR[i]) {
+							i8253Flags[i] &= ~B8(01000000);
+							i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
+			{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: T2 =1\n",timeGetTime()
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}
+						}
+					else {
+						i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
+			{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: T2 =0\n",timeGetTime()
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}
+						}
+						}
+
+#endif
+						break;
+					case PIT_MODE_ONESHOT:				// one-shot output is low and goes high at counting end (retriggerable)
+						if(i8253Mode[i] & PIT_BCD)
+							;
+						if(i8253Flags[i] & PIT_ACTIVE) {
+							i8253TimerR[i]--;
+							if(!i8253TimerR[i]) {
+								i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
+								if(i==0) {
+									i8259IRR |= 1;
+									}
+								}
+							}
+						break;
+					case PIT_MODE_FREECOUNTER:
+						// free counter / rate generator
+						if(i8253Mode[i] & PIT_BCD)
+							;
+//							if(i8253Flags[i] & PIT_ACTIVE)
+						i8253TimerR[i]--;
+						if(!i8253TimerR[i]) {
+							i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
+							i8253TimerR[i]=i8253TimerW[i];
+							if(i==0) {
+								i8259IRR |= 1;
+								}
+#ifndef PCAT
+							if(i==1) {
+								// e forse andrebbe invertita polarità, v. di là
+					// QUESTO VA CON DMA QUI! non è ben chiaro, dma è autoreload... questo è circa 18*.8uS ossia 15uS...
+								i8237RegR[8] |= DMA_REQUEST0;  // 
+								}
+#endif
+
 							}
 						else {
-							i8253Flags[2] &= ~PIT_OUTPUT;          // OUT=0
-				{
-				char myBuf[256];
-				wsprintf(myBuf,"%u: T2 =0\n",timeGetTime()
-					);
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-				}
+							i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
+
 							}
-							}
-
-#endif
-							break;
-						case PIT_MODE_ONESHOT:				// one-shot output is low and goes high at counting end (retriggerable)
-							if(i8253Mode[0] & PIT_BCD)
-								;
-							i8253TimerR[i]--;
-							if(!i8253TimerR[i]) {
-								i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
-								if(i==0) {
-									i8259IRR |= 1;
-									}
-								}
-							break;
-						case PIT_MODE_FREECOUNTER:
-							// free counter / rate generator
-							if(i8253Mode[0] & PIT_BCD)
-								;
-							i8253TimerR[i]--;
-							if(!i8253TimerR[i]) {
-								i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
-								i8253TimerR[i]=i8253TimerW[i];
-								if(i==0) {
-									i8259IRR |= 1;
-									}
-#ifndef PCAT
-								if(i==1) {
-									// e forse andrebbe invertita polarità, v. di là
-						// QUESTO VA CON DMA QUI! non è ben chiaro, dma è autoreload... questo è circa 18*.8uS ossia 15uS...
-									i8237RegR[8] |= DMA_REQUEST0;  // 
-									}
-#endif
-
-								}
-							else {
-								i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
-
-								}
-							break;
-						case PIT_MODE_SQUAREWAVEGEN:
-							// free counter / square wave rate generator
-							if(i8253Mode[0] & PIT_BCD)
-								;
+						break;
+					case PIT_MODE_SQUAREWAVEGEN:
+						// free counter / square wave rate generator
+						if(i8253Mode[i] & PIT_BCD)
+							;
+//						if(i8253Flags[i] & PIT_ACTIVE)
 							i8253TimerR[i]-=2;
-		//					i8253TimerR[i] &= 0xfffe;		// beh 
-							if(!i8253TimerR[i]) {
-								i8253Flags[i] ^= PIT_OUTPUT;          // OUT=!OUT
-				/*{
+	//					i8253TimerR[i] &= 0xfffe;		// beh 
+						if(!i8253TimerR[i]) {
+							i8253Flags[i] ^= PIT_OUTPUT;          // OUT=!OUT
+			/*{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: T2 toggle \n",timeGetTime()
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}*/
+							// IRQ solo sul fronte salita...
+							if((i8253Flags[i] & PIT_OUTPUT)) {
+						//      TIMIRQ=1;  //
+	/*			{
 				char myBuf[256];
-				wsprintf(myBuf,"%u: T2 toggle \n",timeGetTime()
-					);
+				wsprintf(myBuf,"%u: %04x  Timer 0 IRQ, %X, %X \n",timeGetTime(),
+					_ip,i8259IMR,i8259IRR);
 				_lwrite(spoolFile,myBuf,strlen(myBuf));
 				}*/
-								// IRQ solo sul fronte salita...
-								if((i8253Flags[i] & PIT_OUTPUT)) {
-							//      TIMIRQ=1;  //
-		/*			{
-					char myBuf[256];
-					wsprintf(myBuf,"%u: %04x  Timer 0 IRQ, %X, %X \n",timeGetTime(),
-						_ip,i8259IMR,i8259IRR);
-					_lwrite(spoolFile,myBuf,strlen(myBuf));
-					}*/
-									if(i==0) {
-										i8259IRR |= 1;
-										}
-									}
-								i8253TimerR[i]=i8253TimerW[i];
-								if(i8253TimerR[i] & 1)
-									i8253TimerR[i]--;
-								}
-							else {
-								// 
-								}
-							break;
-						case PIT_MODE_SWTRIGGERED:				// software triggered strobe
-							if(!i8253TimerR[i]) {
-								i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
-								}
-							else {
-								if(i8253Mode[0] & PIT_BCD)
-									;
-								i8253TimerR[i]--;
-								i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
 								if(i==0) {
 									i8259IRR |= 1;
 									}
 								}
-							break;
-						case PIT_MODE_HWTRIGGERED:				// hardware triggered strobe
-							if(!i8253TimerR[i]) {
-								i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
-								}
-							else {
-								if(i8253Mode[0] & PIT_BCD)
-									;
+							i8253TimerR[i]=i8253TimerW[i];
+							if(i8253TimerR[i] & 1)
 								i8253TimerR[i]--;
-								i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
-								if(i==0) {
-									i8259IRR |= 1;
-									}
+							}
+						else {
+							// 
+							}
+						break;
+					case PIT_MODE_SWTRIGGERED:				// software triggered strobe
+						if(!i8253TimerR[i]) {
+							i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
+							}
+						else {
+							if(i8253Mode[0] & PIT_BCD)
+								;
+//							if(i8253Flags[i] & PIT_ACTIVE)
+								i8253TimerR[i]--;
+							i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
+							if(i==0) {
+								i8259IRR |= 1;
 								}
-							break;
-						}
+							}
+						break;
+					case PIT_MODE_HWTRIGGERED:				// hardware triggered strobe
+						if(!i8253TimerR[i]) {
+							i8253Flags[i] &= ~PIT_OUTPUT;          // OUT=0
+							}
+						else {
+							if(i8253Mode[0] & PIT_BCD)
+								;
+//							if(i8253Flags[i] & PIT_ACTIVE)
+								i8253TimerR[i]--;
+							i8253Flags[i] |= PIT_OUTPUT;          // OUT=1
+							if(i==0) {
+								i8259IRR |= 1;
+								}
+							}
+						break;
 					}
 				}
 
 			if(i8253Flags[2] & PIT_OUTPUT)
 #ifdef PCAT
-				i8042Input |= B8(00100000);			// monitor timer ch 2...
+				i8042Input |= 0b00100000;			// monitor timer ch 2...
 #else
-				i8255RegR[2] |= B8(00100000);			// monitor timer ch 2...
+				i8255RegR[2] |= 0b00100000;			// monitor timer ch 2...
 #endif
 			else
 #ifdef PCAT
-				i8042Input &= ~B8(00100000);			// 
+				i8042Input &= ~0b00100000;			// 
 #else
-				i8255RegR[2] &= ~B8(00100000);			// 
+				i8255RegR[2] &= ~0b00100000;			// 
 #endif
 #ifdef PC_IBM5150
 			if(i8253Flags[2] & PIT_OUTPUT)
-				i8255RegR[2] |= B8(00010000);			// loopback cassette
+				i8255RegR[2] |= 0b00010000;			// loopback cassette
 			else
-				i8255RegR[2] &= ~B8(00010000);			// 
-//				i8255RegR[2] |= B8(00010000);			// cassette...
+				i8255RegR[2] &= ~0b00010000;			// 
+//				i8255RegR[2] |= 0b00010000;			// cassette...
 #endif
 #ifdef PC_IBM5160		// anche altri? boh
 /*			if(i8253Flags[2] & PIT_OUTPUT)
-				i8255RegR[2] |= B8(00010000);			// monitor speaker...
+				i8255RegR[2] |= 0b00010000;			// monitor speaker...
 			else
-				i8255RegR[2] &= ~B8(00010000);			*/
+				i8255RegR[2] &= ~0b00010000;			*/
 #endif
+
 
 			if(floppyTimer) {
 
@@ -804,7 +856,7 @@ rallenta:
 			if(hdTimer) {
 				if(!--hdTimer) {
 #ifdef PCAT
-					i8259IRR2 |= B8(01000000);		// simulo IRQ...
+					i8259IRR2 |= 0b01000000;		// simulo IRQ...
 //					i8259IRR2 |= hdDisc >=2 ? 0x80 : 0x40;
 //				 if(!(i8259IMR & 4))	//
 /*					i=i8259ICW[0]; //11 8 4 1
@@ -815,11 +867,11 @@ rallenta:
 					i=i8259ICW2[1];
 					i=i8259ICW2[2];
 					i=i8259ICW2[3];*/
-					i8259IRR |= B8(00000100);
+					i8259IRR |= 0b00000100;
 					hdState &= ~HD_AT_STATUS_BUSY;		// tolgo busy , ok così (specie phoenix
 
 #else
-					i8259IRR |= B8(00100000);		// simulo IRQ...
+					i8259IRR |= 0b00100000;		// simulo IRQ...
 #endif
 					}
 				}
@@ -830,7 +882,7 @@ rallenta:
 #ifndef PCAT
 			// canale 0 = RAM refresh (ignoro gli altri, v. floppy ecc in loco!
 #endif
-			switch((i8237Mode[0] & B8(00001100)) >> 2) {		// DMA mode
+			switch((i8237Mode[0] & 0b00001100) >> 2) {		// DMA mode
 				case DMA_MODEVERIFY:			// verify
 					break;
 				case DMA_MODEWRITE:			// write
@@ -840,55 +892,32 @@ rallenta:
 				}
 			i8237RegR[13] /* = */; // ultimo byte trasferito :)
 			if(!(i8237RegW[15] & DMA_MASK0))	{	// mask...
-				if(i8237RegR[8] & DMA_REQUEST0) {
-					switch((i8237Mode[0] & DMA_MODE) >> 6) {		// DMA mode
-						case DMA_MODEDEMAND:			// demand
-							break;
-						case DMA_MODECASCADE:			// cascade
-							break;
-						case DMA_MODESINGLE:			// single
-	//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
-							if(i8237Mode[0] & DMA_UPDOWN)
-								i8237DMACurAddr[0]--;
-							else
-								i8237DMACurAddr[0]++;
-							i8237DMACurLen[0]--;
-							if(!i8237DMACurLen[0]) {
-								i8237RegR[8] |= DMA_TC0;		// TC 0
-								if(i8237Mode[0] & DMA_AUTORELOAD) {
-									i8237DMACurAddr[0]=i8237DMAAddr[0];
-									i8237DMACurLen[0]=i8237DMALen[0];
-									}
-	#ifdef PCAT
-	// no, su AT non è qua							i8042Input ^= 0x10;		// SIMULO refresh... v. port 61h
-	#endif
-
+				switch((i8237Mode[0] & DMA_MODE) >> 6) {		// DMA mode
+					case DMA_MODEDEMAND:			// demand
+						break;
+					case DMA_MODECASCADE:			// cascade
+						break;
+					case DMA_MODESINGLE:			// single
+					case DMA_MODEBLOCK:			// block
+//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
+						if(i8237Mode[0] & DMA_UPDOWN)
+							i8237DMACurAddr[0]--;
+						else
+							i8237DMACurAddr[0]++;
+						i8237DMACurLen[0]--;
+						if(!i8237DMACurLen[0]) {
+							i8237RegR[8] |= DMA_TC0;		// TC 0
+							if(i8237Mode[0] & DMA_AUTORELOAD) {
+								i8237DMACurAddr[0]=i8237DMAAddr[0];
+								i8237DMACurLen[0]=i8237DMALen[0];
+								i8237RegR[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
 								}
-							i8237RegR[8] &= ~DMA_REQUEST0;  // 
-							break;
-						case DMA_MODEBLOCK:			// block
-							while(i8237DMACurLen[0]--) {
-
-								if(i8237Mode[0] & DMA_UPDOWN)
-									i8237DMACurAddr[0]--;
-								else
-									i8237DMACurAddr[0]++;
-								i8237DMACurLen[0]--;
-								if(!i8237DMACurLen[0]) {
-									i8237RegR[8] |= DMA_TC0;		// TC 0
-									if(i8237Mode[0] & DMA_AUTORELOAD) {
-										i8237DMACurAddr[0]=i8237DMAAddr[0];
-										i8237DMACurLen[0]=i8237DMALen[0];
-										}
 #ifdef PCAT
 // no, su AT non è qua							i8042Input ^= 0x10;		// SIMULO refresh... v. port 61h
 #endif
 
-									}
-								}
-							i8237RegR[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
-							break;
-						}
+							}
+						break;
 					}
 				}
 			}
@@ -908,7 +937,7 @@ rallenta:
 
 		if(!(i8237Reg2W[8] & DMA_DISABLED)) {		// controller enable
 			// canale 0 = cascaded 4
-			switch((i8237Mode[0] & B8(00001100)) >> 2) {		// DMA mode
+			switch((i8237Mode[0] & 0b00001100) >> 2) {		// DMA mode
 				case DMA_MODEVERIFY:			// verify
 					break;
 				case DMA_MODEWRITE:			// write
@@ -925,59 +954,33 @@ rallenta:
 
 						break;
 					case DMA_MODESINGLE:			// single
-
-//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
-						if(i8237Mode[0] & DMA_UPDOWN)
-							i8237DMACurAddr[0]--;
-						else
-							i8237DMACurAddr[0]++;
-						i8237DMACurLen[0]--;
-						if(!i8237DMACurLen[0]) {
-							i8237RegR[8] |= DMA_TC0;		// TC 0
-							if(i8237Mode[0] & DMA_AUTORELOAD) {
-								i8237DMACurAddr[0]=i8237DMAAddr[0];
-								i8237DMACurLen[0]=i8237DMALen[0];
-								}
-#ifdef PCAT
-// no, su AT non è qua							i8042Input ^= 0x10;		// SIMULO refresh... v. port 61h
-#endif
-
-							}
-						i8237RegR[8] &= ~DMA_REQUEST0;  // 
-						break;
 					case DMA_MODEBLOCK:			// block
-						while(i8237DMACurLen2[0]--) {
-
-							if(i8237Mode2[0] & DMA_UPDOWN)
-								i8237DMACurAddr2[0]--;
-							else
-								i8237DMACurAddr2[0]++;
-							if(!i8237DMACurLen2[0]) {
-								i8237Reg2R[8] |= DMA_TC0;		// TC 0
-								if(i8237Mode2[0] & DMA_AUTORELOAD) {
-									i8237DMACurAddr2[0]=i8237DMAAddr2[0];
-									i8237DMACurLen2[0]=i8237DMALen2[0];
-									}
+//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
+						if(i8237Mode2[0] & DMA_UPDOWN)
+							i8237DMACurAddr2[0]--;
+						else
+							i8237DMACurAddr2[0]++;
+						i8237DMACurLen2[0]--;
+						if(!i8237DMACurLen2[0]) {
+							i8237Reg2R[8] |= DMA_TC0;		// TC 0
+							if(i8237Mode2[0] & DMA_AUTORELOAD) {
+								i8237DMACurAddr2[0]=i8237DMAAddr2[0];
+								i8237DMACurLen2[0]=i8237DMALen2[0];
+								i8237Reg2R[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
 								}
 							}
-						i8237Reg2R[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
 						break;
 					}
 				}
 			}
 #endif
-
- 			/*c2++;
+    
+/* 			c2++;
 			if(c2<CPUDivider)
+//			goto rallenta;
 				continue;
 			else
 				c2=0;*/
-		/*do {
-			QueryPerformanceCounter(&c4);
-			} while(c4.QuadPart<c3.QuadPart);*/
-		QueryPerformanceCounter(&c4);
-		if(c4.QuadPart<c3.QuadPart)		//(ovviamente si pianta nei test timer/DMA... GLABios, PCXTBios va
-			goto rallenta;
 
 
 //printf("Pipe1: %02x, Pipe2w: %04x, Pipe2b1: %02x,%02x\n",Pipe1,Pipe2.word,Pipe2.bytes.byte1,Pipe2.bytes.byte2);
@@ -1052,224 +1055,21 @@ fineRep:
       }
 
 
-		if(debug) {
-			char myBuf[256],myBuf2[32];
-			myBuf2[15]=_f.Carry ? 'C' : ' ';
-			myBuf2[14]='-';
-			myBuf2[13]=_f.Parity ? 'P' : ' ';
-			myBuf2[12]='-';
-			myBuf2[11]=_f.Aux ? 'A' : ' ';
-			myBuf2[10]='-';
-			myBuf2[9]=_f.Zero ? 'Z' : ' ';
-			myBuf2[8]=_f.Sign ? 'S' : ' ';
-			myBuf2[7]=_f.Trap ? 'T' : ' ';
-			myBuf2[6]=_f.IF ? 'I' : ' ';
-			myBuf2[5]=_f.Dir ? 'D' : ' ';
-			myBuf2[4]=_f.Ovf ? 'O' : ' ';
-#ifdef EXT_80286
-			myBuf2[3]=_f.IOPL+'0';
-			myBuf2[2]='o';
-			myBuf2[1]=_f.NestedTask ? 'N' : ' ';
-#else
-			myBuf2[3]=myBuf2[2]=myBuf2[1]='x';
-#endif
-#ifdef EXT_NECV20
-			myBuf2[0]=_f.MD ? 'M' : ' ';
-#else
-			myBuf2[0]='-';
-#endif
-#ifdef EXT_80286
-			myBuf2[16]=myBuf2[17]=' ';
-			myBuf2[18]=_msw.PE ? 'P' : 'R';
-			myBuf2[19]=_msw.MP ? '7' : ' ';
-			myBuf2[20]=_msw.EM ? 'E' : ' ';
-			myBuf2[21]=_msw.TS ? 'T' : ' ';
-			myBuf2[22]=0;
-			if(_msw.PE) {
-				wsprintf(myBuf,"%08x  %04x %04x %04x %04x  %08x  %08x  %08x  %04x %04x (%22s)  %02X %02X\n",
-					MAKELONG(_ip,_cs->d.BaseH),
-					_ax,_bx,_cx,_dx, MAKELONG(_sp,_ss->d.BaseH),
-					MAKELONG(_si,_ds->d.BaseH),
-					MAKELONG(_di,_es->d.BaseH), _bp, _f.x,myBuf2, GetPipe(_cs,_ip) , GetPipe(_cs,(uint16_t)(_ip+1)));
-				}
-			else {
-				wsprintf(myBuf,"%04x:%04x %04x %04x %04x %04x %04x:%04x %04x:%04x %04x:%04x %04x %04x (%22s)  %02X %02X\n",
-					_cs->s.x,_ip,
-					_ax,_bx,_cx,_dx, _ss->s.x,_sp,
-					_ds->s.x,_si, _es->s.x,_di, _bp, _f.x,myBuf2, GetPipe(_cs,_ip) , GetPipe(_cs,(uint16_t)(_ip+1)));
-				}
-			_lwrite(spoolFile/*myFile*/,myBuf,strlen(myBuf));
-#else
-			myBuf2[16]=0;
-			wsprintf(myBuf,"%04x:%04x %04x %04x %04x %04x %04x:%04x %04x:%04x %04x:%04x %04x %04x (%22s)  %02X %02X\n",_cs->s.x,_ip,
-				_ax,_bx,_cx,_dx, _ss->s.x,_sp,
-				_ds->s.x,_si, _es->s.x,_di, _bp, _f.x,myBuf2, GetPipe(_cs,_ip) , GetPipe(_cs,_ip+1));
-			_lwrite(spoolFile/*myFile*/,myBuf,strlen(myBuf));
-#endif
-
-			{BYTE src[16];
-			src[0]=GetPipe(_cs,_ip);
-			src[1]=GetPipe(_cs,(uint16_t)(_ip+1));
-			src[2]=GetPipe(_cs,(uint16_t)(_ip+2));
-			src[3]=GetPipe(_cs,(uint16_t)(_ip+3));
-			src[4]=GetPipe(_cs,(uint16_t)(_ip+4));
-			src[5]=GetPipe(_cs,(uint16_t)(_ip+5));
-			Disassemble(src,-1,myBuf,0,_ip,_cs, 1 | 2 | 4 | 8);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-			}
-
-
  
-    if(/*_cs->s.x==0x11e3*/ /*_ip == 0x2c1  ||*/ _ip == 0x2a2 ) {
-      static int T1;
-
-/*									{
-												spoolFile=_lcreat("ram640.bin",0);
-			_lwrite(spoolFile,&ram_seg[0],0xa0000);
-_lclose(spoolFile);
-}*/
-			T1=1;
-
-//			debug=1;
-      }
+/*    if(_ip == 0x01ee) {
+      Nop();
+      Nop();
+      }*/
     
+
     
-//     LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte più veloci
+     LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte più veloci
                     // 500-1uS 22/7/24 con O2! [.9-2uS 16/7/24 senza ottimizzazioni (con O1 si pianta emulatore...
-
-		
-//questa parte equivale a INTA sequenza ecc  http://www.icet.ac.in/Uploads/Downloads/3_mod3.pdf
-    if((i8259IRR & 0x1) && !(i8259IMR & 0x1)) {
-			if(_f.IF) {			// www.brokenthorn.com/Resources/OSDevPic.html  mah, controintuitivo!
-				CPUPins |= DoIRQ;
-	// [COGLIONI! sembra che gli IRQ si attivino PRIMA del ram-test e così fallisce... per il resto sarebbe ok, non si pianta, 17/7/24
-				ExtIRQNum.Vector=i8259ICW[1]+0;      // Timer 0 IRQ; http://www.delorie.com/djgpp/doc/ug/interrupts/inthandlers1.html
-				// occhio cmq a ev. altri settaggi in ICW, e a MCS8085 mode
-				i8259ISR |= 1;	i8259IRR &= ~1;
-				if(i8259ICW[3] & B8(00000010))		// AutoEOI
-					i8259ISR &= ~0x1;
-	      }
-      }
-    else if((i8259IRR & 0x2) && !(i8259IMR & 0x2)) {
-			if(_f.IF) {			// 
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW[1]+1;      // IRQ 9 Keyboard
-				i8259ISR |= 2;	i8259IRR &= ~2;
-				if(i8259ICW[3] & B8(00000010))		// AutoEOI
-					i8259ISR &= ~0x2;
-	      }
-      }
-    else if(!(i8259ICW[2] & 4) && (i8259IRR & 0x4) && !(i8259IMR & 0x4)) {
-//			if(i8259ICW[2] & 4) {			// 4 se c'è slave, quindi evito questo IRQ, direi
-//				}
-			if(_f.IF) {			// 
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW[1]+2;      // ev. 2nd PIC IRQ (cascaded) 
-				i8259ISR |= 4;	i8259IRR &= ~4;
-				if(i8259ICW[3] & B8(00000010))		// AutoEOI
-					i8259ISR &= ~0x4;
-	      }
-      }
-//		retrace EGA/VGA! v.
-
-    else if((i8259IRR & 0x10) && !(i8259IMR & 0x10)) {
-			if(_f.IF) {			// 
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW[1]+4;      // IRQ 12 COM1
-				i8259ISR |= 0x10;	i8259IRR &= ~0x10;
-				if(i8259ICW[3] & B8(00000010))		// AutoEOI
-					i8259ISR &= ~0x10;
-	      }
-      }
-    else if((i8259IRR & 0x20) && !(i8259IMR & 0x20)) {
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: IRQ HD %u\n",timeGetTime(),_f.IF
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
+     // 2025 dopo aggiunte varie, specie seg:ofs, siamo sui 1-1.5uS con O2
+     
+#ifdef USING_SIMULATOR
+// fa cagare, lentissimo anche con baud rate alto     printf("CS:IP=%04X:%04X\n",_cs,_ip);
 #endif
-#endif
-			if(_f.IF) {			// 
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW[1]+5;      // IRQ 5 Hard disc
-				i8259ISR |= 0x20;	i8259IRR &= ~0x20;
-				if(i8259ICW[3] & B8(00000010))		// AutoEOI
-					i8259ISR &= ~0x20;
-	      }
-      }
-    else if((i8259IRR & 0x40) && !(i8259IMR & 0x40)) {
-#ifdef _DEBUG
-#ifdef DEBUG_FD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: IRQ floppy %u\n",timeGetTime(),_f.IF
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
-			if(_f.IF) {			// fa incazzare PCXTBIOS ora...
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW[1]+6;      // IRQ 6 Floppy disc
-				i8259ISR |= 0x40;	i8259IRR &= ~0x40;
-				if(i8259ICW[3] & B8(00000010))		// AutoEOI
-					i8259ISR &= ~0x40;
-	      }
-      }
-#ifdef PCAT
-    else if((i8259IRR2 & 0x1) && !(i8259IMR2 & 0x1)) {
-			if(_f.IF) {			// 
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW2[1]+0;      // IRQ RTC
-				i8259ISR2 |= 1;	i8259IRR2 &= ~1;
-				if(i8259ICW2[3] & B8(00000010))		// AutoEOI
-					i8259ISR2 &= ~0x1;
-	      }
-      }
-    else if((i8259IRR2 & 0x40) && !(i8259IMR2 & 0x40)) {
-#ifdef _DEBUG
-#ifdef DEBUG_HD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: IRQ HD AT %u\n",timeGetTime(),_f.IF
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-#endif
-			if(_f.IF) {			// 
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW2[1]+6;      // IRQ 14 Hard disc AT #1
-				i8259ISR2 |= 0x40;	i8259IRR2 &= ~0x40;
-				if(i8259ICW2[3] & B8(00000010))		// AutoEOI
-					i8259ISR2 &= ~0x40;
-	      }
-      }
-/* per 2° HD    else if((i8259IRR2 & 0x80) && !(i8259IMR2 & 0x80)) {
-#ifdef DEBUG_HD
-			{
-			char myBuf[256];
-			wsprintf(myBuf,"%u: IRQ HD2 AT %u\n",timeGetTime(),_f.IF
-				);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-#endif
-			if(_f.IF) {			// 
-				CPUPins |= DoIRQ;
-				ExtIRQNum.Vector=i8259ICW2[1]+7;      // IRQ 15 Hard disc AT #2
-				i8259ISR2 |= 0x80;	i8259IRR2 &= ~0x80;
-				if(i8259ICW2[3] & B8(00000010))		// AutoEOI
-					i8259ISR2 &= ~0x80;
-	      }
-      }
-			*/
-#endif
-
-
 // http://www.mlsite.net/8086/  per hex-codes
 #ifdef EXT_80286
 		oldIp=_ip;
@@ -1988,9 +1788,9 @@ FFFF:000F                Top of 8086 / 88 address space*/
 											goto exception286;
 											}
 										if(Pipe2.reg==4)
-											_f.Zero=(sd->Access.b & B8(00000001)) == B8(00000000) ? 1 :0;		// boh readable
+											_f.Zero=(sd->Access.b & 0b00000001) == 0b00000000 ? 1 :0;		// boh readable
 										else
-											_f.Zero=(sd->Access.b & B8(00001010)) == B8(00001000) ? 1 :0;		// writable
+											_f.Zero=(sd->Access.b & 0b00001010) == 0b00001000 ? 1 :0;		// writable
 										}
 										break;
 									}
@@ -2032,9 +1832,9 @@ FFFF:000F                Top of 8086 / 88 address space*/
 											goto exception286;
 											}
 										if(Pipe2.reg==4)
-											_f.Zero=(sd->Access.b & B8(00000001)) == B8(00000000) ? 1 :0;		// boh readable
+											_f.Zero=(sd->Access.b & 0b00000001) == 0b00000000 ? 1 :0;		// boh readable
 										else
-											_f.Zero=(sd->Access.b & B8(00001010)) == B8(00001000) ? 1 :0;		// writable
+											_f.Zero=(sd->Access.b & 0b00001010) == 0b00001000 ? 1 :0;		// writable
 										}
 										break;
 									}
@@ -4316,7 +4116,7 @@ jmp_short:
 #endif
         if(s == &segs.r[2]) {  // se SS...
 #ifdef EXT_80286
-					if((s->d.Access.b & B8(00001010)) != B8(00000010)) {/*data, writable*/
+					if((s->d.Access.b & 0b00001010) != 0b00000010) {/*data, writable*/
 						Exception86.descr.ud=EXCEPTION_GP;
 						goto exception286;
 						}
@@ -5934,7 +5734,7 @@ res3.x=_ax;
 			Exception86.descr.ud=EXCEPTION_NOMATH;
 
 
-#pragma message			qua niente push parm !!
+//#pragma message			qua niente push parm !!
 
 			Exception86.parm=Pipe1;
 
@@ -6289,7 +6089,6 @@ Trap:
 					}
 #endif
 			  CPUPins |= DoHalt;
-				SetWindowText(hStatusWnd,"HALT");
 				debug=0;		// beh se no riempie il log di roba
 				break;
 
@@ -6934,20 +6733,9 @@ _lclose(spoolFile);
 				break;
         
 			default:
-				{
-					char myBuf[128];
+
 unknown_istr:
-#ifdef EXT_80286
-				wsprintf(myBuf,"Istruzione sconosciuta a %04x:%04x: %02x %02x %02x",
-					_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip-1,Pipe1,GetValue(_cs,(uint16_t)(_ip-1)),GetValue(_cs,(uint16_t)(_ip)));
-#else
-				wsprintf(myBuf,"Istruzione sconosciuta a %04x:%04x: %02x %02x %02x",
-					_cs->s.x,_ip-1,Pipe1,GetValue(_cs,(uint16_t)(_ip-1)),GetValue(_cs,(uint16_t)(_ip)));
-#endif
-				SetWindowText(hStatusWnd,myBuf);
-				strcat(myBuf," *********\n");
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-				}
+
 
 #if defined(EXT_80286)
 exception286UD:
@@ -6965,16 +6753,8 @@ exception286ext:
 
 //		if(Exception86.active) 
 				{
-			char myBuf[256];
-      wsprintf(myBuf,"8086 exception %u (%c) %04X:%04X; %08X\r\n",Exception86.descr.ud,Exception86.descr.rw ? 'R' : 'W',
-				_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip, Exception86.addr);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			SetWindowText(hStatusWnd,myBuf);
+
 			Exception86.active=0;
-
-
-//			debug=1;
-
 
 			}
 
@@ -7027,7 +6807,6 @@ exception286ext:
 			}
    
 
-
 //		if((CPUPins & DoNMI) && !inEI) {
 		if((CPUPins & DoNMI) ) {
 			if(!inEI) {
@@ -7052,9 +6831,10 @@ exception286ext:
 
 					if(_msw.PE) {
 		//				union SEGMENT_SELECTOR *ss=(union SEGMENT_SELECTOR *)Pipe2.x.h;
-						struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
+						struct SEGMENT_DESCRIPTOR_TASK_GATE *oldsdg;
+						struct SEGMENT_DESCRIPTOR_TASK_GATE *sd;
 						struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP *sdi;
-						struct TASK_STATE_REGISTER *newtsr,*oldtsr;
+						struct TASK_STATE_REGISTER *tss,*oldtsr;
 
     /*IF ((vector_number « 2) + 3) is not within IDT limit
         THEN #GP; FI; 
@@ -7075,63 +6855,57 @@ exception286ext:
 //							sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
 
 						switch(sdi->Access.Type) {
-							struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-							case 5:		// Task Gate (Segment / Descriptor   v. table B-11
-								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-	//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
+							case 5:		// Task Gate (Segment / Descriptor
 								if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
 									}
 								else {		// intra-level
 									}
-								newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-
-								newtsr->PTSS=_tss.x;
-								memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
-								oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
-
-								oldtsr->Ax=_ax;
-								oldtsr->Bx=_bx;
-								oldtsr->Cx=_cx;
-								oldtsr->Dx=_dx;
-								oldtsr->Bp=_bp;
-								oldtsr->Sp=_sp;
-								oldtsr->Si=_si;
-								oldtsr->Di=_di;
-								oldtsr->Flags.x=_f.x;
-	//							oldtsr->Flags.NestedTask=0;
-								oldtsr->Es=_es->s.x;
-								oldtsr->Ds=_ds->s.x;
-								oldtsr->Ss=_ss->s.x;
-								oldtsr->Cs=_cs->s.x;
-								oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
-
+								tss=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+MAKELONG(sd->Base,0/*sd->BaseH*/)];
+								oldsdg=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+tss->PTSS];
+//								_tss.x=Pipe2.x.h;
+								oldtsr=tss;
+								tss->Ax=_ax;
+								tss->Bx=_bx;
+								tss->Cx=_cx;
+								tss->Dx=_dx;
+								tss->Bp=_bp;
+								tss->Ss=_sp;
+								tss->Si=_si;
+								tss->Di=_di;
+								tss->Flags.x=_f.x;
+								tss->Flags.NestedTask=0;
+								tss->Es=_es->s.x;
+								tss->Ds=_ds->s.x;
+								tss->Ss=_ss->s.x;
+								tss->Cs=_cs->s.x;
+								tss->EntryPoint=_ip+4;			// istruzione seguente questa!
+			//					tss->Ldt=Ldt;
+								tss->PTSS;
+								oldtsr->PTSS;
 								sd->Access.A=1;		// MUST be 0 before!
-								oldsd->Access.A=0;
-								_tsr=newtsr;
-								LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
-								_ax=newtsr->Ax;
-								_bx=newtsr->Bx;
-								_cx=newtsr->Cx;
-								_dx=newtsr->Dx;
-								_bp=newtsr->Bp;
-								_sp=newtsr->Sp;
-								_si=newtsr->Si;
-								_di=newtsr->Di;
-								_f.x=newtsr->Flags.x;
+								oldsdg->Access.A=0;
+								_ax=oldtsr->Ax;
+								_bx=oldtsr->Bx;
+								_cx=oldtsr->Cx;
+								_dx=oldtsr->Dx;
+								_bp=oldtsr->Bp;
+								_sp=oldtsr->Ss;
+								_si=oldtsr->Si;
+								_di=oldtsr->Di;
+								_f.x=tss->Flags.x;
 								_f.NestedTask=1;
-								ASSIGN_SEGMENT(_ss,newtsr->Ss);
-								ASSIGN_SEGMENT(_cs,newtsr->Cs);
-								ASSIGN_SEGMENT(_es,newtsr->Es);
-								ASSIGN_SEGMENT(_ds,newtsr->Ds);
-								_ip=newtsr->EntryPoint;
-								res3.x=oldtsr->Ldt;
-								oldtsr->Ldt=newtsr->Ldt;
-								newtsr->Ldt=res3.x;
+								ASSIGN_SEGMENT(_es,oldtsr->Es);
+								ASSIGN_SEGMENT(_ds,oldtsr->Ds);
+								ASSIGN_SEGMENT(_ss,oldtsr->Ss);
+								ASSIGN_SEGMENT(_cs,oldtsr->Cs);
+								_ip=oldtsr->EntryPoint;
+			//					Ldt=oldtsr->Ldt;
 
+								_tsr=tss;
 								_msw.TS=1;
 								// v. table 8-7 per differenze tra CALL JMP IRET
 
+								_f.NestedTask=1;
 // METTERE										_f.IOPL=sd->Access.DPL;
 
 								break;
@@ -7279,7 +7053,7 @@ they return to the instruction following the division*/
 
 						switch(sdi->Access.Type) {
 							struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-							case 5:		// Task Gate (Segment / Descriptor   v. table B-11
+							case 5:		// Task Gate (Segment / Descriptor
 								tss=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+MAKELONG(sd->Base,0/*sd->BaseH*/)];
 
 								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
@@ -7292,7 +7066,7 @@ they return to the instruction following the division*/
 								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
 
 								newtsr->PTSS=_tss.x;
-								memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
+								_tss.x=sd->Base;
 								oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
 
 								oldtsr->Ax=_ax;
@@ -7325,10 +7099,10 @@ they return to the instruction following the division*/
 								_di=newtsr->Di;
 								_f.x=newtsr->Flags.x;
 								_f.NestedTask=1;
-								ASSIGN_SEGMENT(_ss,newtsr->Ss);
-								ASSIGN_SEGMENT(_cs,newtsr->Cs);
 								ASSIGN_SEGMENT(_es,newtsr->Es);
 								ASSIGN_SEGMENT(_ds,newtsr->Ds);
+								ASSIGN_SEGMENT(_ss,newtsr->Ss);
+								ASSIGN_SEGMENT(_cs,newtsr->Cs);
 								_ip=newtsr->EntryPoint;
 								res3.x=oldtsr->Ldt;
 								oldtsr->Ldt=newtsr->Ldt;
@@ -7416,5854 +7190,7 @@ they return to the instruction following the division*/
 #endif
 
 
+
 		} while(!fExit);
 	}
 
-
-
-#if DEBUG_TESTSUITE
-void singleStep() {
-  register union OPERAND op1,op2;
-  register union RESULT res1,res2,res3;
-  BYTE immofs;		// usato per dato #imm che segue indirizzamento 0..2 (NON registro)
-		// è collegato a GetMorePipe, inoltre
-  register uint16_t i;
-#ifdef EXT_80386
-  BYTE sizeOverride=0,sizeOverrideA=0;
-#endif
-#ifdef EXT_80x87
-  uint16_t status8087=0,control8087=0,tag8087=0;
-  uint16_t dataPtr8087=0,instrPtr8087=0;
-	uint64_t R8087[8];
-#endif
-
-	segOverride=0;
-	inEI=0;
-	inLock=0;
-	inRep=0; inRepStep=0;
-
-
-rifo:
-    switch(inRep) {
-      case 0:
-        break;
-      case 1:   // REPZ/REPE
-				if(!inRepStep)			// se era stato usato REP con istruzione non-stringa...
-          goto fineRep;
-        if(--_cx && _f.Zero) {
-          _ip -= inRepStep;      // v. bug 8088!! così dovrebbe andare.. 22/7/24
-					inEI++;
-					}
-        else
-          goto fineRep;
-        break;
-      case 2:   // REPNZ/REPNE
-				if(!inRepStep)			// se era stato usato REP con istruzione non-stringa...
-          goto fineRep;
-        if(--_cx && !_f.Zero) {
-          _ip -= inRepStep;
-					inEI++;
-					}
-        else
-          goto fineRep;
-        break;
-      case 3:   // REP (v.singoli casi)
-				if(!inRepStep)			// se era stato usato REP con istruzione non-stringa...
-          goto fineRep;
-        if(--_cx) {
-          _ip -= inRepStep;
-					inEI++;
-					}
-        else {
-fineRep:
-          inRep=inRepStep=0;
-					segOverride=0;
-#ifdef EXT_80386
-		      sizeOverride=0;
-#endif
-					inEI=0;
-
-goto fine;
-
-					}
-        break;
-#ifdef EXT_NECV20
-      case 5:   // REPNC
-				if(!inRepStep)			// se era stato usato REP con istruzione non-stringa...
-          goto fineRep;
-        if(--_cx && _f.Carry) {
-          _ip -= inRepStep;
-					inEI++;
-					}
-        else
-          goto fineRep;
-        break;
-      case 6:   // REPC
-				if(!inRepStep)			// se era stato usato REP con istruzione non-stringa...
-          goto fineRep;
-        if(--_cx && !_f.Carry) {
-          _ip -= inRepStep;
-					inEI++;
-					}
-        else
-          goto fineRep;
-        break;
-#endif
-      default:      // al primo giro...
-        inRep &= 0xf;
-				inEI++;
-        break;
-      }
-
-
-// http://www.mlsite.net/8086/  per hex-codes
-#ifdef EXT_80286
-		oldIp=_ip;
-		GetPipe(_cs,_ip++);		// gestire eccezione già qua?? 80286
-		if(Exception86.active) 
-			;
-#else
-		GetPipe(_cs,_ip++);		
-#endif
-// SEGNALIBRO porcodio
-rifo_cache:
-		switch(Pipe1) {
-
-			case 0:     // ADD registro a r/m
-			case 1:
-			case 2:     // ADD r/m a registro
-			case 3:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-								res3.b = res1.b+res2.b;      
-                PutValue(theDs,op2.mem,res3.b);
-                goto aggFlagAB;
-                break;
-              case 1:
-#ifdef EXT_80386
-								if(sizeOverride) {
-									sizeOverrideA;
-									res1.d=GetIntValue(theDs,op2.mem);
-									sizeOverride=0;
-									}
-								else
-#endif
-									res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-        				res3.x = res1.x+res2.x;   
-                PutShortValue(theDs,op2.mem,res3.x);
-                goto aggFlagAW;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-								res3.b = res1.b+res2.b;      
-                *op1.reg8 = res3.b;
-                goto aggFlagAB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-#ifdef EXT_80386
-								if(sizeOverride) {
-									sizeOverrideA;
-									res2.d=GetIntValue(theDs,op2.mem));
-									sizeOverride=0;
-									}
-								else
-#endif
-	                res2.x=GetShortValue(theDs,op2.mem);
-        				res3.x = res1.x+res2.x;   
-                *op1.reg16 = res3.x;
-                goto aggFlagAW;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-								res3.b = res1.b+res2.b;      
-                *op2.reg8=res3.b;
-                goto aggFlagAB;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-#ifdef EXT_80386
-								if(sizeOverride) {
-									sizeOverrideA;
-									res2.d=*op1.reg32;
-									sizeOverride=0;
-									}
-								else
-#endif
-	                res2.x=*op1.reg16;
-        				res3.x = res1.x+res2.x;   
-                *op2.reg16=res3.x;
-                goto aggFlagAW;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-								res3.b = res1.b+res2.b;      
-                *op1.reg8=res3.b;
-                goto aggFlagAB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-        				res3.x = res1.x+res2.x;   
-#ifdef EXT_80386
-								if(sizeOverride) {
-									sizeOverrideA;
-									*op1.reg32=res3.d;
-									sizeOverride=0;
-									}
-								else
-#endif
-	                *op1.reg16=res3.x;
-                goto aggFlagAW;
-                break;
-              }
-            break;
-          }
-				break;
-        
-			case 4:       // ADDB immediate
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b+res2.b;      
-        _al = res3.b;
-				_ip++;
-				
-aggFlagAB:     // carry, ovf, aux, zero, sign, parity
-        _f.Ovf = OVF_ADD_8();
-				_f.Carry=CARRY_ADD_8();
-        
-aggFlagABA:    // aux, zero, sign, parity
-        _f.Aux = AUX_ADD_8();
-
-aggFlagBSZP:    // zero, sign, parity
-				_f.Zero=ZERO_8();
-				_f.Sign=SIGN_8();
-
-aggParity:
-        {
-        BYTE par;
-        par= res3.b >> 1;			// Microchip AN774; https://stackoverflow.com/questions/17350906/computing-the-parity
-        par ^= res3.b;
-        res3.b= par >> 2;
-        par ^= res3.b;
-        res3.b= par >> 4;
-        par ^= res3.b;
-        _f.Parity=par & 1 ? 0 : 1;		// invertito qua pd £$%&/
-        }
-				break;
-
-			case 5:       // ADDW immediate
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x+res2.x;   
-        _ax = res3.x;
-				_ip+=2;
-        
-aggFlagAW:     // carry, ovf, aux, zero, sign, parity
-        _f.Ovf = OVF_ADD_16();
-				_f.Carry=CARRY_ADD_16();
-
-aggFlagAWA:    // aux, zero, sign, parity
-        _f.Aux = AUX_ADD_8();
-        
-aggFlagWSZP:    // zero, sign, parity
-				_f.Zero=ZERO_16();
-				_f.Sign=SIGN_16();
-//        parn= par >> 8;   // no! dice che cmq è solo sul byte basso https://stackoverflow.com/questions/29292455/parity-of-a-number-assembly-8086
-//        par ^= parn;
-				goto aggParity;
-				break;
-        
-			case 6:       // PUSH segment
-			case 0xe:
-			case 0x16:
-			case 0x1e:
-				PUSH_STACK(segs.r[(Pipe1 >> 3) & 3].s.x);
-				break;
-        
-			case 0xf:       // non esiste POP CS (abbastanza logico); istruzioni 286/MMX/386/(V20) qua...
-				_ip++;
-
-//     		switch(GetPipe(_cs,++_ip))) {
-//#warning PATCH MiniBIOS per caricare DOS...
-        
-        switch(Pipe2.b.l) {
-
-#if 0
-          case 0x0:      // "putchar" da emulatore Tiny... lo lascio per alcuni casi tipo int10h tty
-//            _mon_putc(_al);
-            break;
-          case 0x01:      // leggere da 146818 o meglio farlo da bios!
-            break;
-          case 0x2:      // read-disk, pseudo-load MBR :)
-            switch(_al) {
-              case 0:   // (pseudo) settori :) ma è in CH/CL...
-//                memcpy(&ram_seg[_bx /*0x007c00*/],MBR, 512 /*sizeof(MBR)*/);
-                _ah=0;
-                _al=1  /*sizeof(MBR)/512*/;
-                _f.Carry=0;     //ritorno OK
-                break;
-              case 1:
-//                memcpy(&ram_seg[_bx /*0x000700*/],iosys, 512 /*sizeof(iosys)*/);
-                _ah=0;
-                _al=1  /*sizeof(iosys)/512*/;
-                _f.Carry=0;     //ritorno OK
-                break;
-/*
-
-	https://github.com/microsoft/MS-DOS/tree/master/v2.0
-
-	anche
-
-
-SEG_DOS_TEMP    equ     0xE0            ; segment in which DOS was loaded
-SEG_DOS         equ     0xB1            ; segment in which DOS will run
-SEG_BIO         equ     0x60            ; segment in which BIO is running
-
-
-
-0000:0000                Interrupt vector table
-0040:0000                ROM BIOS data area
-0050:0000                DOS parameter area
-0070:0000                IBMBIO.COM / IO.SYS * opp 60!
-mmmm:mmmm                IBMDOS.COM / MSDOS.SYS *
-mmmm:mmmm                CONFIG.SYS - specified information
-                         (device drivers and internal buffers
-mmmm:mmmm                Resident COMMAND.COM
-mmmm:mmmm                Master environment
-mmmm:mmmm                Environment block #1
-mmmm:mmmm                Application program #1
-     .                        .      .                        .      .                        .
-mmmm.mmmm                Environment block #n
-mmmm:mmmm                Application #n
-xxxx:xxxx                Transient COMMAND.COM
-A000:0000                Video buffers and ROM
-FFFF:000F                Top of 8086 / 88 address space*/
-              case 2:
-//                memcpy(&ram_seg[_di /*(0x000700+sizeof(iosys)+15) & 0xffff0*/],msdossys,sizeof(msdossys));
-                break;
-              case 3:
-//                memcpy(&ram_seg[_di /*(0x000700+sizeof(iosys)+sizeof(msdossys)+15) & 0xffff0*/],commandcom,sizeof(commandcom));
-                break;
-
-              default:
-                _f.Carry=1;     //ritorno no
-                break;
-              }
-            break;
-
-            
-//          case 0x1 0x2 0x3:      // altro da emulatore Tiny... CAMBIARE!
-          case 0x3:      // write-disk, usare Flash! DEE ecc
-            _f.Carry=1;     //ritorno no
-            break;
-
-#endif
-
-#ifndef EXT_NECV20
-          case 0xff:      // TRAP
-//            Nop();
-            break;
-#endif
-            
-
-#ifdef EXT_NECV20
-					case 0x10:						// TEST1, CLR1, SET1, NOT1 , cl
-					case 0x11:// (OCCHIO pare che SET1 possa andare anche su Carry o su DIR... verificare, anche le altre!
-					case 0x12:// ah no che frociata, sono le altre istruzioni, STC STD porcamadonna gli umani col cancro!!
-					case 0x13:
-					case 0x14:
-					case 0x15:
-					case 0x16:
-					case 0x17:
-  					GetPipe(_cs,(uint16_t)(_ip-1));
-						COMPUTE_RM
-								if(!(Pipe1 & 1))
-									res1.b=GetValue(theDs,op2.mem);
-								else
-									res1.x=GetShortValue(theDs,op2.mem);
-								switch((Pipe1 >> 1) & 0x3) {
-									case 0:
-										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (_cl & 0x7));
-											goto aggFlagBZC;
-											}
-										else {
-											res3.x= res1.x & (1 << (_cl & 0xf));
-											goto aggFlagWZC;
-											}
-										break;
-									case 1:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b & ~(1 << (_cl & 0x7));
-										else
-											res3.x= res1.x & ~(1 << (_cl & 0xf));
-										break;
-									case 2:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b | (1 << (_cl & 0x7));
-										else
-											res3.x= res1.x | (1 << (_cl & 0xf));
-										break;
-									case 3:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b ^ (1 << (_cl & 0x7));
-										else
-											res3.x= res1.x ^ (1 << (_cl & 0xf));
-										break;
-									}
-								if(!(Pipe1 & 1))
-									PutValue(theDs,op2.mem,res3.b);
-								else
-									PutShortValue(theDs,op2.mem,res3.x);
-								break;
-							case 3:
-								GET_REGISTER_8_16_2
-								if(!(Pipe1 & 1))
-									res1.b=*op2.reg8;
-								else
-									res1.x=*op2.reg16;
-								switch((Pipe1 >> 1) & 0x3) {
-									case 0:
-										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (_cl & 0x7));
-											goto aggFlagBZC;
-											}
-										else {
-											res3.x= res1.x & (1 << (_cl & 0xf));
-											goto aggFlagWZC;
-											}
-										break;
-									case 1:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b & ~(1 << (_cl & 0x7));
-										else
-											res3.x= res1.x & ~(1 << (_cl & 0xf));
-										break;
-									case 2:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b | (1 << (_cl & 0x7));
-										else
-											res3.x= res1.x | (1 << (_cl & 0xf));
-										break;
-									case 3:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b ^ (1 << (_cl & 0x7));
-										else
-											res3.x= res1.x ^ (1 << (_cl & 0xf));
-										break;
-									}
-								if(!(Pipe1 & 1))
-	                *op2.reg8=res3.b;
-								else
-	                *op2.reg16=res3.x;
-								break;
-							}
-            break;
-					case 0x18:						// TEST1, CLR1, SET1, NOT1 , #imm
-					case 0x19:
-					case 0x1a:
-					case 0x1b:
-					case 0x1c:
-					case 0x1d:
-					case 0x1e:
-					case 0x1f:
-  					GetMorePipe(_cs,_ip-1);
-						COMPUTE_RM
-								if(!(Pipe1 & 1))
-									res1.b=GetValue(theDs,op2.mem);
-								else
-									res1.x=GetShortValue(theDs,op2.mem);
-								_ip++;
-								switch((Pipe1 >> 1) & 0x3) {
-									case 0:
-										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (Pipe2.b.u & 0x7));			// VERIFICARE DOV'è IMM8!!
-											goto aggFlagBZC;
-											}
-										else {
-											res3.x= res1.x & (1 << (Pipe2.b.u & 0xf));
-											goto aggFlagWZC;
-											}
-										break;
-									case 1:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b & ~(1 << (Pipe2.b.u & 0x7));
-										else
-											res3.x= res1.x & ~(1 << (Pipe2.b.u & 0xf));
-										break;
-									case 2:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b | (1 << (Pipe2.b.u & 0x7));
-										else
-											res3.x= res1.x | (1 << (Pipe2.b.u & 0xf));
-										break;
-									case 3:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b ^ (1 << (Pipe2.b.u & 0x7));
-										else
-											res3.x= res1.x ^ (1 << (Pipe2.b.u & 0xf));
-										break;
-									}
-								if(!(Pipe1 & 1))
-									PutValue(theDs,op2.mem,res3.b);
-								else
-									PutShortValue(theDs,op2.mem,res3.x);
-								break;
-							case 3:
-								GET_REGISTER_8_16_2
-								if(!(Pipe1 & 1))
-									res1.b=*op2.reg8;
-								else
-									res1.x=*op2.reg16;
-								_ip++;
-								switch((Pipe1 >> 1) & 0x3) {
-									case 0:
-										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (Pipe2.b.u & 0x7));
-											goto aggFlagBZC;
-											}
-										else {
-											res3.x= res1.x & (1 << (Pipe2.b.u & 0xf));
-											goto aggFlagWZC;
-											}
-										break;
-									case 1:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b & ~(1 << (Pipe2.b.u & 0x7));
-										else
-											res3.x= res1.x & ~(1 << (Pipe2.b.u & 0xf));
-										break;
-									case 2:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b | (1 << (Pipe2.b.u & 0x7));
-										else
-											res3.x= res1.x | (1 << (Pipe2.b.u & 0xf));
-										break;
-									case 3:
-										if(!(Pipe1 & 1))
-											res3.b= res1.b ^ (1 << (Pipe2.b.u & 0x7));
-										else
-											res3.x= res1.x ^ (1 << (Pipe2.b.u & 0xf));
-										break;
-									}
-								if(!(Pipe1 & 1))
-	                *op2.reg8=res3.b;
-								else
-	                *op2.reg16=res3.x;
-								break;
-							}
-            break;
-					case 0x20:					// ADD4S
-						{BYTE j=0;
-						uint16_t di1=_di,si1=_si;
-						i=(((uint16_t)_cl)+1) >> 1;
-						_f.Zero=1;
-						while(i--) {
-							res1.b=GetValue(theDs,si1);
-							res2.b=GetValue(_es,di1);
-              res1.b = (res1.b >> 4)*10 + (res1.b & 0xf);
-              res2.b = (res2.b >> 4)*10 + (res2.b & 0xf);
-              res3.b = res1.b + res2.b + j;
-              if(res3.b>99) 
-								j=1; 
-							else 
-								j=0;
-              res3.b = res3.b % 100;
-              res3.b = ((res3.b/10) << 4) | (res3.b % 10);
-
-							if(j)
-								_f.Carry=1;
-							if(res3.b)
-								_f.Zero=0;
-
-							PutValue(_es,_di,res3.b);
-							si1++;
-							di1++;
-							}
-						}
-            break;
-					case 0x22:					// SUB4S
-						{BYTE j=0;
-						uint16_t di1=_di,si1=_si;
-						i=(((uint16_t)_cl)+1) >> 1;
-						_f.Zero=1;
-						while(i--) {
-							res1.b=GetValue(theDs,si1);
-							res2.b=GetValue(_es,di1);
-              res1.b = (res1.b >> 4)*10 + (res1.b & 0xf);
-              res2.b = (res2.b >> 4)*10 + (res2.b & 0xf);
-              if(res1.b < (res2.b+j)) {
-                res1.b = res1.b + 100;
-                res3.b = res1.b - (res2.b+j);
-                i= 1;
-	              }
-              else  {
-                res3.b = res1.b - (res2.b+j);
-                i= 0;
-								}
-              res3.b = ((res3.b/10)<<4) | (res3.b % 10);
-
-							if(j)
-								_f.Carry=1;
-							if(res3.b)
-								_f.Zero=0;
-
-							PutValue(_es,_di,res3.b);
-							si1++;
-							di1++;
-							}
-						}
-            break;
-					case 0x26:					// CMP4S
-						{BYTE j=0;
-						uint16_t di1=_di,si1=_si;
-						i=(((uint16_t)_cl)+1) >> 1;
-						_f.Zero=1;
-						while(i--) {
-							res1.b=GetValue(theDs,si1);
-							res2.b=GetValue(_es,di1);
-              res1.b = (res1.b >> 4)*10 + (res1.b & 0xf);
-              res2.b = (res2.b >> 4)*10 + (res2.b & 0xf);
-              if(res1.b < (res2.b+j)) {
-                res1.b = res1.b + 100;
-                res3.b = res1.b - (res2.b+j);
-                i= 1;
-	              }
-              else  {
-                res3.b = res1.b - (res2.b+j);
-                i= 0;
-								}
-              res3.b = ((res3.b/10)<<4) | (res3.b % 10);
-
-							if(j)
-								_f.Carry=1;
-							if(res3.b)
-								_f.Zero=0;
-
-							si1++;
-							di1++;
-							}
-						}
-            break;
-					case 0x28:					// ROL4
-					case 0x2a:					// ROR4
-  					GetPipe(_cs,(uint16_t)(_ip-1));
-						COMPUTE_RM
-								res1.b=GetValue(theDs,op2.mem);
-								res2.b=_al;
-								if(Pipe1 == 0x28) {
-                  res2.b = (_al << 4) | (res1.b >> 4);
-                  res3.b = (res1.b << 4) | (_al & 0x0f); 
-									}
-								else {
-                  res2.b = (res1.b & 0xf) | (res1.b & 0xf0) /*da test (_al & 0xf0)*/; 
-                  res3.b = (res1.b >> 4) | (_al << 4);
-									}
-                _al=res2.b;
-								PutValue(theDs,op2.mem,res3.b);
-								break;
-							case 3:
-								GET_REGISTER_8_16_2
-								res1.b=*op2.reg8;
-								res2.b=_al;
-								// secondo i test, a diff. del doc, se AL è operando (idiota) NON viene ruotato del tutto! (ovviamente il coglio-coglio lo fa...
-								if(Pipe1 == 0x28) {
-                  res2.b = (_al << 4) | (res1.b >> 4);
-                  res3.b = (res1.b << 4) | ((op2.reg8 != &_al ? _al : res2.b)  & 0xf); 
-									}
-								else {
-									res2.b = (res1.b & 0xf) | (res1.b & 0xf0) /*da test (_al & 0xf0)*/; 
-									res3.b = (res2.b >> 4) | (_al << 4);
-									}
-	              _al=res2.b;
-		            *op2.reg8=res3.b;
-								break;
-							}
-            break;
-					case 0x31:					// INS BINS
-					case 0x39:
-						{BYTE j1,j2;
-						uint32_t mask;
-  					GetPipe(_cs,(uint16_t)(_ip-1));
-/*						if(segOverride) {		// QUA NO! (STRAPORCICRISTI si può fare override ma il manuale dice di no (v.test
-							theDs=&segs.r[segOverride-1].x;
-							segOverride=0;
-							}
-						else*/
-							theDs=_es;
-					  op1.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
-						j1=*op1.reg8 & 0xf;
-						res1.d=(uint32_t)_ax << j1;
-						res2.d=MAKELONG(GetShortValue(theDs,_di),GetShortValue(theDs,_di+2));
-						// Pipe2.mod=0b11 verificare e dare errore
-						if(Pipe1 & 8) {
-							j2=Pipe2.b.h & 0xf;
-							_ip+=2;
-							}
-						else {
-							op2.reg8= Pipe2.reg & 0x4 ? &regs.r[Pipe2.reg & 0x3].b.h : &regs.r[Pipe2.reg & 0x3].b.l;
-							j2=*op2.reg8 & 0xf;
-							_ip++;
-							}
-						*op1.reg8 += j2+1;
-						mask= 1L << j1;
-						if(j2) {
-							while(j2--) {
-								uint32_t oldmask=mask;
-								mask <<= 1;
-								mask |= oldmask;
-								}
-							}
-
-						// patch se al o ah sono usati, direi ovvia cazzata!
-//						res1.d=(DWORD)_ax << j1;
-
-
-						res1.d &= mask;
-						res3.d=res2.d & ~mask;
-						res3.d |= res1.d;
-
-						PutShortValue(theDs,_di,res3.x);
-						PutShortValue(theDs,_di+2,HIWORD(res3.d));
-						if(*op1.reg8 > 15) {
-							*op1.reg8 &= 15;
-							_di+=2;						// sempre ++ ??
-							}
-						// flag a cazzo da test, solito; manuale dice nulla
-						}
-            break;
-					case 0x33:					// EXT BEXT
-					case 0x3b:
-						{BYTE j1,j2;
-						uint32_t mask;
-  					GetPipe(_cs,(uint16_t)(_ip-1));
-						OVERRIDE_SEG(_ds);		// PORCICRISTI si può fare override ma il manuale dice di no (v.test
-					  op1.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
-						j1=*op1.reg8 & 0xf;
-						res1.d=MAKELONG(GetShortValue(theDs,_si),GetShortValue(theDs,_si+2));
-						// Pipe2.mod=0b11 verificare e dare errore
-						if(Pipe1 & 8) {
-							j2=Pipe2.b.h & 0xf;
-							_ip+=2;
-							}
-						else {
-							op2.reg8= Pipe2.reg & 0x4 ? &regs.r[Pipe2.reg & 0x3].b.h : &regs.r[Pipe2.reg & 0x3].b.l;
-							j2=*op2.reg8 & 0xf;
-							_ip++;
-							}
-						*op1.reg8 += j2+1;
-						mask= 1L << j1;
-						if(j2) {
-							while(j2--) {
-								uint32_t oldmask=mask;
-								mask <<= 1;
-								mask |= oldmask;
-								}
-							}
-						res1.d &= mask;
-
-						_ax = res1.d >> j1;
-						if(!_ax)
-							i=1;
-						if(*op1.reg8 > 15) {
-							*op1.reg8 &= 15;
-							_si+=2;						// sempre ++ ??
-							}
-						// flag a cazzo da test, solito; manuale dice nulla
-						}
-            break;
-
-					case 0xff:					// BRKMM
-						// entra in modalità 8080!!
-						_f.MD=0;
-            break;
-#endif
-
-#ifdef EXT_80286
-          case 0x0:      // LLDT/LTR/SLDT/STR/VERW
-						if(_cs->s.RPL>0)
-							goto exception286priv;
-  					GetPipe(_cs,(uint16_t)(_ip-1));
-						COMPUTE_RM
-								switch(Pipe2.reg) {
-									case 0:		// SLDT
-										PutShortValue(theDs,(uint16_t)(op2.mem),LDTR ? (uint16_t)(LDTR-MAKELONG(GDTR.Base,GDTR.BaseH)) : 0);		// 
-										break;
-									case 2:		// LLDT
-										LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+GetShortValue(theDs,(uint16_t)op2.mem)]);
-										break;
-									case 1:		// STR
-										PutShortValue(theDs,op2.mem,_tss.x);
-										break;
-									case 3:		// LTR
-										_tss.x=GetShortValue(theDs,op2.mem);
-										{
-										struct SEGMENT_DESCRIPTOR_SYSTEM *sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-										struct SEGMENT_DESCRIPTOR_TSS *sdt=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-// USARE! verificare packing										sdt->Access.Type.Busy=1;
-										_tsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-										LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
-										sds->Access.Type |= 2;			//.Busy=1;   è il b1 del Type del selector del tss!
-										}
-										break;
-									case 4:		// VERR
-									case 5:		// VERW
-										{
-										union SEGMENT_SELECTOR ss;
-										struct SEGMENT_DESCRIPTOR *sd=NULL;
-										ss.x=GetShortValue(theDs,op2.mem);
-										if(ss.TI && LDTR)
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(LDTR->Base,LDTR->BaseH)+(ss.Index << 3)];
-										else
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(ss.Index << 3)];
-										if(!sd) {
-											// finire
-											goto exception286;
-											}
-										if(Pipe2.reg==4)
-											_f.Zero=(sd->Access.b & B8(00000001)) == B8(00000000) ? 1 :0;		// boh readable
-										else
-											_f.Zero=(sd->Access.b & B8(00001010)) == B8(00001000) ? 1 :0;		// writable
-										}
-										break;
-									}
-								break;
-							case 3:
-								GET_REGISTER_8_16_2
-								switch(Pipe2.reg) {
-									case 0:		// SLDT
-										*op2.reg16=LDTR ? (uint16_t)(LDTR-MAKELONG(GDTR.Base,GDTR.BaseH)) : 0;		// 
-										break;
-									case 2:		// LLDT
-										LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+*op2.reg16]);
-										break;
-									case 1:		// STR
-										*op2.reg16=_tss.x;
-										break;
-									case 3:		// LTR
-										_tss.x=*op2.reg16;
-										{
-										struct SEGMENT_DESCRIPTOR_SYSTEM *sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-										struct SEGMENT_DESCRIPTOR_TSS *sdt=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-// USARE! verificare packing										sdt->Access.Type.Busy=1;
-										_tsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-										sds->Access.Type |= 2;			//.Busy=1;   è il b1 del Type del selector del tss!
-										}
-										break;
-									case 4:		// VERR
-									case 5:		// VERW
-										{
-										union SEGMENT_SELECTOR ss;
-										struct SEGMENT_DESCRIPTOR *sd=NULL;
-										ss.x=*op2.reg16;
-										if(ss.TI && LDTR)
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(LDTR->Base,LDTR->BaseH)+(ss.Index << 3)];
-										else
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(ss.Index << 3)];
-										if(!sd) {
-											// finire
-											goto exception286;
-											}
-										if(Pipe2.reg==4)
-											_f.Zero=(sd->Access.b & B8(00000001)) == B8(00000000) ? 1 :0;		// boh readable
-										else
-											_f.Zero=(sd->Access.b & B8(00001010)) == B8(00001000) ? 1 :0;		// writable
-										}
-										break;
-									}
-								break;
-							}
-            break;
-          case 0x1:      // LGDT/LIDT/LMSW/SMSW/SGDT/SIDT
-						if(_cs->s.RPL>0)
-							goto exception286priv;
-  					GetPipe(_cs,(uint16_t)(_ip-1));
-						COMPUTE_RM
-								switch(Pipe2.reg) {
-									case 4:		// SMSW
-										PutShortValue(theDs,op2.mem,_msw.x);
-										break;
-									case 1:		// SIDT
-										for(i=0; i<5; i++)
-											PutValue(theDs,(uint16_t)(op2.mem+i),IDTR.b[i]);		// 
-										PutValue(theDs,(uint16_t)(op2.mem+5),0xff);		// 
-										break;
-									case 0:		// SGDT
-										for(i=0; i<5; i++)
-											PutValue(theDs,(uint16_t)(op2.mem+i),GDTR.b[i]);		// 
-										PutValue(theDs,(uint16_t)(op2.mem+5),0xff);		// 
-										break;
-									case 3:		// LIDT
-										for(i=0; i<5; i++)
-											IDTR.b[i]=GetValue(theDs,(uint16_t)(op2.mem+i));		// 
-										break;
-									case 2:		// LGDT
-										for(i=0; i<5; i++)
-											GDTR.b[i]=GetValue(theDs,(uint16_t)(op2.mem+i));		// 
-										break;
-									case 6:		// LMSW
-//										GetPipe(_cs,_ip);		// riempio cache
-//										GetMorePipe(_cs,_ip);
-
-										_msw.x=GetShortValue(theDs,op2.mem) & 0xfffe;
-										_msw.x |= GetShortValue(theDs,op2.mem) & 1;
-										// dice che PE può solo essere settato in sw
-//										GetPipe(_cs,_ip++);
-//										goto rifo_cache;		// per ora, per aspettare ricarica selettori!
-
-
-//										goto flush_cache;			// patch quindi; ora Award funzia anche senza
-										break;
-									}
-								break;
-							case 3:
-								GET_REGISTER_8_16_2
-								switch(Pipe2.reg) {
-									case 0:
-									case 1:
-									case 2:
-									case 3:
-										goto exception286UD;
-										break;
-									case 6:		// LMSW
-										GetPipe(_cs,_ip);		// riempio cache
-										GetMorePipe(_cs,_ip);
-
-
-										_msw.x=*op2.reg16 & 0xfffe;
-										_msw.x |= *op2.reg16 & 1;
-										// dice che PE può solo essere settato in sw
-
-//										GetPipe(_cs,_ip++);
-//										goto rifo_cache;		// per ora, per aspettare ricarica selettori! NO, così non serve
-
-										Pipe2.x.l;
-										Pipe2.x.h;
-
-//														debug=1;
-
-/*			{BYTE src[16];
-			char myBuf[256];
-			src[0]=Pipe1;
-			src[1]=Pipe2.bd[0];
-			src[2]=Pipe2.bd[1];
-			src[3]=Pipe2.bd[2];
-			src[4]=Pipe2.bd[3];
-			src[5]=Pipe2.bd[4];
-			Disassemble(src,-1,myBuf,0,_ip,_cs,7);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			}
-			if(Pipe1==0xea)
-										goto flush_cache;			// patch quindi
-			else {		// phoenix e fox hanno un salto corto dopo LMSW...
-								ASSIGN_SEGMENT(_cs,_cs->s.x);
-			}
-*/
-
-
-										break;
-									case 4:		// SMSW
-										*op2.reg16=_msw.x;
-
-
-//										debug=1;
-
-
-										break;
-									}
-								break;
-
-							}
-
-            break;
-          case 0x2:      // LAR
-						{struct REGISTERS_SEG *rs;
-						if(_cs->s.RPL>0)
-							goto exception286priv;
-						_f.Zero=0;
-  					GetMorePipe(_cs,(uint16_t)(_ip-1));
-						COMPUTE_RM
-
-								rs=(struct REGISTERS_SEG*)GetShortValue(theDs,op2.mem);
-								if(1 /*_f.IOPL>0*/) {
-									*op1.reg16=MAKEWORD(0,*(((uint8_t*)&rs->d)+5));		// Access Rights... fare union??
-									_f.Zero=1;
-									}
-								break;
-							case 3:
-								GET_REGISTER_8_16_2
-								rs=(struct REGISTERS_SEG*)*op2.reg16;
-								if(1 /*_f.IOPL>0*/) {
-									*op1.reg16=MAKEWORD(0,*(((uint8_t*)&rs->d)+5));		// Access Rights... fare union??
-									_f.Zero=1;
-									}
-								break;
-
-							}
-						}
-            break;
-          case 0x3:      // LSL
-						{struct REGISTERS_SEG *rs;
-						if(_cs->s.RPL>0)
-							goto exception286priv;
-  					GetMorePipe(_cs,(uint16_t)(_ip-1));
-						COMPUTE_RM
-
-								rs=(struct REGISTERS_SEG*)GetShortValue(theDs,op2.mem);
-								if(1 /*_f.IOPL>0*/) {
-									*op1.reg16=rs->d.Limit;
-									_f.Zero=1;
-									}
-								break;
-							case 3:
-								GET_REGISTER_8_16_2
-								rs=(struct REGISTERS_SEG*)*op2.reg16;
-								if(1 /*_f.IOPL>0*/) {
-									*op1.reg16=rs->d.Limit;
-									_f.Zero=1;
-									}
-								break;
-
-							}
-						}
-            break;
-          case 0x5:      // LOADALL (undocumented) https://www.rcollins.org/articles/loadall/tspec_a3_doc.html
-						{	
-						if(_cs->s.RPL>0)
-							goto exception286priv;
-						op2.mem=0x800;
-						PutShortValue(&absSeg,(uint16_t)(op2.mem+4),_msw.x);
-						// finire...
-						PutShortValue(&absSeg,(uint16_t)(op2.mem+0x18),_f.x);
-						PutShortValue(&absSeg,(uint16_t)(op2.mem+0x1a),_ip);
-
-						}
-            break;
-          case 0x6:      // CLTS
-						if(_cs->s.RPL>0)
-							goto exception286priv;
-						_msw.TS=0;
-            break;
-#endif
-
-#ifdef EXT_80386
-          case 0x5:      // SYSCALL
-            break;
-          case 0x7:      // LOADALL (undocumented)
-            break;
-          case 0x31:      // RDTSC; si potrebbe mettere anche in 8086??!
-            _eax=c;
-            break;
-          case 0x20:      // MOV
-          case 0x21:
-          case 0x22:
-          case 0x23:
-          case 0x24:
-          case 0x26:
-            break;
-          case 0x34:      // SYSENTER
-            break;
-          case 0x35:      // SYSEXIT
-            break;
-          case 0x6e:      // MOVD
-            break;
-          case 0x6f:      // MOVQ
-            break;
-          case 0x7e:      // MOVD
-            break;
-          case 0x7f:      // MOVQ
-            break;
-          case 0x80:      // JO
-            break;
-          case 0x82:      // JB
-            break;
-          case 0x83:      // JAE
-            break;
-          case 0x84:      // JZ
-            break;
-          case 0x85:      // JNZ
-            break;
-          case 0x86:      // JBE
-            break;
-          case 0x87:      // JA
-            break;
-          case 0x88:      // JS
-            break;
-          case 0x89:      // JNS
-            break;
-          case 0x8a:      // JP
-            break;
-          case 0x8b:      // JNP
-            break;
-          case 0x8c:      // JL
-            break;
-          case 0x8d:      // JGE
-            break;
-          case 0x8e:      // JLE
-            break;
-          case 0x8f:      // JG
-            break;
-          case 0x90:      // SETO
-            
-            break;
-          case 0x91:      // SETNO
-            break;
-          case 0x92:      // SETB
-            break;
-          case 0x93:      // SETAE
-            break;
-          case 0x94:      // SETZ
-            break;
-          case 0x95:      // SETNZ
-            break;
-          case 0x96:      // SETBE
-            break;
-          case 0x98:      // SETS
-            break;
-          case 0x99:      // SETNS
-            break;
-          case 0x9a:      // SETP
-            break;
-          case 0x9b:      // SETNP
-            break;
-          case 0x9c:      // SETL
-            break;
-          case 0x9d:      // SETGE
-            break;
-          case 0x9e:      // SETLE
-            break;
-          case 0x9f:      // SETG
-            break;
-          case 0xa4:      // SHLD
-          case 0xa5:
-            break;
-          case 0xa0:      // PUSHFS
-    				PUSH_STACK(_fs.x);
-            break;
-          case 0xa1:      // POPFS
-    				POP_STACK(_fs);
-            break;
-          case 0xa2:      // CPUID
-            _eax= GenuineIntel  GDIntel2025
-            break;
-          case 0xa8:      // PUSHGS
-    				PUSH_STACK(_gs.x);
-            break;
-          case 0xa9:      // POPGS
-    				POP_STACK(_gs);
-            break;
-          case 0xac:      // SHRD
-          case 0xad:
-            break;
-          case 0xaf:      // IMUL
-            break;
-          case 0xa3:      // BT
-          case 0xba:      // BT, BTC, BTR, BTS
-            break;
-          case 0xab:      // BTS
-            break;
-          case 0xaf:      // MUL
-            break;
-          case 0xb2:      // LSS
-            break;
-          case 0xb3:      // BTR
-            break;
-          case 0xb4:      // LFS
-            break;
-          case 0xb5:      // LGS
-            break;
-          case 0xbb:      // BTC
-            break;
-          case 0xbc:      // BSF
-            break;
-          case 0xbd:      // BSR
-            break;
-          case 0xb6:      // MOVZX
-          case 0xb7:
-            break;
-          case 0xbe:      // MOVSX
-          case 0xbf:
-            break;
-          case 0xc8:      // BYTESWAP
-          case 0xc9:
-          case 0xca:
-          case 0xcb:
-          case 0xcc:
-          case 0xcd:
-          case 0xce:
-          case 0xcf:
-            break;
-//      case 0x0f:				//LSS
-        /* deve seguire B2.. verificare
-#define WORKING_REG regs.r[(Pipe2.reg].x      // CONTROLLARE
-				i=GetShortValue(Pipe2.xm.x);
-				WORKING_REG=GetShortValue(i);
-        i+=2;
-				_ss=GetShortValue(i);
-        _ip+=2;
-        */
-#ifdef EXT_80386
-        			// e se segue b4 b5 è fs o gs!
-#define WORKING_REG regs.r[(Pipe2.reg].x      // CONTROLLARE
-				i=GetShortValue(Pipe2.xm.w);
-				WORKING_REG=GetShortValue(i);
-        i+=2;
-				_fs=GetShortValue(i);
-        _ip+=2;
-#endif
-//				break;
-#endif
-#ifdef EXT_80486
-          case 0x1:      // INVLPG
-            break;
-          case 0x8:      // INVD
-            break;
-          case 0x9:      // WBINVD
-            break;
-          case 0x1f:      // NOP...
-            break;
-          case 0x34:      // SYSENTER
-            break;
-          case 0xa6:      // CMPXCHG/CMPXCHG8B
-          case 0xa7:
-          case 0xb0:
-          case 0xb1:
-          case 0xc7:
-            break;
-          case 0xc0:      // XADD
-          case 0xc1:      // XADD
-            break;
-          case 0x80:      // Jcc near
-          case 0x81:
-          case 0x82:
-          case 0x83:
-          case 0x84:
-          case 0x85:
-          case 0x86:
-          case 0x87:
-          case 0x88:
-          case 0x89:
-          case 0x8a:
-          case 0x8b:
-          case 0x8c:
-          case 0x8d:
-          case 0x8e:
-          case 0x8f:
-            break;
-          case 0x90:      // SETcc
-          case 0x91:
-          case 0x92:
-          case 0x93:
-          case 0x94:
-          case 0x95:
-          case 0x96:
-          case 0x97:
-          case 0x98:
-          case 0x99:
-          case 0x9a:
-          case 0x9b:
-          case 0x9c:
-          case 0x9d:
-          case 0x9e:
-          case 0x9f:
-            break;
-#endif
-					default:
-						goto unknown_istr;
-						break;
-          }
-				break;
-        
-			case 7:         // POP segment
-			case 0x17:
-			case 0x1f:
-				POP_STACK(res3.x);
-				ASSIGN_SEGMENT(&segs.r[(Pipe1 >> 3) & 3],res3.x);
-#ifdef EXT_NECV20	
-				inEI++;			// boh, NECV20 emulator lo fa...
-#endif
-				break;
-
-			case 0x08:      // OR
-			case 0x09:
-			case 0x0a:
-			case 0x0b:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-                res3.b = res1.b | res2.b;
-                PutValue(theDs,op2.mem,res3.b);
-
-aggFlagBZC:
-								_f.Carry=_f.Ovf=0;   // Aux undefined
-#ifdef UNDOCUMENTED_8086
-							  _f.Aux=0;			// pare... da gloriouscow...
-#endif
-								goto aggFlagBSZP;
-                break;
-              case 1:
-                res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-                res3.x = res1.x | res2.x;
-                PutShortValue(theDs,op2.mem,res3.x);
-
-aggFlagWZC:
-								_f.Carry=_f.Ovf=0;   // Aux undefined
-#ifdef UNDOCUMENTED_8086
-							  _f.Aux=0;			// pare... da gloriouscow...
-#endif
-								goto aggFlagWSZP;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-                res3.b = res1.b | res2.b;
-                *op1.reg8 = res3.b;
-								goto aggFlagBZC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=GetShortValue(theDs,op2.mem);
-                res3.x = res1.x | res2.x;
-                *op1.reg16 = res3.x;
-								goto aggFlagWZC;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-                res3.b=res1.b | res2.b;
-                *op2.reg8=res3.b;
-								goto aggFlagBZC;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x=res1.x | res2.x;
-                *op2.reg16=res3.x;
-								goto aggFlagWZC;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-                res3.b=res1.b | res2.b;
-                *op1.reg8=res3.b;
-								goto aggFlagBZC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x=res1.x | res2.x;
-                *op1.reg16=res3.x;
-								goto aggFlagWZC;
-                break;
-              }
-            break;
-          }
-				break;
-
-			case 0x0c:      // OR
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b | res2.b;
-        _al = res3.b;
-				_ip++;
-        goto aggFlagBZC;
-				break;
-
-			case 0x0d:      // OR
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x | res2.x;
-        _ax = res3.x;
-				_ip+=2;
-        goto aggFlagWZC;
-				break;
-
-			case 0x10:     // ADC registro a r/m
-			case 0x11:
-			case 0x12:     // ADC r/m a registro
-			case 0x13:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-								res3.b = res1.b+res2.b+_f.Carry;
-                PutValue(theDs,op2.mem,res3.b);
-
-aggFlagABC:
-								_f.Ovf = OVF_ADC_8();
-								_f.Carry=CARRY_ADC_8();
-				        _f.Aux = AUX_ADC_8();
-								goto aggFlagBSZP;
-                break;
-              case 1:
-                res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-                res3.x = res1.x+res2.x+_f.Carry;
-                PutShortValue(theDs,op2.mem,res3.x);
-
-aggFlagAWC:
-								_f.Ovf = OVF_ADC_16();
-								_f.Carry=CARRY_ADC_16();
-				        _f.Aux = AUX_ADC_8();
-                goto aggFlagWSZP;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-								res3.b = res1.b+res2.b+_f.Carry;      
-                *op1.reg8 = res3.b;
-                goto aggFlagABC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=GetShortValue(theDs,op2.mem);
-                res3.x = res1.x+res2.x+_f.Carry;
-                *op1.reg16 = res3.x;
-                goto aggFlagAWC;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-								res3.b = res1.b+res2.b+_f.Carry;      
-                *op2.reg8=res3.b;
-                goto aggFlagABC;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x = res1.x+res2.x+_f.Carry;
-                *op2.reg16=res3.x;
-                goto aggFlagAWC;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-								res3.b = res1.b+res2.b+_f.Carry;      
-                *op1.reg8=res3.b;
-                goto aggFlagABC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x = res1.x+res2.x+_f.Carry;
-                *op1.reg16=res3.x;
-                goto aggFlagAWC;
-                break;
-              }
-            break;
-          }
-				break;
-
-			case 0x14:        // ADC
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b+res2.b+_f.Carry;
-        _al = res3.b;
-				_ip++;
-        goto aggFlagABC;
-				break;
-
-			case 0x15:        // ADC
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x+res2.x+_f.Carry;   
-        _ax = res3.x;
-				_ip+=2;
-        goto aggFlagAWC;
-				break;
-
-			case 0x18:        // SBB
-			case 0x19:
-			case 0x1a:
-			case 0x1b:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b-_f.Carry;
-                PutValue(theDs,op2.mem,res3.b);
-
-aggFlagSBB:
-								_f.Ovf = OVF_SBB_8();
-								_f.Carry=CARRY_SBB_8();
-				        _f.Aux = AUX_SBB_8();
-                goto aggFlagBSZP;
-                break;
-              case 1:
-                res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x-_f.Carry;
-                PutShortValue(theDs,op2.mem,res3.x);
-
-aggFlagSWB:
-								_f.Ovf = OVF_SBB_16();
-								_f.Carry=CARRY_SBB_16();
-				        _f.Aux = AUX_SBB_8();
-                goto aggFlagWSZP;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-								res3.b = res1.b-res2.b-_f.Carry;      
-                *op1.reg8 = res3.b;
-                goto aggFlagSBB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=GetShortValue(theDs,op2.mem);
-                res3.x = res1.x-res2.x-_f.Carry;
-                *op1.reg16 = res3.x;
-                goto aggFlagSWB;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b-_f.Carry;      
-                *op2.reg8=res3.b;
-                goto aggFlagSBB;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x-_f.Carry;
-                *op2.reg16=res3.x;
-                goto aggFlagSWB;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-								res3.b = res1.b-res2.b-_f.Carry;      
-                *op1.reg8=res3.b;
-                goto aggFlagSBB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x = res1.x-res2.x-_f.Carry;
-                *op1.reg16=res3.x;
-                goto aggFlagSWB;
-                break;
-              }
-            break;
-          }
-				break;
-
-			case 0x1c:        // SBB
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b-res2.b-_f.Carry;      
-        _al = res3.b;
-				_ip++;
-        goto aggFlagSBB;
-				break;
-
-			case 0x1d:        // SBB
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x-res2.x-_f.Carry;   
-        _ax = res3.x;
-				_ip+=2;
-        goto aggFlagSWB;
-				break;
-
-			case 0x20:        // AND
-			case 0x21:
-			case 0x22:
-			case 0x23:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-                res3.b = res1.b & res2.b;
-                PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagBZC;
-                break;
-              case 1:
-                res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-                res3.x = res1.x & res2.x;
-                PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagWZC;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-                res3.b = res1.b & res2.b;
-                *op1.reg8 = res3.b;
-								goto aggFlagBZC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=GetShortValue(theDs,op2.mem);
-                res3.x = res1.x & res2.x;
-                *op1.reg16 = res3.x;
-								goto aggFlagWZC;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-                res3.b = res1.b & res2.b;
-                *op2.reg8=res3.b;
-								goto aggFlagBZC;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x = res1.x & res2.x;
-                *op2.reg16=res3.x;
-								goto aggFlagWZC;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-                res3.b = res1.b & res2.b;
-                *op1.reg8=res3.b;
-								goto aggFlagBZC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x = res1.x & res2.x;
-                *op1.reg16=res3.x;
-								goto aggFlagWZC;
-                break;
-              }
-            break;
-          }
-				break;
-
-			case 0x24:        // AND
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b & res2.b;
-        _al = res3.b;
-				_ip++;
-        goto aggFlagBZC;
-				break;
-
-			case 0x25:        // AND
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x & res2.x;
-        _ax = res3.x;
-				_ip+=2;
-        goto aggFlagWZC;
-				break;
-
-			case 0x26:
-				segOverride=0+1;			// ES
-        inEI++;
-				break;
-
-			case 0x27:				// DAA
-        res3.b=_al;
-				i=_f.Carry;
-        if((_al & 0xf) > 9 || _f.Aux) {
-          res3.b+=6;
-          _f.Carry= i || (res3.b<5 ? 1 : 0);
-          _f.Aux=1;
-          }
-        else
-          _f.Aux=0;
-        if(_al>0x99 || i) {
-          res3.b+=0x60;  
-          _f.Carry=1;
-          }
-        else
-          _f.Carry=0;
-
-#ifdef UNDOCUMENTED_8086
-/*      u8 old_AL = registers[AX]&0xFF;
-        bool weird_special_case = (!flag(F_CARRY)) && flag(F_AUX_CARRY);
-
-        u8 added{};
-
-        set_flag(F_AUX_CARRY, (registers[AX] & 0x0F) > 9 || flag(F_AUX_CARRY));
-        if (flag(F_AUX_CARRY))
-            added += 0x06;
-
-        set_flag(F_CARRY, old_AL > 0x99+(weird_special_case?6:0) || flag(F_CARRY));
-        if (flag(F_CARRY))
-            added += 0x60;
-
-        get_r8(0) += added;
-
-        set_flag(F_OVERFLOW, (old_AL ^ registers[AX]) & (added ^ registers[AX])&0x80);
-				*/
-
-				_f.Ovf=!!(((_al ^ res3.b) ) & 0x80);			// pare... da gloriouscow... 
-#endif
-
-        _al=res3.b;
-#ifdef UNDOCUMENTED_8086
-        goto aggFlagBSZP;
-#endif
-        break;
-        
-			case 0x28:      // SUB
-			case 0x29:
-			case 0x2a:
-			case 0x2b:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b;      
-                PutValue(theDs,op2.mem,res3.b);
-                goto aggFlagSB;
-                break;
-              case 1:
-                res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x;
-                PutShortValue(theDs,op2.mem,res3.x);
-                goto aggFlagSW;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-								res3.b = res1.b-res2.b;      
-                *op1.reg8 = res3.b;
-                goto aggFlagSB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=GetShortValue(theDs,op2.mem);
-                res3.x = res1.x-res2.x;
-                *op1.reg16 = res3.x;
-                goto aggFlagSW;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b;      
-                *op2.reg8=res3.b;
-                goto aggFlagSB;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x;
-                *op2.reg16=res3.x;
-                goto aggFlagSW;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-								res3.b = res1.b-res2.b;      
-                *op1.reg8=res3.b;
-                goto aggFlagSB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x = res1.x-res2.x;
-                *op1.reg16=res3.x;
-                goto aggFlagSW;
-                break;
-              }
-            break;
-          }
-				break;
-
-			case 0x2c:      // SUBB
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b-res2.b;      
-        _al = res3.b;
-				_ip++;
-
-aggFlagSB:     // carry, ovf, aux, zero, sign, parity
-        _f.Ovf = OVF_SUB_8();
-				_f.Carry=CARRY_SUB_8();
-        
-aggFlagSBA:    // aux, zero, sign, parity
-        _f.Aux = AUX_SUB_8();
-        goto aggFlagBSZP;
-				break;
-
-			case 0x2d:			// SUBW
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x-res2.x;   
-        _ax = res3.x;
-				_ip+=2;
-        
-aggFlagSW:     // carry, ovf, aux, zero, sign, parity
-        _f.Ovf = OVF_SUB_16();
-				_f.Carry=CARRY_SUB_16();
-
-aggFlagSWA:    // aux, zero, sign, parity
-        _f.Aux = AUX_SUB_8();
-        goto aggFlagWSZP;
-				break;
-
-			case 0x2e:
-				segOverride=1+1;			// CS
-        inEI++;
-				break;
-
-			case 0x2f:				// DAS
-        res3.b=_al;
-				i=_f.Carry;
-        _f.Carry=0;
-        if((_al & 0xf) > 9 || _f.Aux) {
-          res3.b-=6;
-          _f.Carry= i || (res3.b>=250 ? 1 : 0);
-          _f.Aux=1;
-          }
-        else
-          _f.Aux=0;
-        if(_al>0x9f || i) {
-          res3.b-=0x60;  
-          _f.Carry=1;
-          }
-
-#ifdef UNDOCUMENTED_8086
-/*            u8 old_AL = registers[AX] & 0xFF;
-          bool weird_special_case = (!flag(F_CARRY)) && flag(F_AUX_CARRY);
-
-          u8 subtracted{};
-
-          bool sub_al = ((registers[AX] & 0x0F) > 9 || flag(F_AUX_CARRY));
-          if (sub_al)
-              subtracted += 0x06;
-
-          set_flag(F_AUX_CARRY, sub_al);
-          bool sub_al2 = (old_AL > (0x99+(weird_special_case?6:0)) || flag(F_CARRY));
-          if (sub_al2)
-              subtracted += 0x60;
-
-          get_r8(0) -= subtracted;
-          set_flag(F_CARRY, sub_al2);
-          set_flag(F_ZERO, (registers[AX] & 0xFF) == 0);
-          set_flag(F_SIGN, (registers[AX] & 0x80));
-          set_flag(F_PARITY, byte_parity[registers[AX] & 0xFF]);
-          set_flag(F_OVERFLOW, ((old_AL ^ subtracted) & (old_AL ^ registers[AX]))&0x80);
-					*/
-				_f.Ovf=!!(((_al ^ res3.b) ) & 0x80);			// pare... da gloriouscow... 
-#endif
-
-        _al=res3.b;
-#ifdef UNDOCUMENTED_8086
-        goto aggFlagBSZP;
-#endif
-				break;
-        
-			case 0x30:        // XOR
-			case 0x31:
-			case 0x32:
-			case 0x33:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-                res3.b = res1.b ^ res2.b;
-                PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagBZC;
-                break;
-              case 1:
-                res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-                res3.x = res1.x ^ res2.x;
-                PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagWZC;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-                res3.b = res1.b ^ res2.b;
-                *op1.reg8 = res3.b;
-								goto aggFlagBZC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=GetShortValue(theDs,op2.mem);
-                res3.x = res1.x ^ res2.x;
-                *op1.reg16 = res3.x;
-								goto aggFlagWZC;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-                res3.b= res1.b ^ res2.b;
-                *op2.reg8=res3.b;
-								goto aggFlagBZC;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x= res1.x ^ res2.x;
-                *op2.reg16=res3.x;
-								goto aggFlagWZC;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-                res3.b= res1.b ^ res2.b;
-                *op1.reg8=res3.b;
-								goto aggFlagBZC;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x= res1.x ^ res2.x;
-                *op1.reg16=res3.x;
-								goto aggFlagWZC;
-                break;
-              }
-            break;
-          }
-        break;
-        
-			case 0x34:        // XOR
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b ^ res2.b;
-        _al = res3.b;
-				_ip++;
-        goto aggFlagBZC;
-				break;
-
-			case 0x35:        // XOR
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x ^ res2.x;
-        _ax = res3.x;
-				_ip+=2;
-        goto aggFlagWZC;
-				break;
-
-			case 0x36:
-        segOverride=2+1;			// SS
-        inEI++;
-				break;
-
-			case 0x37:				// AAA
-        if((_al & 0xf) > 9 || _f.Aux) {
-          _ax+=0x106;
-#ifdef UNDOCUMENTED_8086
-					// FARE SEPARATI 1 e 6 gloriouscow
-#endif
-          _f.Aux=1;
-          }
-        else {
-          _f.Aux=0;
-          }
-				_f.Carry=_f.Aux;
-
-#ifdef UNDOCUMENTED_8086
-/*          u16 old_AX = registers[AX];
-          bool add_ax = (registers[AX] & 0x0F) > 9 || flag(F_AUX_CARRY);
-          if (add_ax)
-          {
-              get_r8(0) += 0x06; //AL
-              get_r8(4) += 0x01; //AH
-          }
-          u16 added = registers[AX]-old_AX;
-
-          set_flag(F_AUX_CARRY, add_ax);
-          set_flag(F_CARRY, add_ax);
-          set_flag(F_PARITY, byte_parity[registers[AX]&0xFF]);
-          set_flag(F_ZERO, (registers[AX]&0xFF) == 0);
-          set_flag(F_SIGN, (registers[AX] & 0x80));
-          set_flag(F_OVERFLOW, (old_AX ^ registers[AX]) & (added ^ registers[AX])&0x80);
-
-          get_r8(0) &= 0x0F;
-					*/
-//				_f.Ovf=!!((old_AX ^ _ax) & (added ^ _ax) & 0x80);			// pare... da gloriouscow... 
-#endif
-
-        _al &= 0xf;
-#ifdef UNDOCUMENTED_8086
-        goto aggFlagBSZP;
-#endif
-				break;
-
-			case 0x38:      // CMP
-			case 0x39:
-			case 0x3a:
-			case 0x3b:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=GetValue(theDs,op2.mem);
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b;      
-                goto aggFlagSB;
-                break;
-              case 1:
-                res1.x=GetShortValue(theDs,op2.mem);
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x;
-                goto aggFlagSW;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=GetValue(theDs,op2.mem);
-								res3.b = res1.b-res2.b;      
-                goto aggFlagSB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=GetShortValue(theDs,op2.mem);
-                res3.x = res1.x-res2.x;
-                goto aggFlagSW;
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-                res1.b=*op2.reg8;
-                res2.b=*op1.reg8;
-								res3.b = res1.b-res2.b;      
-                goto aggFlagSB;
-                break;
-              case 1:
-                res1.x=*op2.reg16;
-                res2.x=*op1.reg16;
-                res3.x = res1.x-res2.x;
-                goto aggFlagSW;
-                break;
-              case 2:
-                res1.b=*op1.reg8;
-                res2.b=*op2.reg8;
-								res3.b = res1.b-res2.b;      
-                goto aggFlagSB;
-                break;
-              case 3:
-                res1.x=*op1.reg16;
-                res2.x=*op2.reg16;
-                res3.x = res1.x-res2.x;
-                goto aggFlagSW;
-                break;
-              }
-            break;
-          }
-				break;
-        
-			case 0x3c:      // CMPB
-        res1.b=_al;
-        res2.b=Pipe2.b.l;
-				res3.b = res1.b-res2.b;      
-				_ip++;
-        goto aggFlagSB;
-				break;
-
-			case 0x3d:			// CMPW
-        res1.x=_ax;
-        res2.x=Pipe2.x.l;
-				res3.x = res1.x-res2.x;   
-				_ip+=2;
-        goto aggFlagSW;
-				break;
-
-			case 0x3e:
-        segOverride=3+1;			// DS
-        inEI++;
-				break;
-
- 			case 0x3f:      // AAS
-        if((_al & 0xf) > 9 || _f.Aux) {
-          _al-=6;
-          _ah--;
-          _f.Aux=1;
-          }
-        else {
-          _f.Aux=0;
-          }
-				_f.Carry=_f.Aux;
-
-#ifdef UNDOCUMENTED_8086
-          /*u16 old_AX = registers[AX];
-          bool sub_ax = (registers[AX] & 0x0F) > 9 || flag(F_AUX_CARRY);
-          if (sub_ax)
-          {
-              get_r8(4) -= 1;
-              get_r8(0) -= 6;
-          }
-          u16 subtracted = old_AX-registers[AX];
-          set_flag(F_AUX_CARRY, sub_ax);
-          set_flag(F_CARRY, sub_ax);
-          set_flag(F_ZERO, (registers[AX] & 0xFF) == 0);
-          set_flag(F_SIGN, (registers[AX] & 0x80));
-          set_flag(F_PARITY, byte_parity[registers[AX] & 0xFF]);
-          set_flag(F_OVERFLOW, (old_AX ^ subtracted) & (old_AX ^ registers[AX])&0x80);
-
-          get_r8(0) &= 0x0F;
-					*/
-//					_f.Ovf=!!((old_AX ^ subtracted) & (old_AX ^ _ax) & 0x80);			// pare... da gloriouscow... 
-#endif
-
-        _al &= 0xf;
-#ifdef UNDOCUMENTED_8086
-        goto aggFlagBSZP;
-#endif
-				break;
-        
-			case 0x40:      // INC
-			case 0x41:
-			case 0x42:
-			case 0x43:
-			case 0x44:
-			case 0x45:
-			case 0x46:
-			case 0x47:
-        op2.reg16 = &regs.r[Pipe1 & 0x7].x;
-				res1.x = *op2.reg16;
-				res2.x = 1;
-				res3.x = res1.x+res2.x;
-				*op2.reg16 = res3.x;
-
-aggFlagIncW:
-      	_f.Ovf= res3.x == 0x8000 ? 1 : 0; //V = 1 if x=7FFFH before, else 0
-        goto aggFlagAWA;
-				break;
-
-			case 0x48:      // DEC
-			case 0x49:
-			case 0x4a:
-			case 0x4b:
-			case 0x4c:
-			case 0x4d:
-			case 0x4e:
-			case 0x4f:
-        op2.reg16 = &regs.r[Pipe1 & 0x7].x;
-				res1.x = *op2.reg16;
-				res2.x = 1;
-				res3.x = res1.x-res2.x;
-				*op2.reg16 = res3.x;
-
-aggFlagDecW:
-      	_f.Ovf= res3.x == 0x7fff ? 1 : 0; //V = 1 if x=8000H before, else 0
-        goto aggFlagSWA;
-				break;
-
-			case 0x50:		// PUSH
-			case 0x51:
-			case 0x52:
-			case 0x53:
-			case 0x55:
-			case 0x56:
-			case 0x57:
-        op2.reg16 = &regs.r[Pipe1 & 0x7].x;
-				PUSH_STACK(*op2.reg16);
-				break;
-			case 0x54:
-#ifdef EXT_80286
-				PUSH_STACK(_sp);
-#else
-				PUSH_STACK(_sp/*-2*/);		// pushes the new (decremented by 2) ??
-#endif
-				break;
-
-			case 0x58:		// POP
-			case 0x59:
-			case 0x5a:
-			case 0x5b:
-			case 0x5d:
-			case 0x5e:
-			case 0x5f:
-        op2.reg16 = &regs.r[Pipe1 & 0x7].x;
-				POP_STACK(*op2.reg16);
-				break;
-			case 0x5c:
-        op2.reg16 = &_sp;
-#ifdef EXT_80286
-				POP_STACK(*op2.reg16);
-#else
-				POP_STACK(*op2.reg16);
-				_sp-=2;
-#endif
-				break;
-
-#if defined(EXT_80186) || defined(EXT_NECV20)
-			case 0x60:      // PUSHA
-        res3.x=regs.r[4].x;      // SS pushato INIZIALE!
-        for(i=0; i<4; i++)    // 
-          PUSH_STACK(regs.r[i].x);
-        PUSH_STACK(res3.x);
-        for(i=5; i<8; i++)    // 
-          PUSH_STACK(regs.r[i].x);
-				break;
-			case 0x61:      // POPA
-        for(i=7; i>4; i--)    // 
-          POP_STACK(regs.r[i].x);
-        POP_STACK(i);     // dummy
-        for(i=3; (int16_t)i>=0; i--)
-          POP_STACK(regs.r[i].x);
-				break;
-			case 0x62:        // BOUND
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-            res1.x=GetShortValue(theDs,op2.mem);
-            res2.x=GetShortValue(theDs,(uint16_t)(op2.mem+2));
-						if((int16_t)regs.r[Pipe2.reg].x < (int16_t)res1.x || (int16_t)regs.r[Pipe2.reg].x > (int16_t)res2.x) {   // 
-							// dovrebbe causare un INT 5
-#ifdef EXT_80286
-//							IntIRQNum.Vector=5;
-//							IntIRQNum.Type=0;
-							Exception86.descr.ud=EXCEPTION_BOUND;
-							goto exception286;
-#else
-							IntIRQNum.Vector=5;
-							goto do_irq;
-#endif
-							}
-            break;
-          case 3:
-// non c'è direi						GET_REGISTER_8_16_2
-						goto unknown_istr;
-						break;
-						}
-				break;
-#endif
-#ifdef EXT_80286
-			case 0x63:        // ARPL
-				{	union SEGMENT_SELECTOR sd1,sd2;
-				_f.Zero=0;
-				COMPUTE_RM
-						sd2.x=GetShortValue(theDs,op2.mem);		// 
-						break;
-					case 3:
-						GET_REGISTER_8_16_2
-						sd2.x=*op2.reg16;		// 
-						break;
-					}
-
-				sd1.x=*op1.reg16;		// 
-				// PROVARE verificare
-				if(sd2.RPL<sd1.RPL) {
-					sd2.RPL=sd1.RPL;
-					if(Pipe2.mod == 3)
-						*op2.reg16=sd2.x;
-					else
-						PutShortValue(theDs,op2.mem,sd2.x);
-					_f.Zero=1;
-					}
-				}
-
-				break;
-#endif
-#ifdef EXT_NECV20
-			case 0x63:        // undefined, dice, su V20...
-				COMPUTE_RM
-					}
-				break;
-#endif
-        
-#ifdef EXT_80386
-			case 0x64:
-				segOverride=4+1;			// FS
-        inEI++;
-				break;
-        
-			case 0x65:
-				segOverride=5+1;			// GS
-        inEI++;
-				break;
-#endif
-#ifdef EXT_NECV20
-			case 0x64:
-				inRep=0x15;					// REPNC
-        inEI++;
-				break;
-        
-			case 0x65:
-				inRep=0x16;					// REPC
-				inEI++;		// forse ne fa uno di troppo alla fine, ma ok...
-				break;
-#endif
-        
-#ifdef EXT_80386
-			case 0x66:
-				//invert operand size next instr
-        sizeOverride=2;
-				inEI++;
-        
-     		switch(GetPipe(_cs,++_ip))) {
-          case 0x99:    // anche CDQ
-            _edx= _eax & 0x80000000 ? 0xffffffff : 0;
-    				break;
-          case 0x98:    // anche CWDE
-            _eax |= _ax & 0x8000 ? 0xffff0000 : 0;
-          	break;
-          }
-        
-				break;
-			case 0x67:
-        sizeOverrideA=2;
-				inEI++;
-        
-     		switch(GetPipe(_cs,++_ip))) {
-          case 0x63:      // JCXZ
-            break;
-          }
-				//invert address size next instr
-				break;
-#endif
-#ifdef EXT_NECV20
-			case 0x66:		// altre ESC per coprocessore NEC...
-			case 0x67:
-				COMPUTE_RM
-					}
-				break;
-#endif
-        
-#if defined(EXT_80186) || defined(EXT_NECV20)
-			case 0x68:
-				PUSH_STACK(Pipe2.x.l);
-        _ip+=2;
-				break;
-        
-			case 0x69:			//IMUL16
-				{
-			  union OPERAND op3;
-
-        op1.reg16 = &regs.r[(Pipe2.b.l >> 3) & 0x7].x;		// 3 o 7??
-
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						GetPipe(_cs,(uint16_t)(_ip-1));
-            op3.mem=Pipe2.x.l;
-            res1.x=GetShortValue(theDs,op2.mem);
-            res2.x=op3.mem;
-            res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;   // (sicuro 32? per i flag
-#ifdef EXT_80386
-            *op1.reg32=res3.d;		// finire!
-#else
-            *op1.reg16=res3.x;
-#endif
-						_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
-							((res3.d & 0xffff8000) == 0))  ? 0 : 1;
-#ifdef EXT_NECV20
-
-#else
-//qua no						_f.Zero=0;
-#endif
-            break;
-          case 3:
-						//GET_REGISTER_8_16_2
-            op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;			// 3 o 7 ??
-						GetPipe(_cs,(uint16_t)(_ip-1));
-            op3.mem=Pipe2.x.l;
-            res1.x=*op2.reg16;
-            res2.x=op3.mem;
-            res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;   // (sicuro 32? per i flag
-#ifdef EXT_80386
-            *op1.reg32=res3.d;		// finire!
-#else
-            *op1.reg16=res3.x;
-#endif
-						_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
-							((res3.d & 0xffff8000) == 0))  ? 0 : 1;
-#ifdef EXT_NECV20
-
-#else
-//qua no						_f.Zero=0;
-#endif
-            break;
-          }
- 				_ip+=2;      // imm16
-				}
-				
-				break;
-
-			case 0x6a:        // PUSH imm8
-				PUSH_STACK((int16_t)(int8_t)Pipe2.b.l);
-        _ip++;
-        break;
-
-			case 0x6b:			//IMUL8
-				{
-			  union OPERAND op3;
-
-        op1.reg16 = &regs.r[(Pipe2.b.l >> 3) & 0x7].x;		// 3 o 7??
-       
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						GetPipe(_cs,(uint16_t)(_ip-1));
-            op3.mem=(int16_t)(int8_t)Pipe2.b.l;
-            res1.x=GetShortValue(theDs,op2.mem);
-            res2.x=op3.mem;
-						res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;
-#ifdef EXT_80386
-            *op1.reg32=res3.d;		// finire!
-#else
-            *op1.reg16=res3.x;
-#endif
-						_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
-							((res3.d & 0xffff8000) == 0))  ? 0 : 1;
-#ifdef EXT_NECV20
-
-#else
-//qua no						_f.Zero=0;
-#endif
-            break;
-          case 3:
-						//GET_REGISTER_8_16_2
-            op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;			// 3 o 7 ??
-						GetPipe(_cs,(uint16_t)(_ip-1));
-            op3.mem=(int16_t)(int8_t)Pipe2.b.l;
-            res1.x=*op2.reg16;
-            res2.x=op3.mem;
-						res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;
-#ifdef EXT_80386
-            *op1.reg32=res3.d;		// finire!
-#else
-            *op1.reg16=res3.x;
-#endif
-						_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
-							((res3.d & 0xffff8000) == 0))  ? 0 : 1;
-#ifdef EXT_NECV20
-
-#else
-//qua no						_f.Zero=0;
-#endif
-            break;
-          }
-    		_ip++;      // imm8
-				}
-				
-				break;
-
-			case 0x6c:        // INSB; NO OVERRIDE qua  https://www.felixcloutier.com/x86/ins:insb:insw:insd
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-					goto exception286priv;
-					}
-#endif
-        if(inRep) {   // .. ma prefisso viene accettato cmq...
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				PutValue(_es,_di,InValue(_dx));
-        if(_f.Dir)
-          _di--;
-        else
-          _di++;
-				break;
-
-			case 0x6d:        // INSW
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-					goto exception286priv;
-					}
-#endif
-        if(inRep) {   // .. ma prefisso viene accettato cmq...
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-#ifdef EXT_80386
-#endif
-				PutShortValue(_es,_di,InShortValue(_dx));
-        if(_f.Dir) {
-          _di-=2;   // anche 32bit??
-          }
-        else {
-          _di+=2;
-          }
-				break;
-
-			case 0x6e:        // OUTSB
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-					goto exception286priv;
-					}
-#endif
-        if(inRep) {
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				OutValue(_dx,GetValue(_ds,_si));
-        if(_f.Dir)
-          _si--;
-        else
-          _si++;
-				break;
-
-			case 0x6f:        // OUTSW
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-					goto exception286priv;
-					}
-#endif
-        if(inRep) {
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-#ifdef EXT_80386
-#endif
-				OutShortValue(_dx,GetShortValue(_ds,_si));
-        if(_f.Dir) {
-          _si-=2;   // anche 32bit??
-          }
-        else {
-          _si+=2;
-          }
-				break;
-#endif			// 186, V20
-
-#ifdef UNDOCUMENTED_8086				// su 8086 questi sono alias per 0x70..7f  (!)
-			case 0x60:    // JO
-				_ip++;
-				if(_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x61:    // JNO
-				_ip++;
-				if(!_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x62:    // JB, JC, JNAE
-				_ip++;
-				if(_f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x63:    // JAE, JNB, JNC
-				_ip++;
-				if(!_f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x64:      // JE, JZ
-				_ip++;
-				if(_f.Zero)
-					goto jmp_short;
-				break;
-
-			case 0x65:      // JNE, JNZ
-				_ip++;
-				if(!_f.Zero)
-					goto jmp_short;
-				break;
-
-			case 0x66:    // JBE, JNA
-				_ip++;
-				if(_f.Zero || _f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x67:      // JA, JNBE
-				_ip++;
-				if(!_f.Zero && !_f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x68:          // JS
-				_ip++;
-				if(_f.Sign)
-					goto jmp_short;
-				break;
-
-			case 0x69:          // JNS
-				_ip++;
-				if(!_f.Sign)
-					goto jmp_short;
-				break;
-
-      case 0x6a:          // JP, JPE
-				_ip++;
-				if(_f.Parity)
-					goto jmp_short;
-				break;
-        
-			case 0x6b:          // JNP, JPO
-				_ip++;
-				if(!_f.Parity)
-					goto jmp_short;
-				break;
-
-			case 0x6c:          // JL, JNGE
-				_ip++;
-				if(_f.Sign!=_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x6d:
-				_ip++;
-				if(_f.Sign==_f.Ovf)     // JGE, JNL
-					goto jmp_short;
-				break;
-
-			case 0x6e:      // JLE, JNG
-				_ip++;
-				if(_f.Zero || _f.Sign!=_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x6f:      // JG, JNLE
-				_ip++;
-				if(!_f.Zero && _f.Sign==_f.Ovf)
-					goto jmp_short;
-				break;
-#endif
-
-			case 0x70:    // JO
-				_ip++;
-				if(_f.Ovf)
-
-jmp_short:
-					_ip+=(int8_t)Pipe2.b.l;
-				break;
-
-			case 0x71:    // JNO
-				_ip++;
-				if(!_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x72:    // JB, JC, JNAE
-				_ip++;
-				if(_f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x73:    // JAE, JNB, JNC
-				_ip++;
-				if(!_f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x74:      // JE, JZ
-				_ip++;
-				if(_f.Zero)
-					goto jmp_short;
-				break;
-
-			case 0x75:      // JNE, JNZ
-				_ip++;
-				if(!_f.Zero)
-					goto jmp_short;
-				break;
-
-			case 0x76:    // JBE, JNA
-				_ip++;
-				if(_f.Zero || _f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x77:      // JA, JNBE
-				_ip++;
-				if(!_f.Zero && !_f.Carry)
-					goto jmp_short;
-				break;
-
-			case 0x78:          // JS
-				_ip++;
-				if(_f.Sign)
-					goto jmp_short;
-				break;
-
-			case 0x79:          // JNS
-				_ip++;
-				if(!_f.Sign)
-					goto jmp_short;
-				break;
-
-      case 0x7a:          // JP, JPE
-				_ip++;
-				if(_f.Parity)
-					goto jmp_short;
-				break;
-        
-			case 0x7b:          // JNP, JPO
-				_ip++;
-				if(!_f.Parity)
-					goto jmp_short;
-				break;
-
-			case 0x7c:          // JL, JNGE
-				_ip++;
-				if(_f.Sign!=_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x7d:
-				_ip++;
-				if(_f.Sign==_f.Ovf)     // JGE, JNL
-					goto jmp_short;
-				break;
-
-			case 0x7e:      // JLE, JNG
-				_ip++;
-				if(_f.Zero || _f.Sign!=_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x7f:      // JG, JNLE
-				_ip++;
-				if(!_f.Zero && _f.Sign==_f.Ovf)
-					goto jmp_short;
-				break;
-
-			case 0x80:				// ADD ecc rm8, immediate8
-			case 0x81:				// ADD ecc rm16, immediate16
-			case 0x82:				// undefined/nop... (ADD ecc rm8, immediate8  con sign-extend   LO USA EDLIN!@#£$%
-			case 0x83:				// ADD ecc rm16, immediate8 con sign-extend
-			  if(Pipe2.mod<3)
-					GetMorePipe(_cs,(uint16_t)(_ip-1));   // 
-				if(Pipe1 < 0x83) 			// vuol dire che l'operando è 8bit ma esteso a 16
-          _ip++;
-        
-				COMPUTE_RM_OFS
-					GET_MEM_OPER            
-					if(!(Pipe1 & 1)) {
-            res1.b=GetValue(theDs,op2.mem);
-            op1.mem=Pipe2.bd[immofs];
-						res2.b=(uint8_t)op1.mem;
-						switch(Pipe2.reg) {
-			        case 0:       // ADD
-								res3.b=res1.b + res2.b;
-		            PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagAB;
-								break;
-							case 1:       // OR
-								res3.b=res1.b | res2.b;
-		            PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagBZC;
-								break;
-							case 2:       // ADC
-								res3.b=res1.b + res2.b+_f.Carry;
-		            PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagABC;
-								break;
-							case 3:       // SBB
-								res3.b=res1.b - res2.b-_f.Carry;
-		            PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagSBB;
-								break;
-							case 4:       // AND
-								res3.b=res1.b & res2.b;
-		            PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagBZC;
-								break;
-							case 5:       // SUB
-								res3.b=res1.b - res2.b;
-		            PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagSB;
-								break;
-							case 6:       // XOR
-								res3.b=res1.b ^ res2.b;
-		            PutValue(theDs,op2.mem,res3.b);
-								goto aggFlagBZC;
-								break;
-							case 7:       // CMP
-								res3.b=res1.b - res2.b;
-								goto aggFlagSB;
-								break;
-							}
-						}
-					else {
-            _ip++;
-            res1.x=GetShortValue(theDs,op2.mem);
-						if(Pipe1 & 2) 			// sign extend
-              op1.mem=(int16_t)(int8_t)Pipe2.bd[immofs];
-						else
-              op1.mem=MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
-            res2.x=op1.mem;
-						switch(Pipe2.reg) {
-			        case 0:       // ADD
-								res3.x = res1.x + res2.x;
-		            PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagAW;
-								break;
-							case 1:       // OR
-								res3.x=res1.x | res2.x;
-#ifdef EXT_80386
-								if(Pipe1 & 2) {			// sign extend
-									_dx = _ax & 0x8000 ? 0xffff : 0;
-									}
-#endif
-		            PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagWZC;
-								break;
-			        case 2:       // ADC
-								res3.x = res1.x + res2.x+ _f.Carry;
-		            PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagAWC;
-								break;
-			        case 3:       // SBB
-								res3.x = res1.x - res2.x-_f.Carry;
-		            PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagSWB;
-								break;
-			        case 4:       // AND
-								res3.x=res1.x & res2.x;
-#ifdef EXT_80386
-								if(Pipe1 & 2) {			// sign extend
-									_dx = _ax & 0x8000 ? 0xffff : 0;
-									}
-#endif
-		            PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagWZC;
-								break;
-			        case 5:       // SUB
-								res3.x = res1.x - res2.x;
-		            PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagSW;
-								break;
-			        case 6:       // XOR
-								res3.x=res1.x ^ res2.x;
-#ifdef EXT_80386
-								if(Pipe1 & 2) {			// sign extend
-									_dx = _ax & 0x8000 ? 0xffff : 0;
-									}
-#endif
-		            PutShortValue(theDs,op2.mem,res3.x);
-								goto aggFlagWZC;
-								break;
-			        case 7:       // CMP
-								res3.x = res1.x - res2.x;
-								goto aggFlagSW;
-								break;
-							}
-            }
-          break;
-        case 3:
-					GET_REGISTER_8_16_2
-					if(!(Pipe1 & 1)) {
-            res1.b=*op2.reg8;
-						op1.mem=Pipe2.b.h;
-						res2.b=(uint8_t)op1.mem;
-						switch(Pipe2.reg) {
-			        case 0:       // ADD
-								res3.b=res1.b + res2.b;
-								*op2.reg8=res3.b;
-								goto aggFlagAB;
-								break;
-							case 1:       // OR
-								res3.b=res1.b | res2.b;
-								*op2.reg8=res3.b;
-								goto aggFlagBZC;
-								break;
-							case 2:       // ADC
-								res3.b=res1.b + res2.b+_f.Carry;
-								*op2.reg8=res3.b;
-								goto aggFlagABC;
-								break;
-							case 3:       // SBB
-								res3.b=res1.b - res2.b-_f.Carry;
-								*op2.reg8=res3.b;
-								goto aggFlagSBB;
-								break;
-							case 4:       // AND
-								res3.b=res1.b & res2.b;
-								*op2.reg8=res3.b;
-								goto aggFlagBZC;
-								break;
-							case 5:       // SUB
-								res3.b=res1.b - res2.b;
-								*op2.reg8=res3.b;
-								goto aggFlagSB;
-								break;
-							case 6:       // XOR
-								res3.b=res1.b ^ res2.b;
-								*op2.reg8=res3.b;
-								goto aggFlagBZC;
-								break;
-							case 7:       // CMP
-								res3.b=res1.b - res2.b;
-								goto aggFlagSB;
-								break;
-							}
-						} 
-					else {
-      			_ip++;      // imm16...
-            res1.x=*op2.reg16;
-						if(Pipe1 & 2) 			// sign extend  BOH verificare come va sotto... 2024
-							op1.mem = (int16_t)(int8_t)Pipe2.b.h;
-						else
-  						op1.mem=Pipe2.xm.w;
-						res2.x=op1.mem;
-						switch(Pipe2.reg) {
-			        case 0:       // ADD
-								res3.x = res1.x + res2.x;
-								*op2.reg16=res3.x;
-								goto aggFlagAW;
-								break;
-							case 1:       // OR
-								res3.x=res1.x | res2.x;
-								*op2.reg16=res3.x;
-#ifdef EXT_80386
-								if(Pipe1 & 2) {			// sign extend
-									_dx = _ax & 0x8000 ? 0xffff : 0;
-									}
-#endif
-								goto aggFlagWZC;
-								break;
-			        case 2:       // ADC
-								res3.x = res1.x + res2.x+_f.Carry;
-								*op2.reg16=res3.x;
-								goto aggFlagAWC;
-								break;
-			        case 3:       // SBB
-								res3.x = res1.x - res2.x-_f.Carry;
-								*op2.reg16=res3.x;
-								goto aggFlagSWB;
-								break;
-			        case 4:       // AND
-								res3.x=res1.x & res2.x;
-								*op2.reg16=res3.x;
-#ifdef EXT_80386
-								if(Pipe1 & 2) {			// sign extend
-									_dx = _ax & 0x8000 ? 0xffff : 0;
-									}
-#endif
-								goto aggFlagWZC;
-								break;
-			        case 5:       // SUB
-								res3.x = res1.x - res2.x;
-								*op2.reg16=res3.x;
-								goto aggFlagSW;
-								break;
-			        case 6:       // XOR
-								res3.x=res1.x ^ res2.x;
-								*op2.reg16=res3.x;
-#ifdef EXT_80386
-								if(Pipe1 & 2) {			// sign extend
-									_dx = _ax & 0x8000 ? 0xffff : 0;
-									}
-#endif
-								goto aggFlagWZC;
-								break;
-			        case 7:       // CMP
-								res3.x = res1.x - res2.x;
-								goto aggFlagSW;
-								break;
-							}
-						}
-          break;
-          }
-        break;
-        
-			case 0x84:        // TESTB
-			case 0x85:        // TESTW
-				COMPUTE_RM
-            if(!(Pipe1 & 1)) {
-              res1.b=GetValue(theDs,op2.mem);
-              res2.b=*op1.reg8;
-              res3.b= res1.b & res2.b;
-							goto aggFlagBZC;
-							}
-						else {
-              res1.x=GetShortValue(theDs,op2.mem);
-              res2.x=*op1.reg16;
-              res3.x= res1.x & res2.x;
-							goto aggFlagWZC;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            if(!(Pipe1 & 1)) {
-              res1.b=*op2.reg8;
-              res2.b=*op1.reg8;
-              res3.b= res1.b & res2.b;
-							goto aggFlagBZC;
-							}
-						else {
-              res1.x=*op2.reg16;
-              res2.x=*op1.reg16;
-              res3.x= res1.x & res2.x;
-							goto aggFlagWZC;
-              }
-            break;
-          }
-				break;
-
-			case 0x86:				// XCHG
-			case 0x87:
-				inLock++;
-				COMPUTE_RM
-            if(!(Pipe1 & 1)) {
-              res1.b=GetValue(theDs,op2.mem);
-              PutValue(theDs,op2.mem,*op1.reg8);
-              *op1.reg8=res1.b;
-							}
-						else {
-              res1.x=GetShortValue(theDs,op2.mem);
-              PutShortValue(theDs,op2.mem,*op1.reg16);
-              *op1.reg16=res1.x;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            if(!(Pipe1 & 1)) {
-              res1.b=*op2.reg8;
-              *op2.reg8=*op1.reg8;
-              *op1.reg8=res1.b;
-							}
-						else {
-              res1.x=*op2.reg16;
-              *op2.reg16=*op1.reg16;
-              *op1.reg16=res1.x;
-              }
-            break;
-          }
-				break;
-        
-			case 0x88:				//MOV8
-			case 0x89:				//MOV16
-			case 0x8a:
-			case 0x8b:
-				COMPUTE_RM
-            switch(Pipe1 & 0x3) {
-              case 0:
-	              PutValue(theDs,op2.mem,*op1.reg8);
-                break;
-              case 1:
-	              PutShortValue(theDs,op2.mem,*op1.reg16);
-                break;
-              case 2:
-                *op1.reg8=GetValue(theDs,op2.mem);
-                break;
-              case 3:
-                *op1.reg16=GetShortValue(theDs,op2.mem);
-                break;
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-            switch(Pipe1 & 0x3) {
-              case 0:
-	              *op2.reg8=*op1.reg8;
-                break;
-              case 1:
-	              *op2.reg16=*op1.reg16;
-                break;
-              case 2:
-	              *op1.reg8=*op2.reg8;
-                break;
-              case 3:
-	              *op1.reg16=*op2.reg16;
-                break;
-              }
-            break;
-          }
-				break;
-
-			case 0x8c:        // MOV rm16,SREG
-#ifdef EXT_80286
-				op1.reg16= &segs.r[Pipe2.reg].s.x;
-#else
-				op1.reg16= &segs.r[Pipe2.reg & 0x3].s.x;
-#endif
-       
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-            PutShortValue(theDs,op2.mem,*op1.reg16);
-            break;
-          case 3:
-    				op2.reg16= &regs.r[Pipe2.rm].x;
-            *op2.reg16=*op1.reg16;
-            break;
-          }
-				break;
-        
-			case 0x8d:        // LEA
-        op1.reg16 = &regs.r[Pipe2.reg].x;
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-    				*op1.reg16 = op2.mem;
-            break;
-          case 3:
-    				op2.reg16= &regs.r[Pipe2.rm].x;
-            *op1.reg16=*op2.reg16;
-            break;
-          }
-				break;
-        
-			case 0x8e:        // MOV SREG,rm16
-				{
-				struct REGISTERS_SEG *s;
-#ifdef EXT_80286
-				s= &segs.r[Pipe2.reg];		// ?? & 3? o per 386?
-#else
-				s= &segs.r[Pipe2.reg & 0x3];
-#endif
-       
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						ASSIGN_SEGMENT(s,GetShortValue(theDs,op2.mem));
-            break;
-          case 3:
-    				op2.reg16= &regs.r[Pipe2.rm].x;
-            ASSIGN_SEGMENT(s,*op2.reg16);
-            break;
-          }
-#ifdef EXT_80286
-				// altri controlli, su null e altro..
-					if(s->s.x==0) {
-						// forse solo se usato poi...
-						}
-#endif
-        if(s == &segs.r[2]) {  // se SS...
-#ifdef EXT_80286
-					if((s->d.Access.b & B8(00001010)) != B8(00000010)) {/*data, writable*/
-						Exception86.descr.ud=EXCEPTION_GP;
-						goto exception286;
-						}
-#endif
-          inEI=1;
-					}
-				}
-        break;
-        
-			case 0x8f:      // POP imm
-        // i 3 bit "reg" qua sempre 0! 
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						POP_STACK(res3.x);
-						PutShortValue(theDs,op2.mem,res3.x);
-            break;
-          case 3:			// 
-            op2.reg16= &regs.r[Pipe2.rm].x;
-						POP_STACK(*op2.reg16);
-            break;
-          }
-#ifdef EXT_NECV20		// dice che fa cose strane   http://www.textfiles.com/hamradio/v20_bug.txt
-#endif
-				break;
-
-			case 0x90:    // NOP, v. anche single byte instructions http://xxeo.com/single-byte-or-small-x86-opcodes
-      case 0x91:		// XCHG AX
-      case 0x92:
-      case 0x93:
-      case 0x94:
-      case 0x95:
-      case 0x96:
-      case 0x97:
-        op2.reg16 = &regs.r[Pipe1 & 0x7].x;
-				res3.x=*op2.reg16;
-				*op2.reg16=_ax;
-        _ax=res3.x;
-        break;
-        
-			case 0x98:		// CBW
-        _ah = _al & 0x80 ? 0xff : 0;
-        break;
-        
-			case 0x99:		// CWD
-        _dx = _ax & 0x8000 ? 0xffff : 0;
-        break;
-        
-			case 0x9a:      // CALLF
-        GetMorePipe(_cs,(uint16_t)(_ip-1));
-
-#if defined(EXT_80286)
-				if(_msw.PE) 
-				{
-//				union SEGMENT_SELECTOR *ss=(union SEGMENT_SELECTOR *)Pipe2.x.h;
-				struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
-				struct SEGMENT_DESCRIPTOR_GATE *sdg;
-				struct TASK_STATE_REGISTER *newtsr,*oldtsr;
-				struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-				struct SEGMENT_DESCRIPTOR_TSS *sdt;
-//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-//				else
-					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-				sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-
-				// 0x1f;		// stack words da copiare
-				if(!sd->Access.System)	{	// se System
-					switch(sdg->Access.Type) {
-						case 1:		// TSS16
-
-							newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sd->Base,sd->BaseH)];
-							goto do_tasksw_call;
-							// e forse fa anche meno controlli...
-							break;
-
-						case 5:		// Task Gate (Segment / Descriptor
-							sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-							if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
-								}
-							else {		// intra-level
-								}
-
-							newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-
-do_tasksw_call:
-							oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-
-							newtsr->PTSS=_tss.x;
-							_tss.x=sd->Base;
-							oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
-
-							oldtsr->Ax=_ax;
-							oldtsr->Bx=_bx;
-							oldtsr->Cx=_cx;
-							oldtsr->Dx=_dx;
-							oldtsr->Bp=_bp;
-							oldtsr->Sp=_sp;
-							oldtsr->Si=_si;
-							oldtsr->Di=_di;
-							oldtsr->Flags.x=_f.x;
-//							oldtsr->Flags.NestedTask=0;
-							oldtsr->Es=_es->s.x;
-							oldtsr->Ds=_ds->s.x;
-							oldtsr->Ss=_ss->s.x;
-							oldtsr->Cs=_cs->s.x;
-							oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
-
-							sd->Access.A=1;		// MUST be 0 before!
-							oldsd->Access.A=0;
-							_tsr=newtsr;
-							LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
-
-							_ax=newtsr->Ax;
-							_bx=newtsr->Bx;
-							_cx=newtsr->Cx;
-							_dx=newtsr->Dx;
-							_bp=newtsr->Bp;
-							_sp=newtsr->Sp;
-							_si=newtsr->Si;
-							_di=newtsr->Di;
-							_f.x=newtsr->Flags.x;
-							_f.NestedTask=1;
-							ASSIGN_SEGMENT(_es,newtsr->Es);
-							ASSIGN_SEGMENT(_ds,newtsr->Ds);
-							ASSIGN_SEGMENT(_ss,newtsr->Ss);
-							ASSIGN_SEGMENT(_cs,newtsr->Cs);
-							_ip=newtsr->EntryPoint;
-							res3.x=oldtsr->Ldt;
-							oldtsr->Ldt=newtsr->Ldt;
-							newtsr->Ldt=res3.x;
-
-							_msw.TS=1;
-							// v. table 8-7 per differenze tra CALL JMP IRET
-
-
-//METTERE								_f.IOPL=sd->Access.DPL;
-
-							break;
-
-						case 4:		// Call gate
-							if(_cs->s.RPL>sdg->Access.DPL ||
-								_cs->s.RPL<sdg->Access.DPL) {		// inter-level
-								if(sdg->WordCount) {
-									union SEGMENTS_DESCRIPTOR *_ss2;
-									res3.x=_sp;
-// dov'è??
-									_ss2=_ss;
-//									idem!!
-
-
-									i=0;
-									while(sdg->WordCount--) {
-										PutShortValue(_ss,_sp+i,GetShortValue(_ss2,res3.x+i));
-										i+=2;
-										}
-									}
-
-								res3.x=_sp;
-								PUSH_STACK(_ss->s.x);		// 
-								PUSH_STACK(res3.x);		// 
-
-								PUSH_STACK(_cs->s.x);		// 
-								PUSH_STACK((uint16_t)(_ip+4));
-
-								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-
-								ASSIGN_SEGMENT(_cs,sdg->Selector);
-//								_cs->d.Access.DPL=sdg->Access.DPL;		// STRANO... VERIFICARE
-								}
-							else {		// intra-level
-								PUSH_STACK(_cs->s.x);		// 
-								PUSH_STACK((uint16_t)(_ip+4));
-								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-								ASSIGN_SEGMENT(_cs,sdg->Selector);
-//								_cs->d.Access.DPL=sdg->Access.DPL;		// STRANO... VERIFICARE
-								}
-							break;
-
-						case 6:		// Interrupt gate
-						case 7:		// Trap gate
-						default:
-							goto exception286;
-							break;
-						}
-					}
-				else {
-					PUSH_STACK(_cs->s.x);		// 
-					PUSH_STACK((uint16_t)(_ip+4));
-					_ip=Pipe2.x.l;
-					ASSIGN_SEGMENT(_cs,Pipe2.x.h);
-					}
-				}
-			else {
-				PUSH_STACK(_cs->s.x);		// 
-				PUSH_STACK((uint16_t)(_ip+4));
-				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
-				}
-#else
-				PUSH_STACK(_cs->s.x);		// 
-				PUSH_STACK((uint16_t)(_ip+4));
-				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
-#endif
-				break;
-
-   		case 0x9b:
-				// WAIT Wait for BUSY pin (usually FPU 
-//				while()
-//					;
-#ifdef EXT_80x87
-          status8087,control8087;
-            
-#endif
-				break;
-        
-   		case 0x9c:        // PUSHF
-				PUSH_STACK(_f.x);		// 
-				break;
-        
-   		case 0x9d:        // POPF
-#if defined(EXT_80286)
-				// SOLO SE alterano flag I !! fare
-				if(_msw.PE && _f.IOPL      >0/* IOPL tas klevel*/) {
-
-					//_cs->s.RPL
-//					goto exception286priv;
-					}
-#endif
-				POP_STACK(_f.x);		// 
-#ifdef EXT_NECV20	
-				inEI++;			// boh, NECV20 emulator lo fa...
-#endif
-				goto fix_flags;
-				break;
-
-			case 0x9e:      // SAHF
-				_f.x = (_f.x & 0xff00) | _ah;
-
-fix_flags:
-				_f.unused=1; _f.unused2=_f.unused3=0; 
-#ifdef EXT_80286
-				if(_msw.PE) {
-//				_f.unused3_=0; _f.unused4=0;			// beh.. 
-					}
-				else {			// in real mode non possono essere settati
-					_f.IOPL=_f.NestedTask=0;
-					}
-				_f.unused4=0;			// beh.. 
-#else
-				_f.unused3_=7 /*1 o 3=386*/; 		// così viene visto come 8086 o Nec, azzerando unused4 e 3_ 80286 (logico)
-#ifdef EXT_NECV20
-				_f.MD=1;		// mah direi cmq... dato che siamo in modo 8086/native!
-#else
-				_f.unused4=1 /*0=386*/;			// così viene visto come 8086 o Nec, azzerando unused4 e 3_ 80286 (logico)
-#endif
-#endif
-				break;
-        
-			case 0x9f:      // LAHF
-				_ah=_f.x & 0x00ff;
-				break;
-
- 			case 0xa0:      // MOV al,[ofs]
- 			case 0xa1:      // MOV ,al
- 			case 0xa2:      // MOV ax,
- 			case 0xa3:      // MOV ,ax
-				OVERRIDE_SEG(_ds);
-				if(!(Pipe1 & 2)) {
-					if(Pipe1 & 1)
-						_ax=GetShortValue(theDs,Pipe2.x.l);
-					else
-						_al=GetValue(theDs,Pipe2.x.l);
-					}
-				else {        
-					if(Pipe1 & 1)
-						PutShortValue(theDs,Pipe2.x.l,_ax);
-					else
-						PutValue(theDs,Pipe2.x.l,_al);
-					}
-        _ip+=2;
-				break;
-        
-			case 0xa4:      // MOVSB
-        if(inRep) {
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				OVERRIDE_SEG_REP(_ds);
-        PutValue(_es,_di,GetValue(theDs,_si));
-        if(_f.Dir) {
-          _di--;
-          _si--;
-          }
-        else {
-          _di++;
-          _si++;
-          }
-				break;
-
-			case 0xa5:      // MOVSW
-        if(inRep) {
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				OVERRIDE_SEG_REP(_ds);
-				PutShortValue(_es,_di,GetShortValue(theDs,_si));
-#ifdef EXT_80386
-#endif
-        if(_f.Dir) {
-          _di-=2;   // anche 32bit??
-          _si-=2;
-          }
-        else {
-          _di+=2;
-          _si+=2;
-          }
-				break;
-        
-			case 0xa6:      // CMPSB
-        if(inRep) {
-//          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				OVERRIDE_SEG_REP(_ds);
-				res1.b= GetValue(theDs,_si);
-				res2.b= GetValue(_es,_di);
-				res3.b= res1.b-res2.b;   // https://pdos.csail.mit.edu/6.828/2008/readings/i386/CMPS.htm
-        if(_f.Dir) {
-          _di--;
-          _si--;
-          }
-        else {
-          _di++;
-          _si++;
-          }
-        goto aggFlagSB;
-				break;
-
-			case 0xa7:      // CMPSW
-        if(inRep) {
-//          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				OVERRIDE_SEG_REP(_ds);
-#ifdef EXT_80386
-#endif
-				res1.x= GetShortValue(theDs,_si);
-				res2.x= GetShortValue(_es,_di);
-				res3.x= res1.x-res2.x;
-        if(_f.Dir) {
-          _di-=2;   // anche 32bit??
-          _si-=2;
-          }
-        else {
-          _di+=2;
-          _si+=2;
-          }
-        goto aggFlagSW;
-				break;
-
-			case 0xa8:        // TESTB
-				res3.b = _al & Pipe2.b.l; 
-        _ip++;
-        goto aggFlagBZC;
-				break;
-
-			case 0xa9:        // TESTW
-				res3.x = _ax & Pipe2.x.l;
-        _ip+=2;
-        goto aggFlagWZC;
-				break;
-        
-			case 0xaa:      // STOSB
-        // no override! da pdf 286
-        if(inRep) {
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;		// ma credo accetti cmq il prefisso, v.LODSB
-          }
-				PutValue(_es,_di,_al);
-        if(_f.Dir)
-          _di--;
-        else
-          _di++;
-				break;
-
-			case 0xab:      // STOSW
-        // idem
-        if(inRep) {
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;		// ma credo accetti cmq il prefisso, v.LODSB
-          }
-#ifdef EXT_80386
-#endif
-				PutShortValue(_es,_di,_ax);
-        if(_f.Dir)
-          _di-=2;   // anche 32bit??
-        else
-          _di+=2;
-				break;
-
-			case 0xac:      // LODSB; [was NO OVERRIDE qua! ... v. bug 8088
-        if(inRep) {     // (questo ha poco senso qua :)
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				OVERRIDE_SEG_REP(_ds);
-				_al=GetValue(theDs,_si);
-        if(_f.Dir)
-          _si--;
-        else
-          _si++;
-				break;
-
-			case 0xad:      // LODSW
-        if(inRep) {
-          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				OVERRIDE_SEG_REP(_ds);
-#ifdef EXT_80386
-#endif
-				_ax=GetShortValue(theDs,_si);
-        if(_f.Dir)
-          _si-=2;   // anche 32bit??
-        else
-          _si+=2;
-				break;
-
-			case 0xae:      // SCASB; NO OVERRIDE qua!  http://www.nacad.ufrj.br/online/intel/vtune/users_guide/mergedProjects/analyzer_ec/mergedProjects/reference_olh/mergedProjects/instructions/instruct32_hh/vc285.htm
-        // però uno può infilarci il prefisso cmq, quindi v. inRep
-        if(inRep) {
-//          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				res1.b= _al;
-        res2.b= GetValue(_es,_di);
-				res3.b= res1.b - res2.b;
-        if(_f.Dir)
-          _di--;
-        else
-          _di++;
-        goto aggFlagSB;
-				break;
-
-			case 0xaf:      // SCASW
-        if(inRep) {
-//          inRep=3;
-          inRepStep=segOverride ? 2 : 1;
-          }
-				res1.x= _ax;
-        res2.x= GetShortValue(_es,_di);
-				res3.x= res1.x - res2.x;
-#ifdef EXT_80386
-#endif
-        if(_f.Dir)
-          _di-=2;   // anche 32bit??
-        else
-          _di+=2;
-        goto aggFlagSW;
-				break;
-
-      case 0xb0:      // altre MOVB
-      case 0xb1:
-      case 0xb2:
-      case 0xb3:
-      case 0xb4:
-      case 0xb5:
-      case 0xb6:
-      case 0xb7:
-        if(Pipe1 & 0x4)
-          regs.r[Pipe1 & 0x3].b.h=Pipe2.b.l;
-        else
-          regs.r[Pipe1 & 0x3].b.l=Pipe2.b.l;
-        _ip++;
-				break;
-        
-      case 0xb8:      // altre MOVW
-      case 0xb9:
-      case 0xba:
-      case 0xbb:
-      case 0xbc:
-      case 0xbd:
-      case 0xbe:
-      case 0xbf:
-        regs.r[Pipe1 & 0x7].x=Pipe2.x.l;
-        _ip+=2;
-				break;
-        
-#if defined(EXT_80186) || defined(EXT_NECV20)
-			case 0xc0:      // RCL, RCR, SHL ecc
-			  if(Pipe2.mod<3)
-					GetMorePipe(_cs,(uint16_t)(_ip-1));   // 
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-            op1.mem=Pipe2.bd[immofs];
-						i=res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-						res3.b=res1.b=GetValue(theDs,op2.mem);
-						i=0;
-						ROTATE_SHIFT8
-						PutValue(theDs,op2.mem,res3.b);
-            break;
-          case 3:
-            op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
-						op1.mem=Pipe2.b.h;
-						i=res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-						res3.b=res1.b=*op2.reg8;
-						i=0;
-						ROTATE_SHIFT8
-						*op2.reg8=res3.b;
-						break;
-					}
- 				_ip++;      // imm8
-				if(Pipe2.reg>=4)		// solo SAL/SHL/SHR/SAR
-					goto aggFlagBSZP;
-				break;
-
-			case 0xc1:
-			  if(Pipe2.mod<3)
-					GetMorePipe(_cs,(uint16_t)(_ip-1));   // 
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-            op1.mem=Pipe2.bd[immofs];
-						i=res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-						res3.x=res1.x=GetShortValue(theDs,op2.mem);
-						i=0;
-						ROTATE_SHIFT16
-						PutShortValue(theDs,op2.mem,res3.x);
-            break;
-          case 3:
-            op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;
-						op1.mem=Pipe2.b.h;
-						i=res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-						res3.x=res1.x=*op2.reg16;
-						i=0;
-						ROTATE_SHIFT16
-						*op2.reg16=res3.x;
-						break;
-					}
- 				_ip++;      // imm8
-				if(Pipe2.reg>=4)		// solo SAL/SHL/SHR/SAR
-					goto aggFlagWSZP;
-				break;
-#endif
-        
-#if !defined(EXT_80186) && !defined(EXT_NECV20)
-			case 0xc0:
-#endif
-
-			case 0xc2:      // RETN
-				POP_STACK(_ip);
-        _sp+=Pipe2.x.l;
-				break;
-        
-#if !defined(EXT_80186) && !defined(EXT_NECV20)
-			case 0xc1:
-#endif
-
-			case 0xc3:      // RET
-				POP_STACK(_ip);
-				break;
-
-			case 0xc4:				//LES
-			case 0xc5:				//LDS
-				op1.reg16= &regs.r[Pipe2.reg].x;
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						*op1.reg16=GetShortValue(theDs,op2.mem);
-						op2.mem+=2;
-						if(Pipe1 & 1) {
-							ASSIGN_SEGMENT(_ds,GetShortValue(theDs,op2.mem));
-							}
-						else {
-							ASSIGN_SEGMENT(_es,GetShortValue(theDs,op2.mem));
-							}
-            break;
-          case 3:		// 
-						goto unknown_istr;
-            break;
-          }
-				break;
-
- 			case 0xc6:				//MOV imm8...
- 			case 0xc7:				//MOV imm16
-			  if(Pipe2.mod<3)
-					GetMorePipe(_cs,(uint16_t)(_ip-1));   // 
-        // i 3 bit "reg" qua sempre 0! 
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-					  if(!(Pipe1 & 1)) {
-              _ip++;
-              op1.mem=Pipe2.bd[immofs];
-              PutValue(theDs,op2.mem,(uint8_t)op1.mem);
-							}
-						else {
-              _ip+=2;
-              op1.mem=MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
-              PutShortValue(theDs,op2.mem,op1.mem);
-							}
-            break;
-          case 3:		// 
-						GET_REGISTER_8_16_2
-            if(!(Pipe1 & 1)) {
-							_ip++;
-              op1.mem=Pipe2.b.h;
-              *op2.reg8=(uint8_t)op1.mem;
-							}
-						else {
-							_ip+=2;
-              op1.mem=Pipe2.xm.w;
-              *op2.reg16=op1.mem;
-              }
-            break;
-          }
-				break;
-
-#if defined(EXT_80186) || defined(EXT_NECV20)
-			case 0xc8:        //ENTER
-				PUSH_STACK(_bp);
-        res3.x=_sp;
-				Pipe2.x.l+=Pipe2.b.u*2;
-        if(Pipe2.b.u>0) {
-					Pipe2.b.u &= 31;			// max nesting 32...
-          while(--Pipe2.b.u) {		
-            _bp-=2;
-            PUSH_STACK(GetShortValue(_ss,_bp));
-            }
-          PUSH_STACK(res3.x);
-          }
-				_bp=res3.x;
-				_sp=_bp-Pipe2.x.l;
-        _ip+=3;
-        break;
-
-			case 0xc9:        // LEAVE
-        _sp=_bp;
-				POP_STACK(_bp);
-        break;
-#endif
-        
-#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, così dicono..
-			case 0xc8:
-#endif
-			case 0xca:      // RETF
-
-#ifdef EXT_80286
-				if(_msw.PE /*&& _f.IOPL      >   0/* IOPL tas klevel*/) {
-					struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
-					struct SEGMENT_DESCRIPTOR_GATE *sdg;
-					struct TASK_STATE_REGISTER *newtsr,*oldtsr;
-					
-					POP_STACK(_ip);
-					POP_STACK(res3.x);
-
-//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-//				else
-					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
-
-					sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
-
-					if(sd->Access.DPL>_cs->s.RPL) {		// inter-level
-
-
-						res2.x=_sp;
-						POP_STACK(res1.x);
-//							_sp=res2.x;
-						POP_STACK(res3.x);
-						ASSIGN_SEGMENT(_ss,res3.x);
-						_sp=res1.x;
-
-						ASSIGN_SEGMENT(_cs,res3.x);
-
-//???			        _sp+=Pipe2.x.l;
-						}
-					else {		// intra-level
-						ASSIGN_SEGMENT(_cs,res3.x);
-			      _sp+=Pipe2.x.l;
-						}
-
-					}		// PE
-				else {
-#endif
-					POP_STACK(_ip);
-					POP_STACK(res3.x);
-					ASSIGN_SEGMENT(_cs,res3.x);
-	        _sp+=Pipe2.x.l;
-#ifdef EXT_80286
-					}
-#endif
-        break;
-        
-#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, così dicono..
-			case 0xc9:
-#endif
-			case 0xcb:
-Return32:
-				POP_STACK(_ip);
-				POP_STACK(res3.x);
-				ASSIGN_SEGMENT(_cs,res3.x);
-				break;
-
-			case 0xcc:
-				IntIRQNum.Vector=3 /*INT3*/ ;
-#ifdef EXT_80286
-				IntIRQNum.Type=1;
-#endif
-				goto do_irq;
-				break;
-
-			case 0xcd:
-
-        IntIRQNum.Vector=Pipe2.b.l;
-#ifdef EXT_80286
-				IntIRQNum.Type=1;
-#endif
-
-
-/*				if(i==0x10) {		// log BIOS video
-					char myBuf[128];
-					if(_ah==9 || _ah==10 || _ah==14)
-						wsprintf(myBuf,"INT 10h AH=%02X, AL=%02X %c\n",_ah,_al,_al);
-					else
-						wsprintf(myBuf,"INT 10h AH=%02X, AL=%02X\n",_ah,_al);
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-				}*/
-
-
-				_ip++;
-
-do_irq:
-        _f.Trap=0;// ????	_f.Aux=0;  v. iAPX286 e 286, pare solo in virtual mode
-
-#if defined(EXT_80286)
-
-				Exception86.active=0;
-
-				// QUA usare (pag 149 tab 9.2) IDT vector a 16 bit, con b0=error code
-				// e c'è anche TI per selezionare QUALE selettore GDTR LDTR IDTR fig 7.5 pag 118
-
-				if(_msw.PE) {
-					if(_sp<6) {
-// tecnicamente è un eccezione, non trap...            _f.Trap=1;
-						goto exception286;
-  					}
-					}
-          
-
-					if(_msw.PE) {
-		//				union SEGMENT_SELECTOR *ss=(union SEGMENT_SELECTOR *)Pipe2.x.h;
-						struct SEGMENT_DESCRIPTOR_TASK_GATE *sdg,*oldsdg;
-						struct SEGMENT_DESCRIPTOR *sd,*oldsd;
-						struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP *sdi;
-						struct TASK_STATE_REGISTER *tss,*oldtsr,*newtsr;
-						struct REGISTERS_SEG *seg;
-
-    /*IF ((vector_number « 2) + 3) is not within IDT limit
-        THEN #GP; FI; 
-    IF stack not large enough for a 6-byte return information
-        THEN #SS; FI;*/
-		        if(IntIRQNum.Vector < (IDTR.Limit/8)) {
-
-							sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((IntIRQNum.Vector *8))];
-
-			//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-			//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-			//				else
-//								sd=(struct SEGMENT_DESCRIPTOR*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
-
-//							sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
-
-							switch(sdi->Access.Type) {
-								struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-								struct SEGMENT_DESCRIPTOR_TSS *sdt;
-								case 5:		// Task Gate (Segment / Descriptor
-									if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
-										}
-									else {		// intra-level
-										}
-									tss=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+MAKELONG(sd->Base,0/*sd->BaseH*/)];
-									oldsdg=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+tss->PTSS];
-
-									sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-		//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-									if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
-										}
-									else {		// intra-level
-										}
-									newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-									oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-
-									newtsr->PTSS=_tss.x;
-									_tss.x=sd->Base;
-									oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
-
-									oldtsr->Ax=_ax;
-									oldtsr->Bx=_bx;
-									oldtsr->Cx=_cx;
-									oldtsr->Dx=_dx;
-									oldtsr->Bp=_bp;
-									oldtsr->Sp=_sp;
-									oldtsr->Si=_si;
-									oldtsr->Di=_di;
-									oldtsr->Flags.x=_f.x;
-		//							oldtsr->Flags.NestedTask=0;
-									oldtsr->Es=_es->s.x;
-									oldtsr->Ds=_ds->s.x;
-									oldtsr->Ss=_ss->s.x;
-									oldtsr->Cs=_cs->s.x;
-									oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
-
-									sd->Access.A=1;		// MUST be 0 before!
-									oldsd->Access.A=0;
-									_tsr=newtsr;
-									LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
-									_ax=newtsr->Ax;
-									_bx=newtsr->Bx;
-									_cx=newtsr->Cx;
-									_dx=newtsr->Dx;
-									_bp=newtsr->Bp;
-									_sp=newtsr->Sp;
-									_si=newtsr->Si;
-									_di=newtsr->Di;
-									_f.x=newtsr->Flags.x;
-									_f.NestedTask=1;
-									ASSIGN_SEGMENT(_es,newtsr->Es);
-									ASSIGN_SEGMENT(_ds,newtsr->Ds);
-									ASSIGN_SEGMENT(_ss,newtsr->Ss);
-									ASSIGN_SEGMENT(_cs,newtsr->Cs);
-									_ip=newtsr->EntryPoint;
-									res3.x=oldtsr->Ldt;
-									oldtsr->Ldt=newtsr->Ldt;
-									newtsr->Ldt=res3.x;
-
-									_msw.TS=1;
-									// v. table 8-7 per differenze tra CALL JMP IRET
-
-
-//METTERE								_f.IOPL=sd->Access.DPL;
-
-									break;
-
-								case 6:		// Interrupt gate
-									_f.IF=0;
-									// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
-								case 7:		// Trap gate
-									_f.NestedTask=0;
-									if(_cs->s.RPL>/*_cs->s.RPL*/ sdi->Access.DPL ||
-										_cs->s.RPL</*_cs->s.RPL*/ sdi->Access.DPL) {		// inter-level		FINIRE!
-
-//finire
-										res3.x=_sp;
-										PUSH_STACK(_ss->s.x);		// 
-										PUSH_STACK(res3.x);		// 
-										PUSH_STACK(_f.x);
-										PUSH_STACK(_cs->s.x);		// 
-  /*- all interrupts except the internal CPU exceptions push the
-	flags and the CS:IP of the next instruction onto the stack.
-	CPU exception interrupts are similar but push the CS:IP of the
-	causal instruction.	8086/88 divide exceptions are different,
-	they return to the instruction following the division*/
-											if(IntIRQNum.Vector==1 || IntIRQNum.Vector==3 || IntIRQNum.Vector==4) {
-												PUSH_STACK(_ip);		// (succ.
-												}
-											else {
-												PUSH_STACK(oldIp);		// (servirebbe ip PRIMA dell'istruzione...
-												}
-
-										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-										ASSIGN_SEGMENT(_cs,sdi->Selector);
-//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
-
-//										_f.IOPL=_cs->s.RPL /*sdi->Access.DPL*/;
-
-										}
-									else {		// intra-level
-										PUSH_STACK(_cs->s.x);		// 
-  /*- all interrupts except the internal CPU exceptions push the
-	flags and the CS:IP of the next instruction onto the stack.
-	CPU exception interrupts are similar but push the CS:IP of the
-	causal instruction.	8086/88 divide exceptions are different,
-	they return to the instruction following the division*/
-											if(IntIRQNum.Vector==1 || IntIRQNum.Vector==3 || IntIRQNum.Vector==4) {
-												PUSH_STACK(_ip);		// (succ.
-												}
-											else {
-												PUSH_STACK(oldIp);		// (servirebbe ip PRIMA dell'istruzione...
-												}
-										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-										ASSIGN_SEGMENT(_cs,sdi->Selector);
-//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
-										}
-
-									if(!IntIRQNum.Type) 		// se eccezione
-										PUSH_STACK(Exception86.parm);
-
-									break;
-
-								case 4:		// Call gate
-								default:
-									goto exception286;
-									break;
-								}
-							}		// irq# > limit
-						else {
-							Exception86.descr.ud=EXCEPTION_DOUBLEFAULT;
-							goto exception286;
-							}
-						}		// PE
-					else {
-    /*IF ((vector_number « 2) + 3) is not within IDT limit
-        THEN #GP; FI; 
-    IF stack not large enough for a 6-byte return information
-        THEN #SS; FI;*/
-		        if(IntIRQNum.Vector < 0x100) {
-							PUSH_STACK(_f.x);
-							PUSH_STACK(_cs->s.x);		// 
-  /*- all interrupts except the internal CPU exceptions push the
-	flags and the CS:IP of the next instruction onto the stack.
-	CPU exception interrupts are similar but push the CS:IP of the
-	causal instruction.	8086/88 divide exceptions are different,
-	they return to the instruction following the division*/
-							PUSH_STACK(_ip);
-	
-							_f.IF=0;
-							_ip=GetShortValue(&absSeg,(uint16_t)(IntIRQNum.Vector *4));
-							ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((IntIRQNum.Vector *4) +2)));
-							}
-						}
-						
-#else
-
-	      if(IntIRQNum.Vector < 0x100) {
-          PUSH_STACK(_f.x);
-					PUSH_STACK(_cs->s.x);		// 
-  /*- all interrupts except the internal CPU exceptions push the
-	flags and the CS:IP of the next instruction onto the stack.
-	CPU exception interrupts are similar but push the CS:IP of the
-	causal instruction.	8086/88 divide exceptions are different,
-	they return to the instruction following the division*/
-          PUSH_STACK(_ip);
-          _f.IF=0;
-						// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
-          _ip=GetShortValue(&absSeg,(uint16_t)(IntIRQNum.Vector *4));
-					ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((IntIRQNum.Vector *4) +2)));
-        }
-      else {
-//          _f.Trap=1;
-        }
-#endif
-				break;
-
-			case 0xce:
-				if(_f.Ovf) {
-					IntIRQNum.Vector=4 /*INTO*/ ;		// usare EXCEPTION_OVERFLOW, goto exception286 MA NON TYPE=0! non è eccezione dice
-#ifdef EXT_80286
-					IntIRQNum.Type=1;
-#endif
-					goto do_irq;
-					}
-				break;
-
-			case 0xcf:        // IRET
-
-#if defined(EXT_80286)
-				if(_msw.PE) {
-					struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
-					struct SEGMENT_DESCRIPTOR_GATE *sdg;
-					struct TASK_STATE_REGISTER *tss,*oldtsr,*newtsr;
-					struct REGISTERS_SEG *seg;
-					union REGISTRO_F _f1;			// mi serve qua per privilegi in Protected...
-					
-					if(_f.NestedTask) {
-						struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-						struct SEGMENT_DESCRIPTOR_TSS *sdt;
-
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tsr->PTSS & 0xfff8)];
-						// usarne solo 1 ovviamente :)
-						sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tsr->PTSS & 0xfff8)];
-						sdt=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tsr->PTSS & 0xfff8)];
-						oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index << 3)];
-						if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
-							}
-						else {		// intra-level
-							}
-
-						newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-						oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
-
-//						newtsr->PTSS=_tss.x;
-						_tss.x=oldtsr->PTSS;
-
-						oldtsr->Ax=_ax;
-						oldtsr->Bx=_bx;
-						oldtsr->Cx=_cx;
-						oldtsr->Dx=_dx;
-						oldtsr->Bp=_bp;
-						oldtsr->Sp=_sp;
-						oldtsr->Si=_si;
-						oldtsr->Di=_di;
-						oldtsr->Flags.x=_f.x;
-						oldtsr->Es=_es->s.x;
-						oldtsr->Ds=_ds->s.x;
-						oldtsr->Ss=_ss->s.x;
-						oldtsr->Cs=_cs->s.x;
-
-						sd->Access.A=1;		// MUST be 0 before!
-						oldsd->Access.A=0;
-						_tsr=newtsr;
-						LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+newtsr->Ldt]);
-						_ax=newtsr->Ax;
-						_bx=newtsr->Bx;
-						_cx=newtsr->Cx;
-						_dx=newtsr->Dx;
-						_bp=newtsr->Bp;
-						_sp=newtsr->Sp;
-						_si=newtsr->Si;
-						_di=newtsr->Di;
-						_f.x=newtsr->Flags.x;
-						ASSIGN_SEGMENT(_es,newtsr->Es);
-						ASSIGN_SEGMENT(_ds,newtsr->Ds);
-						ASSIGN_SEGMENT(_ss,newtsr->Ss);
-						ASSIGN_SEGMENT(_cs,newtsr->Cs);
-						res3.x=newtsr->EntryPoint;
-						oldtsr->EntryPoint=_ip;			// istruzione seguente questa! ossia dove torneremo al prossimo giro
-						_ip=res3.x;
-
-//						_tsr->Flags.NestedTask=0;
-						res3.x=oldtsr->Ldt;
-						oldtsr->Ldt=newtsr->Ldt;
-						newtsr->Ldt=res3.x;
-
-						_msw.TS=1;
-						// v. table 8-7 per differenze tra CALL JMP IRET
-
-
-//METTERE								_f.IOPL=sd->Access.DPL;
-
-
-						}
-					else {
-
-						POP_STACK(_ip);
-						POP_STACK(res3.x);
-						POP_STACK(_f1.x);
-
-	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
-
-						sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
-
-						seg=(struct REGISTERS_SEG*)&res3.x;
-
-						if(/*_f1.IOPL*/ seg->s.RPL>_cs->s.RPL) {		// inter-level  FINIRE!
-
-							res2.x=_sp;
-							POP_STACK(res1.x);
-//							_sp=res2.x;
-							POP_STACK(res2.x);
-							ASSIGN_SEGMENT(_ss,res2.x);
-							_sp=res1.x;
-
-							ASSIGN_SEGMENT(_cs,res3.x);
-
-
-							/*    IF CPL = IOPL
-            THEN EFLAGS(IF) := tempEFLAGS; FI;
-    IF CPL = 0
-            THEN
-                        EFLAGS(IOPL) := tempEFLAGS;
-                        IF OperandSize = 32 or OperandSize = 64
-                                THEN EFLAGS(VIF, VIP) := tempEFLAGS; FI;
-    FI;*/
-					// SOLO SE alterano flag I !! fare
-	//					goto exception286priv;
-
-//							_f.IOPL=seg->s.RPL /*_f1.IOPL*/ /*sdg->Access.DPL*/;
-
-							}
-						else if(/*_f1.IOPL*/ seg->s.RPL<_cs->s.RPL) {		// inter-level
-
-							res2.x=_sp;
-							POP_STACK(res1.x);
-//							_sp=res2.x;
-							POP_STACK(res2.x);
-							ASSIGN_SEGMENT(_ss,res2.x);
-							_sp=res1.x;
-
-							ASSIGN_SEGMENT(_cs,res3.x);
-
-							/*    IF CPL = IOPL
-            THEN EFLAGS(IF) := tempEFLAGS; FI;
-    IF CPL = 0
-            THEN
-                        EFLAGS(IOPL) := tempEFLAGS;
-                        IF OperandSize = 32 or OperandSize = 64
-                                THEN EFLAGS(VIF, VIP) := tempEFLAGS; FI;
-    FI;*/
-					// SOLO SE alterano flag I !! fare
-	//					goto exception286priv;
-
-//							_f.IOPL=seg->s.RPL /*_f1.IOPL*/ /*sdg->Access.DPL*/;
-
-							}
-						else {		// intra-level
-							ASSIGN_SEGMENT(_cs,res3.x);
-							_f.x=_f1.x;
-							}
-
-						}
-
-//					_ip++;
-
-					}		// PE
-				else {
-					POP_STACK(_ip);
-					POP_STACK(res3.x);
-					ASSIGN_SEGMENT(_cs,res3.x);
-					POP_STACK(_f.x);
-					}
-#else
-#if defined(EXT_80186)
-          if(_sp>=6) {		// fare controllo
-            }
-          else {
-// tecnicamente è un eccezione, non trap...            _f.Trap=1;
-            }
-#endif
-				POP_STACK(_ip);
-				POP_STACK(res3.x);
-				ASSIGN_SEGMENT(_cs,res3.x);
-				POP_STACK(_f.x);
-#endif
-
-#ifdef EXT_NECV20	
-				inEI++;			// boh, NECV20 emulator lo fa...
-#endif
-
-#ifdef UNDOCUMENTED_8086
-				goto fix_flags;			// bah non dovrebbe servire ma gloriouscow
-#endif
-				break;
-
-			case 0xd0:      // RCL, RCR ecc 8
-				op1.mem=1;
-				i=1;
-				goto do_rcl8;
-			case 0xd2:
-				op1.mem=_cl;
-				i=0;
-
-do_rcl8:
-				res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-				res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						res1.b=res3.b=GetValue(theDs,op2.mem);
-						ROTATE_SHIFT8
-#ifdef UNDOCUMENTED_8086			// andrebbe anche messo nella macro ROTATE ma non si può...
-						switch(Pipe2.reg) {
-							case 6:
-								if(i || _cl) {			// SETMO SETMOC https://www.os2museum.com/wp/undocumented-8086-opcodes-part-i/
-																		// https://www.reenigne.org/blog/8086-microcode-disassembled/
-									res3.b=0xff;
-									_f.Carry=_f.Ovf=_f.Zero=_f.Aux=0;
-									_f.Sign=_f.Parity=1;
-									}
-								break;
-							case 4:
-								_f.Aux=res3.b & 0x10 ? 1 : 0;		// gloriouscow, granite
-								break;
-							case 5:
-							case 7:
-								_f.Aux=0;												// gloriouscow, granite
-								break;
-							}
-#endif
-						PutValue(theDs,op2.mem,res3.b);
-            break;
-          case 3:
-            op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
-						res1.b=res3.b=*op2.reg8;
-						ROTATE_SHIFT8 
-#ifdef UNDOCUMENTED_8086
-						switch(Pipe2.reg) {
-							case 6:
-								if(i || _cl) {			// SETMO SETMOC https://www.os2museum.com/wp/undocumented-8086-opcodes-part-i/
-																		// https://www.reenigne.org/blog/8086-microcode-disassembled/
-									res3.b=0xff;
-									_f.Carry=_f.Ovf=_f.Zero=_f.Aux=0;
-									_f.Sign=_f.Parity=1;
-									}
-								break;
-							case 4:
-								_f.Aux=res3.b & 0x10 ? 1 : 0;
-								break;
-							case 5:
-							case 7:
-								_f.Aux=0;
-								break;
-							}
-#endif
-						*op2.reg8=res3.b;
-						break;
-					}
-				if(Pipe2.reg>=4 )		// solo SAL/SHL/SHR/SAR
-					goto aggFlagBSZP;
-				break;
-
-			case 0xd1:      // RCL, RCR ecc 16
-				op1.mem=1;
-				i=1;
-				goto do_rcl16;
-			case 0xd3:
-				op1.mem=_cl;
-				i=0;
-
-do_rcl16:
-				res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-				res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						res1.x=res3.x=GetShortValue(theDs,op2.mem);
-						ROTATE_SHIFT16
-#ifdef UNDOCUMENTED_8086
-						switch(Pipe2.reg) {
-							case 6:
-								if(i || _cl) {			// SETMO SETMOC https://www.os2museum.com/wp/undocumented-8086-opcodes-part-i/
-																		// https://www.reenigne.org/blog/8086-microcode-disassembled/
-									res3.x=0xffff;
-									_f.Carry=_f.Ovf=_f.Zero=_f.Aux=0;
-									_f.Sign=_f.Parity=1;
-									}
-								break;
-							case 4:
-								_f.Aux=res3.b & 0x10 ? 1 : 0;
-								break;
-							case 5:
-							case 7:
-								_f.Aux=0;
-								break;
-							}
-#endif
-						PutShortValue(theDs,op2.mem,res3.x);
-            break;
-          case 3:
-            op2.reg16= &regs.r[Pipe2.rm & 0x7].x;
-						res1.x=res3.x=*op2.reg16;
-						ROTATE_SHIFT16
-#ifdef UNDOCUMENTED_8086
-						switch(Pipe2.reg) {
-							case 6:
-								if(i || _cl) {			// SETMO SETMOC https://www.os2museum.com/wp/undocumented-8086-opcodes-part-i/
-																		// https://www.reenigne.org/blog/8086-microcode-disassembled/
-									res3.x=0xffff;
-									_f.Carry=_f.Ovf=_f.Zero=_f.Aux=0;
-									_f.Sign=_f.Parity=1;
-									}
-								break;
-							case 4:
-								_f.Aux=res3.b & 0x10 ? 1 : 0;
-								break;
-							case 5:
-							case 7:
-								_f.Aux=0;
-								break;
-							}
-#endif
-						*op2.reg16=res3.x;
-						break;
-					}
-				if(Pipe2.reg>=4 )		// solo SAL/SHL/SHR/SAR
-					goto aggFlagWSZP;
-				break;
-
-			case 0xd4:      // AAM
-        _ip++;
-#ifdef EXT_NECV20
-// boh ? no, solite cazzate				Pipe2.b.l=10; // dice...
-#endif
-				if(Pipe2.b.l) {
-					_ah=_al / Pipe2.b.l;    // 10 fisso in teoria, ma si può usare genericamente come base per la conversione...
-					_al=_al % Pipe2.b.l;    //
-					}
-				else {
-#if defined(EXT_NECV20)
-					_ah=0xff;    // dice
-#elif defined(EXT_80186)			// https://forum.vcfed.org/index.php?threads/exploring-the-nec-v20.1248301/   bah...
-					;
-#else
-#ifdef UNDOCUMENTED_8086
-/*          u8 imm = read_inst<u8>();
-          if (imm) {
-              u8 tempAL = (registers[AX]&0xFF);
-              u8 tempAH = tempAL/imm;
-              tempAL = tempAL%imm;
-              registers[AX] = (tempAH<<8)|tempAL;
-
-              set_flag(F_SIGN, tempAL&0x80);
-              set_flag(F_ZERO, tempAL==0);
-              set_flag(F_PARITY, byte_parity[tempAL]);
-              set_flag(F_OVERFLOW,false);
-              set_flag(F_AUX_CARRY,false);
-              set_flag(F_CARRY,false);
-          }
-          else {
-              set_flag(F_SIGN, false);
-              set_flag(F_ZERO, true);
-              set_flag(F_PARITY, true);
-              set_flag(F_OVERFLOW,false);
-              set_flag(F_AUX_CARRY,false);
-              set_flag(F_CARRY,false);
-              interrupt(0, true);
-          }*/
-					_f.Sign=_f.Aux=_f.Carry=_f.Ovf=0;
-					_f.Parity=_f.Zero=1;
-#endif
-					goto divide0;
-#endif
-					}
-        res3.b=_al;
-#ifdef UNDOCUMENTED_8086
-				_f.Aux=_f.Carry=_f.Ovf=0;
-#endif
-        goto aggFlagBSZP;			// 
-				break;
-        
-			case 0xd5:      // AAD
-#ifdef EXT_NECV20
-				Pipe2.b.l=10; // dice...
-#endif
-				res1.b=_al;
-				res2.b=Pipe2.b.l;
-        res3.b=res1.b+(_ah * res2.b);    // v. AAM
-#ifdef UNDOCUMENTED_8086
-	/*          u8 imm = read_inst<u8>();
-            u16 orig16 = registers[AX];
-            u16 temp16 = (registers[AX]&0xFF) + (registers[AX]>>8)*imm;
-            registers[AX] = (temp16&0xFF);
-
-            set_flag(F_SIGN,temp16&0x80);
-            set_flag(F_PARITY, byte_parity[temp16&0xFF]);
-
-            u8 a = orig16;
-            u8 b = (orig16>>8)*imm;
-            u8 result = a+b;
-
-            set_flag(F_ZERO, result==0);
-
-            set_flag(F_CARRY,result < a); //this is now correct
-
-            bool of = ((a ^ result) & (b ^ result)) & 0x80;
-            bool af = ((a ^ b ^ result) & 0x10);
-            set_flag(F_OVERFLOW,of);
-            set_flag(F_AUX_CARRY,af);
-*/
-				_f.Aux=AUX_ADD_8();
-				_f.Ovf=OVF_ADD_8();			// pare... da gloriouscow...
-				_f.Carry=CARRY_ADD_8();
-#endif
-				_al=res3.b;
-        _ah=0;
-        _ip++;
-        goto aggFlagBSZP;			// 
-				break;
-        
-			case 0xd6:      // dice che non è documentata (su 8088)...
-#ifndef EXT_NECV20
-				_al=_f.Carry ? 0xff : 0;
-				break;
-#endif								// altrimenti è come D7!
-
-			case 0xd7:      // XLAT
-				OVERRIDE_SEG(_ds);
-        _al=GetValue(theDs,(uint16_t)(_bx+_al));
-        break;
-        
-#ifdef EXT_80x87      // https://www.ic.unicamp.br/~celio/mc404/opcodes.html#Co
-			case 0xd8:
-			case 0xd9:
-			case 0xda:
-			case 0xdb:
-			case 0xdc:
-			case 0xdd:
-			case 0xde:
-			case 0xdf:
-
-
-//			debug=1;
-
-
-				i=2;
-				switch(Pipe1 & 7) {
-					case 0:
-							status8087,control8087;
-						break;
-					case 1: 
-						switch(Pipe2.b.l) {
-							case 0xc0:    // FLD st(0)
-
-								break;
-							case 0xd0:    // FNOP
-								break;
-							case 0xE0:    // FCHS
-// complement sign of st(0)
-								break;
-							case 0xE1:    // FABS
-								break;
-							case 0xE5:    // FXAM
-								break;
-							case 0xEE:    // FLDZ
-
-//Push +0.0 onto the FPU register stack.                
-
-  dataPtr8087;
-	R8087[8];
-								break;
-							case 0xE8:    // FLD1
-
-//								Push +1.0 onto the FPU register stack.
-  dataPtr8087;
-	R8087[8];
-								break;
-							case 0xE9:    // FLDL2T
-								break;
-							case 0xEB:    // FLDPI
-								break;
-							case 0xEC:    // FLDLG2
-								break;
-							case 0xED:    // FLDLN2
-								break;
-							case 0xF0:    // F2XM1
-								break;
-							case 0xF1:    // FYL2X
-								break;
-							case 0xF2:    // FPTAN
-								break;
-							case 0xF3:    // FPATAN
-								break;
-							case 0xF4:    // FXTRACT
-								break;
-							case 0xF6:    // FDECSTP
-								break;
-							case 0xF7:    // FINCSTP
-								break;
-							case 0xF8:    // FPREM
-								break;
-							case 0xF9:    // FYL2XP1
-								break;
-							case 0xFA:    // FSQRT
-								break;
-							case 0xFC:    // FRNDINT
-								break;
-							case 0xFD:    // FSCALE
-								break;
-							default:      // FNSTCW
-		//(#warning NO! finire con tutti indirizzamenti...
-								res3.x=control8087;
-//								PutShortValue(theDs,op2.mem,res3.x);
-//								_si=control8087;
-
-								break;
-							}
-							status8087,control8087;
-						break;
-					case 2:
-							status8087,control8087;
-						break;
-					case 3:
-						switch(Pipe2.b.l) {
-							case 0xe0:      // FENI
-								break;
-							case 0xe1:      // FDISI
-
-// disabilita IRQ da 8087...
-								break;
-							case 0xe2:      // FCLEX
-status8087 &= 0x7f00;
-
-								break;
-							case 0xe3:      // FNINIT
-								i=0;
-status8087=0; 
-control8087=0x033f /*0x103f*/;
-res3.x=0;			// boh
-  dataPtr8087=0; instrPtr8087=0;
-
-								break;
-							}
-							status8087,control8087;
-						break;
-					case 4:
-							status8087,control8087;
-						break;
-					case 5:
-						// FSTSW
-						_ax=status8087;
-res3.d=MAKELONG(_ax,0);			// boh, finire
-i=4;
-//								PutShortValue(theDs,op2.mem,res3.x);
-						break;
-					case 6:
-						switch(Pipe2.b.l) {
-							case 0xF9:    // Divide ST(1) by ST(0), store result in ST(1), and pop the register stack.
-								break;
-							case 0xD9:    // FCOMPP
-								break;
-							default:
-								break;
-							}
-						// FADD FDIV ecc...
-						//DE F9 Divide ST(1) by ST(0), store result in ST(1), and pop the register stack.
-						// DE D9 FCOMPP
-							status8087,control8087;
-						break;
-					case 7:
-						switch(Pipe2.b.l) {
-							case 0xe0:      // FNSTSW AX
-								_ax=status8087;
-res3.x=_ax;
-//								PutShortValue(theDs,op2.mem,res3.x);
-								break;
-							}
-						status8087,control8087;
-						break;
-					}
-
-				COMPUTE_RM			// (per non replicare la macro 8 volte...
-						switch(i) {
-							case 2:
-								PutShortValue(theDs,op2.mem,res3.x);
-								break;
-							case 4:
-								PutShortValue(theDs,op2.mem,LOWORD(res3.x));
-// si schianta!!! boh...								PutShortValue(theDs,op2.mem+2,HIWORD(res3.x));
-								break;
-							default:
-								break;
-							}
-						break;
-          case 3:
-						GET_REGISTER_8_16_2
-						switch(i) {
-							case 2:
-		            *op2.reg16=res3.x;
-								break;
-							case 4:
-								// ??
-								break;
-							default:
-								break;
-							}
-						break;
-					}
-        break;
-          
-#else            
-			case 0xd8:
-			case 0xd9:
-			case 0xda:
-			case 0xdb:
-			case 0xdc:
-			case 0xdd:
-			case 0xde:
-			case 0xdf:
-        // coprocessore matematico
-/*        switch(Pipe2.mod) {      // faccio "nulla" :)   https://stackoverflow.com/questions/42543905/what-are-8086-esc-instruction-opcodes
-					case 0:
-						_ip+=1;
-						break;
-					case 1:
-					case 3:
-						_ip+=2;
-						break;
-					case 2:
-						_ip+=3;
-						break;
-					}
-					*/
-				COMPUTE_RM 
-					}
-
-
-#ifdef EXT_80286
-			if(_msw.EM)
-				;
-      // causare INT 07
-//			i=7;			// sarebbe 6 qua dicono   i=6; NON SI CAPISCE
-			Exception86.descr.ud=EXCEPTION_NOMATH;
-
-
-#pragma message			qua niente push parm !!
-
-
-
-			goto exception286;
-
-#endif
-
-#ifdef EXT_80186		// boh
-			IntIRQNum.Vector=7;			// sarebbe 6 qua dicono   i=6; NON SI CAPISCE
-//				goto do_irq;
-#else
-				IntIRQNum.Vector=7;
-//				goto do_irq;
-#endif
-#endif
-
-
-        break;
-        
-			case 0xe0:      // LOOPNZ/LOOPNE
-				_ip++;
-        if(--_cx && !_f.Zero)
- 					goto jmp_short;
-				break;
-        
-			case 0xe1:      // LOOPZ/LOOPE
-				_ip++;
-        if(--_cx && _f.Zero)
-          goto jmp_short;
-				break;
-        
-			case 0xe2:      // LOOP
-				_ip++;
-        if(--_cx)
-          goto jmp_short;
-				break;
-
-			case 0xe3:      // JCXZ
-				_ip++;
-        if(!_cx)
-          goto jmp_short;
-				break;
-
-			case 0xe4:        // INB
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-//					goto exception286priv;
-					}
-#endif
-				_al=InValue(Pipe2.b.l);
-				_ip++;
-				break;
-
-			case 0xe5:        // INW
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-//					goto exception286priv;
-					}
-#endif
-				_ax=InShortValue(Pipe2.b.l);
-				_ip++;
-				break;
-
-			case 0xe6:      // OUTB
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-//					goto exception286priv;
-					}
-#endif
-				OutValue(Pipe2.b.l,_al);
-				_ip++;
-				break;
-
-			case 0xe7:      // OUTW
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-//					goto exception286priv;
-					}
-#endif
-				OutShortValue(Pipe2.b.l,_ax);
-				_ip++;
-				break;
-
-			case 0xe8:      // CALL rel16
-        _ip+=2;
-				PUSH_STACK(_ip);
-				_ip+=(int16_t)Pipe2.x.l;
-				break;
-
-			case 0xe9:      // JMP rel16 (32 su 386)
-				_ip+=(int16_t)Pipe2.x.l+2;
-				break;
-        
-			case 0xea:      // JMP abs  (32 su 386)
-        GetMorePipe(_cs,(uint16_t)(_ip-1));
-
-flush_cache:
-/*				{union _DTR *dtr=&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-_cs->selector=Pipe2.x.h; 
-if(_msw.PE) 
-memcpy(((uint8_t*)_cs)+2,&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h],sizeof(struct SEGMENT_DESCRIPTOR)-2);
-*/
-
-#if defined(EXT_80286)
-				if(_msw.PE) 
-				{
-//				union SEGMENT_SELECTOR *ss=(union SEGMENT_SELECTOR *)Pipe2.x.h;
-				struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
-				struct SEGMENT_DESCRIPTOR_GATE *sdg;
-				struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-				struct SEGMENT_DESCRIPTOR_TSS *sdt;
-				struct TASK_STATE_REGISTER *newtsr,*oldtsr;
-//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-//				else
-					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-				sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-
-//				WordCount & 0x1f;		// stack words da copiare
-				if(!sd->Access.System)	{	// se System
-					switch(sdg->Access.Type) {
-						case 1:		// TSS16
-
-							newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sd->Base,sd->BaseH)];
-							goto do_tasksw_jmp;
-							// e forse fa anche meno controlli...
-							break;
-						case 5:		// Task Gate (Segment / Descriptor
-							sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-							// usarne solo 1 ovviamente!
-//							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-							if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
-								}
-							else {		// intra-level
-								}
-							newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-
-do_tasksw_jmp:
-							oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-
-//no! qua							newtsr->PTSS=_tss.x;
-							_tss.x=sd->Base;
-							oldtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(oldsd->Base,oldsd->BaseH)];
-
-							oldtsr->Ax=_ax;
-							oldtsr->Bx=_bx;
-							oldtsr->Cx=_cx;
-							oldtsr->Dx=_dx;
-							oldtsr->Bp=_bp;
-							oldtsr->Sp=_sp;
-							oldtsr->Si=_si;
-							oldtsr->Di=_di;
-							oldtsr->Flags.x=_f.x;
-							oldtsr->Flags.NestedTask=0;
-							oldtsr->Es=_es->s.x;
-							oldtsr->Ds=_ds->s.x;
-							oldtsr->Ss=_ss->s.x;
-							oldtsr->Cs=_cs->s.x;
-							oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
-
-							sd->Access.A=1;		// MUST be 0 before!
-							oldsd->Access.A=0;
-
-							_tsr=newtsr;
-							LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
-
-							_ax=newtsr->Ax;
-							_bx=newtsr->Bx;
-							_cx=newtsr->Cx;
-							_dx=newtsr->Dx;
-							_bp=newtsr->Bp;
-							_sp=newtsr->Sp;
-							_si=newtsr->Si;
-							_di=newtsr->Di;
-							_f.x=newtsr->Flags.x;
-							_f.NestedTask=1;
-							ASSIGN_SEGMENT(_es,newtsr->Es);
-							ASSIGN_SEGMENT(_ds,newtsr->Ds);
-							ASSIGN_SEGMENT(_ss,newtsr->Ss);
-							ASSIGN_SEGMENT(_cs,newtsr->Cs);
-							_ip=newtsr->EntryPoint;
-
-							res3.x=oldtsr->Ldt;
-							oldtsr->Ldt=newtsr->Ldt;
-							newtsr->Ldt=res3.x;
-
-							_msw.TS=1;
-							// v. table 8-7 per differenze tra CALL JMP IRET
-
-
-//METTERE								_f.IOPL=sd->Access.DPL;
-
-							break;
-
-						case 4:		// Call gate
-							if(_cs->s.RPL>sd->Access.DPL ||
-								_cs->s.RPL<sd->Access.DPL) {		// inter-level
-
-								if(sdg->WordCount) {
-									union SEGMENTS_DESCRIPTOR *_ss2;
-									res3.x=_sp;
-// dov'è??
-									_ss2=_ss;
-//									idem!!
-
-
-									i=0;
-									while(sdg->WordCount--) {
-										PutShortValue(_ss,_sp+i,GetShortValue(_ss2,res3.x+i));
-										i+=2;
-										}
-									}
-
-
-								res3.x=_sp;
-								PUSH_STACK(_ss->s.x);		// 
-								PUSH_STACK(res3.x);		// 
-
-								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-
-//								_f.IOPL=sd->Access.DPL;
-
-
-								}
-							else {		// intra-level
-								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-								ASSIGN_SEGMENT(_cs,sdg->Selector);
-								}
-							break;
-
-						case 6:		// Interrupt gate
-						case 7:		// Trap gate
-						default:
-
-							goto exception286;
-							break;
-						}
-					}
-				else {
-					_ip=Pipe2.x.l;
-					ASSIGN_SEGMENT(_cs,Pipe2.x.h);
-
-					}
-
-				}
-			else {
-				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
-				}
-#else
-				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
-#endif
-
-
-//				}
-				break;
-
-			case 0xeb:      // JMP rel8
-				_ip++;
-				goto jmp_short;
-				break;
-			
-			case 0xec:        // INB
-				_al=InValue(_dx);
-				break;
-
-			case 0xed:        // INW
-				_ax=InShortValue(_dx);
-
-#ifdef EXT_NECV20
-				// dice che ED FD è RETEM, ritorno da modo 8080...
-//			_f.MD=1;
-				// e ED ED CALLN
-#endif
-				break;
-
-			case 0xee:        // OUTB
-				OutValue(_dx,_al);
-				break;
-
-			case 0xef:        // OUTW
-				OutShortValue(_dx,_ax);
-				break;
-
-			case 0xf0:				// LOCK (prefisso...
-#if defined(EXT_80286)
-				if(_msw.PE && _f.IOPL      >0/* IOPL tas klevel*/) {
-
-//???					_cs->s.RPL
-
-
-					goto exception286priv;
-					}
-#endif
-				inLock=2;
-				break;
-
-			case 0xf1:
-#ifdef EXT_NECV20
-				// secondo il piciurlo fa "LOCK"
-#endif
-Trap:
-				IntIRQNum.Vector=1 /*INT1*/ ;		// EXCEPTION_TRACE usare
-#ifdef EXT_80286
-				IntIRQNum.Type=1;
-#endif
-				goto do_irq;
-				break;
-
-			case 0xf2:				//REPNZ/REPNE; entrambi vengono mutati in 3 nelle istruzioni che non usano Z
-        if(_cx) {			// 0 salta tutto!
-					inRep=0x12;
-					inEI++;		// forse ne fa uno di troppo alla fine, ma ok...
-					}
-				else {
-/*			    Pipe1=GetPipe(_cs,_ip++);
-					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
-//					ma perché???
-#if defined(EXT_80386)
-						|| Pipe1==0x64 || Pipe1==0x65
-#endif
-						)*/
-						_ip++;
-					}
-				break;
-
-			case 0xf3:				//REPZ/REPE
-        if(_cx) {			// 0 salta tutto!
-					inRep=0x11;
-					inEI++;
-					}
-				else {
-/*			    Pipe1=GetPipe(_cs,_ip++);
-					if(Pipe1==0x26 || Pipe1==0x2e || Pipe1==0x36 || Pipe1==0x3e		// salto anche ev. segment override messo DOPO (di solito andrebbe prima...
-//					ma perché???
-#if defined(EXT_80386)
-						|| Pipe1==0x64 || Pipe1==0x65
-#endif
-						)*/
-						_ip++;
-					}
-				break;
-
-			case 0xf4:				// HLT
-#if defined(EXT_80286)
-				if(_msw.PE && _f.IOPL      >0/* IOPL tas klevel*/) {
-
-//_cs->s.RPL???
-					goto exception286priv;
-					}
-#endif
-			  CPUPins |= DoHalt;
-				SetWindowText(hStatusWnd,"HALT");
-				debug=0;		// beh se no riempie il log di roba
-				break;
-
-			case 0xf5:				// CMC
-				_f.Carry = !_f.Carry;
-				break;
-
-			case 0xf6:        // altre MUL ecc //	; mul on V20 does not affect the zero flag,   but on an 8088 the zero flag is used
-			case 0xf7:
-			  if(Pipe2.mod<3)
-					GetMorePipe(_cs,(uint16_t)(_ip-1));		// 
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						if(!(Pipe1 & 1)) {
-              res2.b=GetValue(theDs,op2.mem);
-							switch(Pipe2.reg) {
-								case 0:       // TEST
-								case 1:       // TEST forse....
-                  _ip++;
-        					res1.b = Pipe2.bd[immofs];
-									res3.b = res1.b & res2.b;
-									goto aggFlagBZC;
-									break;
-								case 2:			// NOT
-									res3.b = ~res2.b;
-									PutValue(theDs,op2.mem,res3.b);
-									break;
-								case 3:			// NEG
-									res1.b = 0;
-									res3.b = res1.b-res2.b;
-									PutValue(theDs,op2.mem,res3.b);
-									goto aggFlagSB;
-                  //The CF flag set to 0 if the source operand is 0; otherwise it is set to 1. The OF, SF, ZF, AF, and PF flags are set according to the result. 
-									break;
-								case 4:       // MUL8
-                  op1.reg8= &_al;
-                  res1.b=*op1.reg8;
-									res3.x = ((uint16_t)res1.b)*res2.b;
-									_ax=res3.x;			// non è bello ma...		
-									_f.Carry=_f.Ovf= !!_ah;
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_16();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.b=_ah;
-									_f.Sign=SIGN_8();
-									goto aggParity;
-#endif
-									break;
-								case 5:       // IMUL8
-                  op1.reg8= &_al;
-                  res1.b=*op1.reg8;
-									res3.x = ((int16_t)(int8_t)res1.b)*(int8_t)res2.b;
-									_ax=res3.x;			// (non è bello ma...		
-									_f.Carry=_f.Ovf= (((res3.x & 0xff80) == 0xff80)  ||  
-										((res3.x & 0xff80) == 0))  ? 0 : 1;
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_16();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.b=_ah;
-									_f.Sign=SIGN_8();
-									goto aggParity;		// nei test è diversa... e cmq è undefined!
-#endif
-									break;
-								case 6:       // DIV8 (i flag sono undefined ma secondo i test sono usati...
-									if(res2.b) {
-										res3.x = (uint16_t)_ax / res2.b;
-										if(res3.x > 0xFF) {
-#ifdef UNDOCUMENTED_8086
-											_f.Parity=0;
-											_f.Sign=!!(_ah & 0x80);
-#endif
-											goto divide0; //divide error
-											}
-										_ah = _ax % res2.b;			// non è bello ma...
-										_al = res3.b;
-#ifdef UNDOCUMENTED_8086
-										_f.Parity=0;
-										_f.Sign=!!(_ah & 0x80);
-#endif
-										}
-									else {
-divide0:
-#ifdef EXT_80286
-//										IntIRQNum.Vector=0;
-//										IntIRQNum.Type=0;
-										Exception86.descr.ud=EXCEPTION_DIVIDE0;
-										goto exception286;
-#else
-										IntIRQNum.Vector=0;
-										goto do_irq;
-#endif
-										}
-									break;
-								case 7:       // IDIV8 (i flag sono undefined ma secondo i test sono usati...
-									if(res2.b) {
-										res3.x = ((int16_t)_ax) / (int8_t)res2.b;
-										_ah =  ((int16_t)_ax) % (int8_t)res2.b;
-										_al = res3.b;
-#ifdef UNDOCUMENTED_8086
-										if(inRep)			// undocumented! e PRIMA del controllo, anche se non so se va pure su res3.x
-											_al=-_al;
-#endif
-#ifndef EXT_80186
-										if(((int16_t)res3.x) > 127 || ((int16_t)res3.x) <= -128) // secondo i test, 0xff80 deve dare errore...
-//											(On the 8088, divisors of 0x80 (for 8-bit division) or 0x8000 (for 16-bit division) generate divide exceptions. )
-#else
-										if(((int16_t)res3.x) > 127 || ((int16_t)res3.x) < -128) // 
-#endif
-											goto divide0; //divide error
-#ifdef UNDOCUMENTED_8086
-										_f.Parity=0;
-#endif
-										}
-									else
-										goto divide0;
-									break;
-								}
-							}
-						else {
-              res2.x=GetShortValue(theDs,op2.mem);
-							switch(Pipe2.reg) {
-								case 0:       // TEST
-								case 1:       // TEST forse....
-                  _ip+=2;
-        					res1.x = MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]);
-									res3.x = res1.x & res2.x;
-									goto aggFlagWZC;
-									break;
-								case 2:			// NOT
-									res3.x = ~res2.x;
-									PutShortValue(theDs,op2.mem,res3.x);
-									break;
-								case 3:			// NEG
-									res1.x=0;
-									res3.x = res1.x-res2.x;			// 
-									PutShortValue(theDs,op2.mem,res3.x);
-									goto aggFlagSW;
-                  //The CF flag set to 0 if the source operand is 0; otherwise it is set to 1. The OF, SF, ZF, AF, and PF flags are set according to the result. 
-									break;
-								case 4:       // MUL16
-                  op1.reg16= &_ax;
-                  res1.x=*op1.reg16;
-									res3.d = ((uint32_t)res1.x)*res2.x;
-									_ax = LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non è bello ma...	???perché?
-									_f.Carry=_f.Ovf= !!_dx;
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_32();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.x=_dx;
-									_f.Sign=SIGN_16();
-									goto aggParity;
-#endif
-									break;
-								case 5:       // IMUL16
-                  op1.reg16= &_ax;
-                  res1.x=*op1.reg16;
-									res3.d = ((int32_t)(int16_t)res1.x)*(int16_t)res2.x;
-									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non è bello ma...	???perché?
-									_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
-										((res3.d & 0xffff8000) == 0))  ? 0 : 1;
-
-// boh		on 8088 at least, SZP flags are calculated with the value of AH for 8-bit MUL and DX for 16-bit MUL
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_32();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.x=_dx;
-									_f.Sign=SIGN_16();
-									goto aggParity;// nei test è diversa... e cmq è undefined!
-#endif
-									break;
-								case 6:       // DIV16
-									if(res2.x) {
-										res3.d = ((uint32_t)MAKELONG(_ax,_dx)) / res2.x;
-										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non è bello ma...
-			              _ax = res3.x;
-										if(res3.d > 0xFFFF) 
-											goto divide0; //divide error
-										}
-									else
-										goto divide0;
-									break;
-								case 7:       // IDIV16
-									if(res2.x) {
-										res3.d = ((int32_t)MAKELONG(_ax,_dx)) / (int16_t)res2.x;
-										_dx = ((int32_t)MAKELONG(_ax,_dx)) % (int16_t)res2.x;
-			              _ax = res3.x;
-#ifdef UNDOCUMENTED_8086
-										if(inRep)			// undocumented! e PRIMA del controllo, anche se non so se va pure su res3.d
-											_ax=-_ax;
-										_f.Parity=0;
-#endif
-#ifndef EXT_80186
-										if(((int32_t)res3.d) > 32767 || ((int32_t)res3.d) <= -32768)
-//											(On the 8088, divisors of 0x80 (for 8-bit division) or 0x8000 (for 16-bit division) generate divide exceptions. )
-#else
-										if(((int32_t)res3.d) > 32767 || ((int32_t)res3.d) < -32768)
-#endif
-											goto divide0; //divide error
-											}
-									else
-										goto divide0;
-									break;
-								}
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2
-						if(!(Pipe1 & 1)) {
-              res2.b=*op2.reg8;
-							switch(Pipe2.reg) {
-								case 0:       // TEST
-								case 1:       // TEST forse....
-                  _ip++;
-        					op1.mem = Pipe2.b.h;
-                  res1.b=(uint8_t)op1.mem;
-									res3.b = res1.b & res2.b;
-									goto aggFlagBZC;
-									break;
-								case 2:			// NOT
-                  op1.reg8=op2.reg8;
-									res3.b = ~res2.b;
-									*op1.reg8 = res3.b;
-									break;
-								case 3:			// NEG
-                  op1.reg8=op2.reg8;
-									res1.b=0;
-									res3.b = res1.b-res2.b;
-									*op1.reg8 = res3.b;
-                  //The CF flag set to 0 if the source operand is 0; otherwise it is set to 1. The OF, SF, ZF, AF, and PF flags are set according to the result. 
-									goto aggFlagSB;
-									break;
-								case 4:       // MUL8
-        					op1.reg8= &_al;
-                  res1.b=*op1.reg8;
-									res3.x = ((uint16_t)res1.b)*res2.b;
-									_ax=res3.x;			// 
-									_f.Carry=_f.Ovf= !!_ah;
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_16();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.b=_ah;
-									_f.Sign=SIGN_8();
-									goto aggParity;
-#endif
-									break;
-								case 5:       // IMUL8
-        					op1.reg8= &_al;
-                  res1.b=*op1.reg8;
-									res3.x = ((int16_t)(int8_t)res1.b)*(int8_t)res2.b;
-									_ax=res3.x;			// 
-									_f.Carry=_f.Ovf= (((res3.x & 0xff80) == 0xff80)  ||  
-										((res3.x & 0xff80) == 0))  ? 0 : 1;
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_16();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.b=_ah;
-									_f.Sign=SIGN_8();
-									goto aggParity;// nei test è diversa... e cmq è undefined!
-#endif
-									break;
-        // DIV NON aggiorna flag!
-								case 6:       // DIV8 (i flag sono undefined ma secondo i test sono usati...
-									if(res2.b) {
-										res3.x = _ax / res2.b;
-										_ah = _ax % res2.b;			// non è bello ma...
-										_al = res3.b;
-										if(res3.x > 0xFF) 
-											goto divide0; //divide error
-										}
-									else
-										goto divide0;
-									break;
-								case 7:       // IDIV8 (i flag sono undefined ma secondo i test sono usati...
-									/*									if(res2.b) {
-										if((int16_t)_ax >= 0) {
-											res3.x = ((int16_t)_ax) / res2.b;
-											_ah =  ((int16_t)_ax) % res2.b;
-											_al = res3.b;
-											if((int16_t)res3.x > 127)
-												goto divide0; //divide error
-											}
-										else {
-											res3.x = ((int16_t)_ax) / res2.b;
-											_ah =  ((int16_t)_ax) % res2.b;
-											_al = -res3.b;
-											if((int16_t)res3.x < -128) 
-												goto divide0; //divide error
-											}
-										}
-*/
-									if(res2.b) {
-										res3.x = ((int16_t)_ax) / (int8_t)res2.b;
-										_ah =  ((int16_t)_ax) % (int8_t)res2.b;
-										_al = res3.b;
-#ifdef UNDOCUMENTED_8086
-										if(inRep)			// undocumented! e PRIMA del controllo, anche se non so se va pure su res3.x
-											_al=-_al;
-#endif
-#ifndef EXT_80186
-										if(((int16_t)res3.x) > 127 || ((int16_t)res3.x) <= -128) // secondo i test, 0xff80 deve dare errore...
-//											(On the 8088, divisors of 0x80 (for 8-bit division) or 0x8000 (for 16-bit division) generate divide exceptions. )
-#else
-										if(((int16_t)res3.x) > 127 || ((int16_t)res3.x) < -128) // 
-#endif
-											goto divide0; //divide error
-#ifdef UNDOCUMENTED_8086
-										_f.Parity=0;
-#endif
-										}
-									else
-										goto divide0;
-									break;
-								}
-							} 
-						else {
-              res2.x=*op2.reg16;
-							switch(Pipe2.reg) {
-								case 0:       // TEST
-								case 1:       // TEST forse....
-                  _ip+=2;
-        					op1.mem = Pipe2.xm.w;
-                  res1.x=op1.mem;
-									res3.x = res1.x & res2.x;
-									goto aggFlagWZC;
-									break;
-								case 2:			// NOT
-                  op1.reg16=op2.reg16;
-									res3.x = ~res2.x;
-		              *op1.reg16 = res3.x;
-									break;
-								case 3:			// NEG
-                  op1.reg16=op2.reg16;
-									res1.x=0;
-									res3.x = res1.x-res2.x;
-		              *op1.reg16 = res3.x;
-                  //The CF flag set to 0 if the source operand is 0; otherwise it is set to 1. The OF, SF, ZF, AF, and PF flags are set according to the result. 
-									goto aggFlagSW;
-									break;
-								case 4:       // MUL16
-        					op1.reg16= &_ax;
-                  res1.x=*op1.reg16;
-									res3.d = ((uint32_t)res1.x)*res2.x;
-									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non è bello ma...	???perché?
-									_f.Carry=_f.Ovf= !!_dx;
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_32();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.x=_dx;
-									_f.Sign=SIGN_16();
-									goto aggParity;
-#endif
-									break;
-								case 5:       // IMUL16
-        					op1.reg16= &_ax;
-                  res1.x=*op1.reg16;
-									res3.d = ((int32_t)(int16_t)res1.x)*(int16_t)res2.x;
-									_ax=LOWORD(res3.d);			// 
-									_dx=HIWORD(res3.d);			// non è bello ma...	???perché?
-									_f.Carry=_f.Ovf= (((res3.d & 0xffff8000) == 0xffff8000)  ||  
-										((res3.d & 0xffff8000) == 0))  ? 0 : 1;
-#ifdef EXT_NECV20
-//									_f.Zero=ZERO_32();     // (ricontrollare 2023 per moltiplicazione
-#else
-									_f.Zero=0;
-#endif
-#ifdef UNDOCUMENTED_8086
-									_f.Aux=0;
-									res3.x=_dx;
-									_f.Sign=SIGN_16();
-									goto aggParity;// nei test è diversa... e cmq è undefined!
-#endif
-									break;
-        // DIV NON aggiorna flag!
-								case 6:       // DIV16
-									if(res2.x) {
-										res3.d = ((uint32_t)MAKELONG(_ax,_dx)) / res2.x;
-										_dx = ((uint32_t)MAKELONG(_ax,_dx)) % res2.x;			// non è bello ma...
-										_ax = res3.x;
-										if(res3.d > 0xFFFF) 
-											goto divide0; //divide error
-										}
-									else
-										goto divide0;
-									break;
-								case 7:       // IDIV16
-									if(res2.x) {
-										res3.d = ((int32_t)MAKELONG(_ax,_dx)) / (int16_t)res2.x;
-										_dx =  ((int32_t)MAKELONG(_ax,_dx)) % (int16_t)res2.x;
-										_ax = res3.x;
-#ifdef UNDOCUMENTED_8086
-										if(inRep)			// undocumented! e PRIMA del controllo, anche se non so se va pure su res3.d
-											_ax=-_ax;
-										_f.Parity=0;
-#endif
-#ifndef EXT_80186
-										if(((int32_t)res3.d) > 32767 || ((int32_t)res3.d) <= -32768)
-//											(On the 8088, divisors of 0x80 (for 8-bit division) or 0x8000 (for 16-bit division) generate divide exceptions. )
-#else
-										if(((int32_t)res3.d) > 32767 || ((int32_t)res3.d) < -32768)
-#endif
-											goto divide0;
-										}
-									else
-										goto divide0;
-									break;
-								}
-              }
-            break;
-          }
-				break;
-        
-			case 0xf8:				// CLC
-				_f.Carry=0;
-				break;
-
-			case 0xf9:				// STC
-				_f.Carry=1;
-				break;
-        
-			case 0xfa:        // CLI
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-
-//					_cs->s.RPL
-					goto exception286priv;
-					}
-#endif
-				_f.IF=0;
-				break;
-
-			case 0xfb:        // STI
-#if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
-
-//_cs->s.RPL;
-
-exception286priv:
-					Exception86.descr.ud=EXCEPTION_GP;
-					goto exception286;
-					}
-#endif
-				_f.IF=1;
-        // (The delayed effect of this instruction is provided to allow interrupts to be enabled just before returning from a procedure or subroutine. For instance, if an STI instruction is followed by an RET instruction, the RET instruction is allowed to execute before external interrupts are recognized.
-        inEI=1;
-				break;
-        
-			case 0xfc:				// CLD
-				_f.Dir=0;
-				break;
-
-			case 0xfd:				// STD
-				_f.Dir=1;
-				break;
-        
-			case 0xfe:    // altre INC DEC 8bit
-			case 0xff:    // 
-				COMPUTE_RM_OFS
-					GET_MEM_OPER
-						if(!(Pipe1 & 1)) {
-              res1.b=GetValue(theDs,op2.mem);
-							switch(Pipe2.reg) {
-								case 0:       // INC
-									res2.b = 1;
-									res3.b = res1.b+res2.b;
-									PutValue(theDs,op2.mem,res3.b);
-
-aggFlagIncB:
-                	_f.Ovf= res3.b == 0x80 ? 1 : 0; //V = 1 if x=7FH before, else 0
-									goto aggFlagABA;
-									break;
-								case 1:       // DEC
-									res2.b = 1;
-									res3.b = res1.b-res2.b;
-									PutValue(theDs,op2.mem,res3.b);
-
-aggFlagDecB:
-                  _f.Ovf= res3.b == 0x7f ? 1 : 0; //V = 1 if x=80H before, else 0
-									goto aggFlagSBA;
-									break;
-#ifdef EXT_NECV20
-								case 3:
-								case 5:			// sono "nonsense" a 8 bit, dice!
-								  CPUPins |= DoHalt;
-									break;
-#endif
-								default:
-									goto unknown_istr;
-									break;
-								}
-							}
-						else {
-              res1.x=GetShortValue(theDs,op2.mem);
-							switch(Pipe2.reg) {
-								case 0:       // INC
-									res2.x = 1;
-									res3.x = res1.x+res2.x;
-									PutShortValue(theDs,op2.mem,res3.x);
-									goto aggFlagIncW;
-									break;
-								case 1:       // DEC
-									res2.x = 1;
-									res3.x = res1.x-res2.x;
-									PutShortValue(theDs,op2.mem,res3.x);
-									goto aggFlagDecW;
-									break;
-								case 2:			// CALL (D)WORD PTR
-									PUSH_STACK(_ip);
-									_ip=res1.x;
-									break;
-								case 3:			// LCALL (FAR) (D)WORD PTR
-									PUSH_STACK(_cs->s.x);		// 
-									PUSH_STACK(_ip);
-									_ip=res1.x;
-									ASSIGN_SEGMENT(_cs,GetShortValue(theDs,(uint16_t)(op2.mem+2)));
-									break;
-								case 4:       // JMP DWORD PTR jmp [100]
-									_ip=res1.x;
-									break;
-								case 5:       // JMP FAR DWORD PTR
-									_ip=res1.x;
-									ASSIGN_SEGMENT(_cs,GetShortValue(theDs,(uint16_t)(op2.mem+2)));
-
-									/*{
-												spoolFile=_lcreat("ibmbioetc.bin",0);
-			_lwrite(spoolFile,&ram_seg[0x500],0x3700-0x500);
-_lclose(spoolFile);
-}*/
-
-									break;
-								case 6:       // PUSH 
-#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti è undocumented pure per V20 e credo anche 286...
-								case 7:
-#endif
-									PUSH_STACK(res1.x);
-									break;
-								default:
-									goto unknown_istr;
-									break;
-								}
-              }
-            break;
-          case 3:
-						GET_REGISTER_8_16_2 
-						if(!(Pipe1 & 1)) {
-              res1.b=*op2.reg8;
-							switch(Pipe2.reg) {
-								case 0:       // INC
-									res2.b = 1;
-									res3.b = res1.b+res2.b;
-									*op2.reg8=res3.b;
-									goto aggFlagIncB;
-									break;
-								case 1:       // DEC
-									res2.b = 1;
-									res3.b = res1.b-res2.b;
-									*op2.reg8=res3.b;
-									goto aggFlagDecB;
-									break;
-								default:
-									goto unknown_istr;
-									break;
-								}
-							} 
-						else {
-              res1.x=*op2.reg16;
-							switch(Pipe2.reg) {
-								case 0:       // INC
-									res2.x = 1;
-									res3.x = res1.x+res2.x;
-									*op2.reg16=res3.x;
-									goto aggFlagIncW;
-									break;
-								case 1:       // DEC
-									res2.x = 1;
-									res3.x = res1.x-res2.x;
-									*op2.reg16=res3.x;
-									goto aggFlagDecW;
-									break;
-								case 2:			// CALL (D)WORD PTR 
-									PUSH_STACK(_ip);
-									_ip=res1.x;
-									break;
-								case 3:			// CALL FAR DWORD32 PTR
-									PUSH_STACK(_cs->s.x);		// 
-									PUSH_STACK((_ip   /*+2*/));
-									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-									ASSIGN_SEGMENT(_cs,(*op2.reg16+2));
-									break;
-								case 4:       // JMP DWORD PTR jmp [100]
-									_ip=res1.x;
-									break;
-								case 5:       // JMP FAR DWORD PTR
-									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-									ASSIGN_SEGMENT(_cs,(*op2.reg16+2));
-									break;
-								case 6:       // PUSH 
-#if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti è undocumented pure per V20 e credo anche 286...
-								case 7:
-#endif
-#ifdef EXT_80286
-#else
-									if(op2.reg16==&_sp)
-										res1.x-=2;
-#endif
-									PUSH_STACK(res1.x);
-									break;
-								default:
-									goto unknown_istr;
-									break;
-								}
-              }
-            break;
-          }
-				break;
-        
-			default:
-				{
-					char myBuf[128];
-unknown_istr:
-#ifdef EXT_80286
-				wsprintf(myBuf,"Istruzione sconosciuta a %04x:%04x: %02x %02x %02x",
-					_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip-1,Pipe1,GetValue(_cs,(uint16_t)(_ip-1)),GetValue(_cs,(uint16_t)(_ip)));
-#else
-				wsprintf(myBuf,"Istruzione sconosciuta a %04x:%04x: %02x %02x %02x",
-					_cs->s.x,_ip-1,Pipe1,GetValue(_cs,(uint16_t)(_ip-1)),GetValue(_cs,(uint16_t)(_ip)));
-#endif
-				SetWindowText(hStatusWnd,myBuf);
-				strcat(myBuf," *********\n");
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-				}
-
-#if defined(EXT_80286)
-exception286UD:
-				Exception86.descr.ud=EXCEPTION_UD;
-				Exception86.parm=0;
-
-exception286:
-				Exception86.addr=oldIp;			// finire
-				Exception86.addrH=_cs->s.x;			// finire
-				Exception86.descr.rw=1;
-exception286ext:
-				Exception86.active=1;
-				Exception86.descr.in=1;
-
-//		if(Exception86.active) 
-				{
-			char myBuf[256];
-      wsprintf(myBuf,"8086 exception %u (%c) %04X:%04X; %08X\r\n",Exception86.descr.ud,Exception86.descr.rw ? 'R' : 'W',
-				_msw.PE ? _cs->d.BaseH : _cs->s.x,_ip, Exception86.addr);
-			_lwrite(spoolFile,myBuf,strlen(myBuf));
-			SetWindowText(hStatusWnd,myBuf);
-			Exception86.active=0;
-
-
-//			debug=1;
-
-
-			}
-
-				//PUSHARE Exception86.parm  v. SOPRA
-				IntIRQNum.Vector=Exception86.descr.ud;
-				IntIRQNum.Type=0;
-
-				goto do_irq;
-
-#else if defined(EXT_80186)
-
-				IntIRQNum.Vector=6 /*UD*/ ;
-				goto do_irq;
-#endif
-
-				break;
-			}
-    
-    
-#ifdef EXT_80286
-		if(_msw.PE && Exception86.active)
-			goto exception286ext;
-#endif
-
-    if(_f.Trap) {
-      i=0xf1;
-      goto Trap;   // eseguire IRQ 0xf1??
-      }
-
-
-	if(inRep)
-		goto rifo;
-
-	if(segOverride) {
-		if(inEI) {		// SOLO se è stata appena impostato e NON ancora utilizzato! (per test, ma non è perfetto! se ci sono altre ragioni tipo MOV SS...
-      inEI--;
-			goto rifo;
-			}
-		else
-			segOverride=0;
-		}
-
-fine:
-    ;
-	}
-#endif

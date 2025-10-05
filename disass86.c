@@ -8,11 +8,19 @@
 
 
 
+//FINIRE tutti i OR ADD ecc da 00 a 38, rm->reg e viceversa
+
+
+// august 2025, #goDEATHgo #fuckmattarella
+
 HFILE spoolFile;
 
 char commento[256];
 BYTE Opzioni,CPUType;
 BYTE sizeOverride=0,sizeOverrideA=0;
+extern union MACHINE_STATUS_WORD _msw;
+extern union _DTR GDTR;
+extern union _DTR LDTR;
 
 static const char *getRegister(BYTE Pipe1,BYTE reg) {
 	const char *r;
@@ -260,6 +268,16 @@ static char *outputText(char *d,const char *s) {
 	return d;
 	}
 	
+static char *outputChar(char *d,char s) {
+	WORD i=strlen(d);
+
+	d[i++]=s;
+	d[i]=0;
+	return d;
+	}
+//#define outputComma(d) outputChar(d,',')
+#define outputComma(d) outputText(d,", ")
+
 static char *outputPtr(char *d,BYTE t) {
 
 	switch(t) {
@@ -290,7 +308,13 @@ static char *outputByte(char *d,BYTE n) {
 	if(Opzioni & 4) {
 		wsprintf(myBuf,"%d",n);
 		if(*commento)
-			strcat(commento," ");
+			strcat(commento,"  ");
+		strcat(commento,myBuf);
+		}
+	if(Opzioni & 8 && isprint(n)) {
+		wsprintf(myBuf,"'%c'",n);
+		if(*commento)
+			strcat(commento,"  ");
 		strcat(commento,myBuf);
 		}
 
@@ -305,7 +329,7 @@ static char *outputWord(char *d,WORD n) {
 	if(Opzioni & 4) {
 		wsprintf(myBuf,"%d",n);
 		if(*commento)
-			strcat(commento," ");
+			strcat(commento,"  ");
 		strcat(commento,myBuf);
 		}
 	return d;
@@ -319,7 +343,7 @@ static char *outputDWord(char *d,DWORD n) {
 	if(Opzioni & 4) {
 		wsprintf(myBuf,"%d",n);
 		if(*commento)
-			strcat(commento," ");
+			strcat(commento,"  ");
 		strcat(commento,myBuf);
 		}
 	return d;
@@ -341,20 +365,41 @@ static char *outputFarAddress(char *d,DWORD n) {
 	return d;
 	}
 
-static char *outputUnknown(char *d,BYTE n) {
+static char *outputLinearAddress(char *d,DWORD n) {
+	char myBuf[64];
+
+	wsprintf(myBuf,"%08Xh",n);
+	strcat(d,myBuf);
+	return d;
+	}
+
+static char *outputUnknown1(char *d,BYTE n) {
 
 	outputText(d,"DB ");
 	outputByte(d,n);
 	return d;
 	}
 
-int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
+static char *outputUnknown(char *d,BYTE *s,BYTE n) {
+	uint8_t first=1;
+
+	outputText(d,"DB");
+	while(n--) {
+		outputText(d,first ? " " : ",");
+		outputByte(d,*s++);
+		first=FALSE;
+		}
+	return d;
+	}
+
+int Disassemble(const BYTE *src,HFILE f,char *dest,DWORD len,WORD pcaddr,struct REGISTERS_SEG *pcaddrH,
+								BYTE opzioni) {
 	// opzioni: b0 addbytes, b1 addPC, b2 numeri dec in commenti
   uint8_t inRep=0;
 	uint8_t inRepStep=0;
 	BYTE segOverride,segOverrideIRQ;
 	BYTE status8087,control8087;
-  register union OPERAND op1,op2;
+  register union OPERAND op1;
   BYTE immofs;		// usato per dato #imm che segue indirizzamento 0..2 (NON registro)
 		// è collegato a GetMorePipe, inoltre
 	BYTE Pipe1;
@@ -366,7 +411,16 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 
 
 	Opzioni=opzioni;
+
+#if defined(EXT_80386)
+	CPUType=3;
+#elif defined(EXT_80286)
+	CPUType=2;
+#elif defined(EXT_80186)  || defined(EXT_NECV20)		// finire!
+	CPUType=1;
+#else
 	CPUType=0;
+#endif
 
 	*dest=0;
 
@@ -390,15 +444,15 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 		status8087=0; control8087=0;
 
 		switch(Pipe1) {
+			char S1[64],S2[64];
 
 			case 0:     // ADD registro a r/m
 			case 1:
 			case 2:     // ADD r/m a registro
 			case 3:
 				outputText(dest,"ADD ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -406,63 +460,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-            switch(Pipe1 & 0x3) {
-              case 0:
-								outputText(dest,r);
-                break;
-              case 1:
-								if(CPUType>=3) {
-									sizeOverrideA;
-									}
-								outputText(dest,r);
-                break;
-              case 2:
-								outputText(dest,r);
-                break;
-              case 3:
-								if(CPUType>=3) {
-
-									sizeOverrideA;
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
 								}
-								outputText(dest,r);
-                break;
-              }
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-            switch(Pipe1 & 0x3) {
-              case 0:
-								outputText(dest,r);
-                break;
-              case 1:
-								if(CPUType>=3) {
-									sizeOverrideA;
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
 								}
-								outputText(dest,r);
-                break;
-              case 2:
-								outputText(dest,r);
-                break;
-              case 3:
-								if(CPUType>=3) {
-									sizeOverrideA;
-								}
-								outputText(dest,r);
-                break;
-              }
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
 				break;
         
 			case 4:       // ADDB immediate
-				outputText(dest,"ADDB AL,");
+				outputText(dest,"ADDB AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 5:       // ADDW immediate
-				outputText(dest,"ADDW AX,");
+				outputText(dest,"ADDW AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -472,15 +509,21 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x16:
 			case 0x1e:
 				outputText(dest,"PUSH ");
-				outputText(dest,getSRegister((Pipe1 >> 3) & 3));
+				outputText(dest,getSRegister((BYTE)((Pipe1 >> 3) & 3)));
 				break;
         
 			case 0xf:       // non esiste POP CS (abbastanza logico); istruzioni MMX/386/(V20) qua...
-				outputUnknown(dest,Pipe2.b.l);
+				if(CPUType<1) {
+					outputUnknown1(dest,Pipe2.b.l);
+					}
+				else {
 
-				src++;
+				Pipe1=*src++;
+				Pipe2.bd[0]=*src; Pipe2.bd[1]=*(src+1);		// 
+				Pipe2.bd[2]=*(src+2); Pipe2.bd[3]=*(src+3);
+				Pipe2.bd[4]=*(src+4); Pipe2.bd[5]=*(src+5);
         
-        switch(Pipe2.b.l) {
+        switch(Pipe1) {
 
 #ifndef EXT_NECV20
           case 0xff:      // TRAP
@@ -499,104 +542,90 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 					case 0x16:
 					case 0x17:
 						// servirà //        GetMorePipe(_cs,_ip-1));
-				r=getRegister(Pipe1,Pipe2);
+//				r=getRegister(Pipe1,Pipe2);
+						switch(Pipe2.mod) {
+							case 2:
+								Pipe2.b.h=*src++;
+							case 1:
+								Pipe2.b.u=*src++;
+							case 0:
 								if(!(Pipe1 & 1)) {
-									res1.b=GetValue(*theDs,op2.mem);
 									}
 								else {
-									res1.x=GetShortValue(*theDs,op2.mem);
 									}
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
+										outputText(dest,"TEST1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (_cl & 0x7));
-											goto aggFlagBZC;
 											}
 										else {
-											res3.x= res1.x & (1 << (_cl & 0xf));
-											goto aggFlagWZC;
 											}
 										break;
 									case 1:
+										outputText(dest,"CLR1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & ~(1 << (_cl & 0x7));
 											}
 										else {
-											res3.x= res1.x & ~(1 << (_cl & 0xf));
 											}
 										break;
 									case 2:
+										outputText(dest,"SET1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b | (1 << (_cl & 0x7));
 											}
 										else {
-											res3.x= res1.x | (1 << (_cl & 0xf));
 											}
 										break;
 									case 3:
+										outputText(dest,"NOT1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b ^ (1 << (_cl & 0x7));
 											}
 										else {
-											res3.x= res1.x ^ (1 << (_cl & 0xf));
 											}
 										break;
 									}
-								if(!(Pipe1 & 1)) {
-									PutValue(*theDs,op2.mem,res3.b);
-									}
-								else {
-									PutShortValue(*theDs,op2.mem,res3.x);
-									}
-								break;
-							case 3:
-								r=getRegister2(Pipe1,Pipe2);
-								res1.b=*op2.reg8;
+							if(!(Pipe1 & 1)) {
+								}
+							else {
+								}
+							break;
+						case 3:
+	//								r=getRegister2(Pipe1,Pipe2);
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
+										outputText(dest,"TEST1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (_cl & 0x7));
-											goto aggFlagBZC;
 											}
 										else {
-											res3.x= res1.x & (1 << (_cl & 0xf));
-											goto aggFlagWZC;
 											}
 										break;
 									case 1:
+										outputText(dest,"CLR1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & ~(1 << (_cl & 0x7));
 											}
 										else {
-											res3.x= res1.x & ~(1 << (_cl & 0xf));
 											}
 										break;
 									case 2:
+										outputText(dest,"SET1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b | (1 << (_cl & 0x7));
 											}
 										else {
-											res3.x= res1.x | (1 << (_cl & 0xf));
 											}
 										break;
 									case 3:
+										outputText(dest,"NOT1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b ^ (1 << (_cl & 0x7));
 											}
 										else {
-											res3.x= res1.x ^ (1 << (_cl & 0xf));
 											}
 										break;
 									}
-								if(!(Pipe1 & 1)) {
-	                *op2.reg8=res3.b;
-									}
-								else {
-	                *op2.reg16=res3.x;
-									}
-								break;
+							if(!(Pipe1 & 1)) {
+								}
+							else {
+								}
 							}
-            break;
+						break;
 					case 0x18:						// TEST1, CLR1, SET1, NOT1 , #imm
 					case 0x19:
 					case 0x1a:
@@ -607,297 +636,318 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 					case 0x1f:
 						// servirà //        GetMorePipe(_cs,_ip-1));
 
-				r=getRegister(Pipe1,Pipe2);
+//				r=getRegister(Pipe1,Pipe2);
+						switch(Pipe2.mod) {
+							case 2:
+								Pipe2.b.h=*src++;
+							case 1:
+								Pipe2.b.u=*src++;
+							case 0:
 								if(!(Pipe1 & 1)) {
-									res1.b=GetValue(*theDs,op2.mem);
 									}
 								else {
-									res1.x=GetShortValue(*theDs,op2.mem);
 									}
+								src++;
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
 										outputText(dest,"TEST1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (Pipe2.b.u & 0x7));			// VERIFICARE DOV'è IMM8!!
-											goto aggFlagBZC;
 											}
 										else {
-											res3.x= res1.x & (1 << (Pipe2.b.u & 0xf));
-											goto aggFlagWZC;
 											}
 										break;
 									case 1:
 										outputText(dest,"CLR1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & ~(1 << (Pipe2.b.u & 0x7));
 											}
 										else {
-											res3.x= res1.x & ~(1 << (Pipe2.b.u & 0xf));
 											}
 										break;
 									case 2:
 										outputText(dest,"SET1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b | (1 << (Pipe2.b.u & 0x7));
 											}
 										else {
-											res3.x= res1.x | (1 << (Pipe2.b.u & 0xf));
 											}
 										break;
 									case 3:
 										outputText(dest,"NOT1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b ^ (1 << (Pipe2.b.u & 0x7));
 											}
 										else {
-											res3.x= res1.x ^ (1 << (Pipe2.b.u & 0xf));
 											}
 										break;
 									}
 								if(!(Pipe1 & 1)) {
-									PutValue(*theDs,op2.mem,res3.b);
 									}
 								else {
-									PutShortValue(*theDs,op2.mem,res3.x);
 									}
 								break;
 							case 3:
-								r=getRegister2(Pipe1,Pipe2);
-								res1.b=*op2.reg8;
+//								r=getRegister2(Pipe1,Pipe2);
+								src++;
 								switch((Pipe1 >> 1) & 0x3) {
 									case 0:
+										outputText(dest,"TEST1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & (1 << (Pipe2.b.u & 0x7));
-											goto aggFlagBZC;
 											}
 										else {
-											res3.x= res1.x & (1 << (Pipe2.b.u & 0xf));
-											goto aggFlagWZC;
 											}
 										break;
 									case 1:
+										outputText(dest,"CLR1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b & ~(1 << (Pipe2.b.u & 0x7));
 											}
 										else {
-											res3.x= res1.x & ~(1 << (Pipe2.b.u & 0xf));
 											}
 										break;
 									case 2:
+										outputText(dest,"SET1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b | (1 << (Pipe2.b.u & 0x7));
 											}
 										else {
-											res3.x= res1.x | (1 << (Pipe2.b.u & 0xf));
 											}
 										break;
 									case 3:
+										outputText(dest,"NOT1 ");
 										if(!(Pipe1 & 1)) {
-											res3.b= res1.b ^ (1 << (Pipe2.b.u & 0x7));
 											}
 										else {
-											res3.x= res1.x ^ (1 << (Pipe2.b.u & 0xf));
 											}
 										break;
 									}
 								if(!(Pipe1 & 1)) {
-	                *op2.reg8=res3.b;
 									}
 								else {
-	                *op2.reg16=res3.x;
 									}
-								break;
 							}
-            break;
+						break;
 					case 0x20:					// ADD4S
 						outputText(dest,"ADD4S ");
 						{BYTE j=0;
-						uint16_t di1=_di,si1=_si;
-						i=(((uint16_t)_cl)+1) >> 1;
-						_f.Zero=1;
-						while(i--) {
-							res1.b=GetValue(*theDs,si1);
-							res2.b=GetValue(_es,di1);
-              res1.b = (res1.b >> 4)*10 + (res1.b & 0xf);
-              res2.b = (res2.b >> 4)*10 + (res2.b & 0xf);
-              res3.b = res1.b + res2.b + j;
-              if(res3.b>99) 
-								j=1; 
-							else 
-								j=0;
-              res3.b = res3.b % 100;
-              res3.b = ((res3.b/10) << 4) | (res3.b % 10);
-
-							if(j)
-								_f.Carry=1;
-							if(res3.b)
-								_f.Zero=0;
-
-							PutValue(_es,_di,res3.b);
-							si1++;
-							di1++;
-							}
 						}
             break;
 					case 0x22:					// SUB4S
 						outputText(dest,"SUB4S ");
 						{BYTE j=0;
-						uint16_t di1=_di,si1=_si;
-						i=(((uint16_t)_cl)+1) >> 1;
-						_f.Zero=1;
-						while(i--) {
-							res1.b=GetValue(*theDs,si1);
-							res2.b=GetValue(_es,di1);
-              res1.b = (res1.b >> 4)*10 + (res1.b & 0xf);
-              res2.b = (res2.b >> 4)*10 + (res2.b & 0xf);
-              if(res1.b < (res2.b+j)) {
-                res1.b = res1.b + 100;
-                res3.b = res1.b - (res2.b+j);
-                i= 1;
-	              }
-              else  {
-                res3.b = res1.b - (res2.b+j);
-                i= 0;
-								}
-              res3.b = ((res3.b/10)<<4) | (res3.b % 10);
-
-							if(j)
-								_f.Carry=1;
-							if(res3.b)
-								_f.Zero=0;
-
-							PutValue(_es,_di,res3.b);
-							si1++;
-							di1++;
-							}
 						}
             break;
 					case 0x26:					// CMP4S
 						outputText(dest,"CMP4S ");
 						{BYTE j=0;
-						uint16_t di1=_di,si1=_si;
-						i=(((uint16_t)_cl)+1) >> 1;
-						_f.Zero=1;
-						while(i--) {
-							res1.b=GetValue(*theDs,si1);
-							res2.b=GetValue(_es,di1);
-              res1.b = (res1.b >> 4)*10 + (res1.b & 0xf);
-              res2.b = (res2.b >> 4)*10 + (res2.b & 0xf);
-              if(res1.b < (res2.b+j)) {
-                res1.b = res1.b + 100;
-                res3.b = res1.b - (res2.b+j);
-                i= 1;
-	              }
-              else  {
-                res3.b = res1.b - (res2.b+j);
-                i= 0;
-								}
-              res3.b = ((res3.b/10)<<4) | (res3.b % 10);
-
-							if(j)
-								_f.Carry=1;
-							if(res3.b)
-								_f.Zero=0;
-
-							si1++;
-							di1++;
-							}
 						}
             break;
 					case 0x28:					// ROL4
 					case 0x2a:					// ROR4
-  					_ip++;
-				r=getRegister(Pipe1,Pipe2);
-								res1.b=GetValue(*theDs,op2.mem);
-								res2.b=*op1.reg8;
+  					src++;
+//				r=getRegister(Pipe1,Pipe2);
+						switch(Pipe2.mod) {
+							case 2:
+								Pipe2.b.h=*src++;
+							case 1:
+								Pipe2.b.u=*src++;
+							case 0:
 								if(Pipe2.b.l == 0x28) {
-                  res2.b = (_al << 4) | ((res1.b >> 4) & 0x000F) ;
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=res2.b;
 									}
 								else {
-                  res2.b = (res1.b >> 4) | ((_al << 4) & 0x00F0);
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=(_al & 0xFF00) | (res2.b & 0x00FF);
 									}
-								PutValue(*theDs,op2.mem,res3.b);
-							break;
-						case 3:
-							r=getRegister2(Pipe1,Pipe2);
-								res1.b=*op2.reg8;
-								res2.b=*op1.reg8;
+								break;
+							case 3:
+	//							r=getRegister2(Pipe1,Pipe2);
 								if(Pipe2.b.l == 0x28) {
-                  res2.b = (_al << 4) | ((res1.b >> 4) & 0x000F);
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=res2.b;
 									}
 								else {
-                  res2.b = (_al << 4) | ((res1.b >> 4) & 0x000F);
-                  res3.b=( (res1.b << 4) | (_al & 0x000F) ); 
-                  _al=res2.b;
 									}
-                *op2.reg8=res3.b;
 								break;
 							}
             break;
 					case 0x31:					// INS
-						outputText(dest,"INS ");
-						{BYTE j1,j2;
-						if(!theDs)
-							theDs=&_es;
-						res1.b=GetValue(*theDs,_di);
-						res3.x=_ax;
-
-						PutShortValue(*theDs,_di,res3.x);
-						}
-            break;
 					case 0x39:					// INS
 						outputText(dest,"INS ");
 						{BYTE j1,j2;
-						if(!theDs)
-							theDs=&_es;
-						j2=Pipe2.b.u & 0xf;			// VERIFICARE DOV'è IMM8!!
-						res3.x=_ax;
-
-						PutShortValue(*theDs,_di,res3.x);
 						}
             break;
 					case 0x33:					// EXT
-						outputText(dest,"EXT ");
-						{BYTE j1,j2;
-						res1.x=GetShortValue(*theDs,_si);
-
-						_ax=res3.x;
-						}
-            break;
 					case 0x3b:					// EXT
 						outputText(dest,"EXT ");
 						{BYTE j1,j2;
-						j2=Pipe2.b.u & 0xf;			// VERIFICARE DOV'è IMM8!!
-						res1.x=GetShortValue(*theDs,_si);
-
-						_ax=res3.x;
 						}
             break;
+
 					case 0xff:					// BRKMM
 						outputText(dest,"BRKMM ");
 						// entra in modalità 8080!!
-						_f.MD=0;
+
             break;
 #endif
 
 #ifdef EXT_80286
-					if(CPUType>=2) {
-          case 0x0:      // LLDT/LTR/SLDT/SMSW/VERW
-            break;
-          case 0x1:      // LGDT/LIDT/LMSW/SGDT/SIDT/STR
-            break;
-          case 0x2:      // LAR
-            break;
-          case 0x3:      // LSL
-            break;
-          case 0x6:      // CLTS
-            break;
+					case 0x0:      // LLDT/LTR/SLDT/SMSW/VERW
+						if(CPUType>=2) {
+	  				src++;
+						switch(Pipe2.reg) {
+							case 0:		// SLDT
+								outputText(dest,"SLDT ");
+								break;
+							case 2:		// LLDT
+								outputText(dest,"LLDT ");
+								break;
+							case 1:		// STR
+								outputText(dest,"STR ");
+								break;
+							case 3:		// LTR
+								outputText(dest,"LTR ");
+								break;
+							case 4:		// VERR
+								outputText(dest,"VERR ");
+								break;
+							case 5:		// VERW
+								outputText(dest,"VERW ");
+								break;
+							}
+						switch(Pipe2.mod) {
+							case 2:
+								Pipe2.b.h=*src++;
+							case 1:
+								Pipe2.b.u=*src++;
+							case 0:
+								r=getAddressing(Pipe2,&src,&immofs);
+								outputText(dest,r);
+								switch(Pipe1 & 0x3) {
+									case 0:
+										break;
+									case 1:
+										break;
+									case 2:
+										break;
+									case 3:
+										break;
+									}
+								break;
+							case 3:
+								r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+								outputText(dest,r);
+								switch(Pipe1 & 0x3) {
+									case 0:
+										break;
+									case 1:
+										break;
+									case 2:
+										break;
+									case 3:
+										break;
+									}
+								break;
+							}
+						}
+						else {
+							outputUnknown1(dest,Pipe2.b.l);
+							}
+						break;
+					case 0x1:      // LGDT/LIDT/LMSW/SGDT/SIDT/STR
+						if(CPUType>=2) {
+	  				src++;
+						switch(Pipe2.reg) {
+							case 4:		// SMSW
+								outputText(dest,"SMSW ");
+								break;
+							case 1:		// SIDT
+								outputText(dest,"SIDT ");
+								break;
+							case 0:		// SGDT
+								outputText(dest,"SGDT ");
+								break;
+							case 3:		// LIDT
+								outputText(dest,"LIDT ");
+								break;
+							case 2:		// LGDT
+								outputText(dest,"LGDT ");
+								break;
+							case 6:		// LMSW
+								outputText(dest,"LMSW ");
+								break;
+							}
+						switch(Pipe2.mod) {
+							case 2:
+								Pipe2.b.h=*src++;
+							case 1:
+								Pipe2.b.u=*src++;
+							case 0:
+								r=getAddressing(Pipe2,&src,&immofs);
+								outputText(dest,r);
+								break;
+							case 3:
+								r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+								outputText(dest,r);
+								break;
+							}
+						}
+						else {
+							outputUnknown1(dest,Pipe2.b.l);
+							}
+						break;
+					case 0x2:      // LAR
+						if(CPUType>=2) {
+	  				src++;
+						outputText(dest,"LAR ");
+						switch(Pipe2.mod) {
+							case 2:
+								Pipe2.b.h=*src++;
+							case 1:
+								Pipe2.b.u=*src++;
+							case 0:
+								r=getAddressing(Pipe2,&src,&immofs);
+								outputText(dest,r);
+								break;
+							case 3:
+								r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+								outputText(dest,r);
+								break;
+							}
+						}
+						else {
+							outputUnknown1(dest,Pipe2.b.l);
+							}
+						break;
+					case 0x3:      // LSL
+						if(CPUType>=2) {
+	  				src++;
+						outputText(dest,"LSL ");
+						switch(Pipe2.mod) {
+							case 2:
+								Pipe2.b.h=*src++;
+							case 1:
+								Pipe2.b.u=*src++;
+							case 0:
+								r=getAddressing(Pipe2,&src,&immofs);
+								outputText(dest,r);
+								break;
+							case 3:
+								r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+								outputText(dest,r);
+								break;
+							}
+						}
+						else {
+							outputUnknown1(dest,Pipe2.b.l);
+							}
+						break;
+					case 0x5:      // LOADALL
+						if(CPUType>=2) {
+						outputText(dest,"LOADALL");
+						}
+						else {
+							outputUnknown1(dest,Pipe2.b.l);
+							}
+						break;
+					case 0x6:      // CLTS
+						if(CPUType>=2) {
+						outputText(dest,"CLTS");
+						}
+						else {
+							outputUnknown1(dest,Pipe2.b.l);
+							}
+						break;
 #endif
 #ifdef EXT_80386
 					if(CPUType>=3) {
@@ -1119,15 +1169,18 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
           case 0x9e:
           case 0x9f:
             break;
-#endif
           }
+					}
+#endif
+					}
+					}
 				break;
         
 			case 7:         // POP segment
 			case 0x17:
 			case 0x1f:
 				outputText(dest,"POP ");
-				outputText(dest,getSRegister((Pipe1 >> 3) & 3));
+				outputText(dest,getSRegister((BYTE)((Pipe1 >> 3) & 3)));
 				break;
 
 			case 0x08:      // OR
@@ -1135,9 +1188,8 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x0a:
 			case 0x0b:
 				outputText(dest,"OR ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -1145,44 +1197,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
 				break;
 
 			case 0x0c:      // OR
-				outputText(dest,"OR AL,");
+				outputText(dest,"OR AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0x0d:      // OR
-				outputText(dest,"OR AX,");
+				outputText(dest,"OR AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -1192,9 +1246,8 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x12:     // ADC r/m a registro
 			case 0x13:
 				outputText(dest,"ADC ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -1202,44 +1255,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
 				break;
 
 			case 0x14:        // ADC
-				outputText(dest,"ADC ");
+				outputText(dest,"ADC AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0x15:        // ADC
-				outputText(dest,"ADC ");
+				outputText(dest,"ADC AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -1249,9 +1304,8 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x1a:
 			case 0x1b:
 				outputText(dest,"SBB ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -1259,44 +1313,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						r=getRegister2(Pipe1,(BYTE)(Pipe2.rm));
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
 				break;
 
 			case 0x1c:        // SBB
-				outputText(dest,"SBB ");
+				outputText(dest,"SBB AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0x1d:        // SBB
-				outputText(dest,"SBB ");
+				outputText(dest,"SBB AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -1306,9 +1362,8 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x22:
 			case 0x23:
 				outputText(dest,"AND ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -1316,44 +1371,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
 				break;
 
 			case 0x24:        // AND
-				outputText(dest,"AND ");
+				outputText(dest,"AND AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0x25:        // AND
-				outputText(dest,"AND ");
+				outputText(dest,"AND AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -1372,9 +1429,8 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x2a:
 			case 0x2b:
 				outputText(dest,"SUB ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -1382,44 +1438,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
 				break;
 
 			case 0x2c:      // SUBB
-				outputText(dest,"SUBB ");
+				outputText(dest,"SUBB AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0x2d:			// SUBW
-				outputText(dest,"SUBW ");
+				outputText(dest,"SUBW AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -1438,9 +1496,8 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x32:
 			case 0x33:
 				outputText(dest,"XOR ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -1448,44 +1505,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
         break;
         
 			case 0x34:        // XOR
-				outputText(dest,"XOR ");
+				outputText(dest,"XOR AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0x35:        // XOR
-				outputText(dest,"XOR ");
+				outputText(dest,"XOR AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -1504,9 +1563,8 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x3a:
 			case 0x3b:
 				outputText(dest,"CMP ");
-				r=getRegister(Pipe1,Pipe2.reg);
-				outputText(dest,r);
-				outputText(dest,",");
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+				strcpy(S1,r);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -1514,44 +1572,46 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						*S2=0;
+						outputPtr(S2,(BYTE)(Pipe1 & 1 ? 2 : 1));
+						strcat(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
-            switch(Pipe1 & 0x3) {
-              case 0:
-                break;
-              case 1:
-                break;
-              case 2:
-                break;
-              case 3:
-                break;
-              }
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						strcpy(S2,r);
+						if(Pipe1 & 1) {
+							if(CPUType>=3) {
+								sizeOverrideA;
+								}
+							}
             break;
+          }
+        if(Pipe1 & 2) {
+					outputText(dest,S1);
+					outputComma(dest);
+					outputText(dest,S2);
+          }
+        else {
+					outputText(dest,S2);
+					outputComma(dest);
+					outputText(dest,S1);
           }
 				src++;
 				break;
         
 			case 0x3c:      // CMPB
-				outputText(dest,"CMPB ");
+				outputText(dest,"CMPB AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0x3d:			// CMPW
-				outputText(dest,"CMPW ");
+				outputText(dest,"CMPW AX, ");
 				outputWord(dest,Pipe2.x.l);
 				src+=2;
 				break;
@@ -1574,7 +1634,7 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x46:
 			case 0x47:
 				outputText(dest,"INC ");
-				r=getRegister(1,Pipe1 & 7);
+				r=getRegister(1,(BYTE)(Pipe1 & 7));
 				outputText(dest,r);
 				break;
 
@@ -1587,7 +1647,7 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x4e:
 			case 0x4f:
 				outputText(dest,"DEC ");
-				r=getRegister(1,Pipe1 & 7);
+				r=getRegister(1,(BYTE)(Pipe1 & 7));
 				outputText(dest,r);
 				break;
 
@@ -1626,25 +1686,72 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 				break;
 			case 0x62:        // BOUND
 				outputText(dest,"BOUND ");
-#define WORKING_REG regs.r[Pipe2.reg].x
-//        GetMorePipe(_cs,_ip-1));
-        src+=3;
-				outputWord(dest,Pipe2.x.l);
-				outputText(dest,",");
-				outputWord(dest,Pipe2.x.h);
+				r=getRegister2(1,(BYTE)Pipe2.reg);
+				outputText(dest,r);
+				outputComma(dest);
+				src++;
+				switch(Pipe2.mod) {
+					case 2:
+						Pipe2.b.h=*src++;
+					case 1:
+						Pipe2.b.u=*src++;
+					case 0:
+						r=getAddressing(Pipe2,&src,&immofs);
+						outputPtr(dest,4);		// meglio DWORD
+						outputText(dest,r);
+						break;
+					case 3:
+						// non valido
+						break;
+					}
 				break;
 #endif
 #ifdef EXT_80286
 			case 0x63:        // ARPL
-				outputText(dest,"ARPL ");
+				if(CPUType>=2) {
+					outputText(dest,"ARPL ");
+					switch(Pipe2.mod) {
+						case 2:
+							Pipe2.b.h=*src++;
+						case 1:
+							Pipe2.b.u=*src++;
+						case 0:
+							r=getAddressing(Pipe2,&src,&immofs);
+							outputPtr(dest,2);
+							outputText(dest,r);
+							break;
+						case 3:
+							r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+							outputText(dest,r);
+							break;
+						}
+					r=getRegister2(Pipe1,(BYTE)Pipe2.reg);
+					outputComma(dest);
+					outputText(dest,r);
+					src++;
+					}
+				else {
+					outputUnknown1(dest,Pipe2.b.l);
+					}
 				break;
 #endif
 #ifdef EXT_NECV20
 			case 0x63:        // undefined, dice, su V20...
-				r=getRegister(Pipe1,Pipe2);
+//				r=getRegister(Pipe1,Pipe2);
 				break;
 #endif
         
+#ifdef EXT_NECV20
+			case 0x64:
+				outputText(dest,"REPNC");
+				inRep=0x15;					// REPNC
+				break;
+        
+			case 0x65:
+				outputText(dest,"REPC");
+				inRep=0x16;					// REPC
+				break;
+#else
 			case 0x64:
 					if(CPUType>=3) {
 				outputText(dest,"FS");
@@ -1653,8 +1760,10 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 					else {      // JE, JZ
 #ifdef UNDOCUMENTED_8086
 				outputText(dest,"JZ ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
+#else
+					outputUnknown1(dest,Pipe1);
 #endif
 					}
 				break;
@@ -1667,23 +1776,22 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 					else {      // JNE, JNZ
 #ifdef UNDOCUMENTED_8086
 				outputText(dest,"JNZ ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
+#else
+					outputUnknown1(dest,Pipe1);
 #endif
 					}
 				break;
-#ifdef EXT_NECV20
-			case 0x64:
-				outputText(dest,"REPNC");
-				inRep=0x15;					// REPNC
-				break;
-        
-			case 0x65:
-				outputText(dest,"REPC");
-				inRep=0x16;					// REPC
-				break;
 #endif
         
+#ifdef EXT_NECV20
+			case 0x66:		// altre ESC per coprocessore NEC...
+			case 0x67:
+				outputText(dest,"ESC_NEC ");
+//				r=getRegister(Pipe1,Pipe2);
+				break;
+#else
 			case 0x66:
 					if(CPUType>=3) {
 				//invert operand size next instr
@@ -1692,18 +1800,18 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
         
      		switch(*src) {
           case 0x99:    // anche CDQ
-//            _edx= _eax & 0x80000000 ? 0xffffffff : 0;
     				break;
           case 0x98:    // anche CWDE
-//            _eax |= _ax & 0x8000 ? 0xffff0000 : 0;
           	break;
           }
 					}
 					else {    // JBE, JNA
 #ifdef UNDOCUMENTED_8086
 				outputText(dest,"JNA ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
+#else
+					outputUnknown1(dest,Pipe1);
 #endif
 					}
         
@@ -1723,16 +1831,11 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 #ifdef UNDOCUMENTED_8086
 				outputText(dest,"JA ");
 				src++;
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
+#else
+					outputUnknown1(dest,Pipe1);
 #endif
 					}
-				break;
-
-#ifdef EXT_NECV20
-			case 0x66:		// altre ESC per coprocessore NEC...
-			case 0x67:
-				outputText(dest,"ESC_NEC ");
-				r=getRegister(Pipe1,Pipe2);
 				break;
 #endif
         
@@ -1740,116 +1843,108 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 			case 0x68:
 					if(CPUType>=1) {
 				outputText(dest,"PUSH ");
-				PUSH_STACK(Pipe2.x.l);
+				outputWord(dest,Pipe2.x.l);
         src+=2;
-					}
+							}
+							else {
+								outputUnknown1(dest,Pipe1);
+								}
 				break;
         
 			case 0x69:			//IMUL16
-					if(CPUType>=1) {
-			  union OPERAND op3;
-
+				if(CPUType>=1) {
 				outputText(dest,"IMUL16 ");
-        op1.reg16 = &regs.r[(Pipe2.b.l >> 3) & 0x7].x;		// 3 o 7??
 
 				switch(Pipe2.mod) {
 					case 2:
-						Pipe2.b.h=*src++;
+//						Pipe2.b.h=*src++;
+						src++;
 					case 1:
-						Pipe2.b.u=*src++;
+//						Pipe2.b.u=*src++;
+						src++;
 					case 0:
+						r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+						outputText(dest,r);
+						outputComma(dest);
+						immofs=1;
 						r=getAddressing(Pipe2,&src,&immofs);
+						outputPtr(dest,2);
 						outputText(dest,r);
-						GetPipe(_cs,_ip);
-            op3.mem=Pipe2.x.l;
-						outputWord(Pipe2.x.l);
-            res1.x=GetShortValue(*theDs,op2.mem);
-            res2.x=op3.mem;
-            res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;   // (sicuro 32? per i flag
-#ifdef EXT_80386
-            *op1.reg32=res3.d;		// finire!
-#else
-            *op1.reg16=res3.x;
-#endif
-            break;
-          case 3:
-						r=getRegister2(Pipe2);
-						//GET_REGISTER_8_16_2
-						outputText(dest,r);
-            op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;			// 3 o 7 ??
-						GetMorePipe(_cs,_ip); 
-            op3.mem=Pipe2.xm.w;
-						outputWord(Pipe2.xm.w);
-            res1.x=*op2.reg16;
-            res2.x=op3.mem;
-            res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;   // (sicuro 32? per i flag
+						outputComma(dest);
 					if(CPUType>=3) {
-            *op1.reg32=res3.d;		// finire!
+						outputDWord(dest,Pipe2.d);
 					}
 					else {
-            *op1.reg16=res3.x;
+						outputWord(dest,MAKEWORD(Pipe2.bd[immofs],Pipe2.bd[immofs+1]));
+					}
+            break;
+          case 3:
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
+						//GET_REGISTER_8_16_2
+						outputText(dest,r);
+						outputComma(dest);
+					if(CPUType>=3) {
+						outputDWord(dest,Pipe2.d);
+					}
+					else {
+						outputWord(dest,Pipe2.xm.w);
 					}
             break;
           }
- 				_ip+=2;      // imm16
-				}
+ 				src+=3;      // imm16
+							}
+							else {
+								outputUnknown1(dest,Pipe1);
+								}
 				
 				break;
 
 			case 0x6a:        // PUSH imm8
 				outputText(dest,"PUSH ");
-				PUSH_STACK((int16_t)(int8_t)Pipe2.b.l);
-        _ip++;
+				outputByte(dest,Pipe2.b.l);
+        src++;
         break;
 
 			case 0x6b:			//IMUL8
 				{
-			  union OPERAND op3;
-
 				outputText(dest,"IMUL8 ");
-        op1.reg16 = &regs.r[(Pipe2.b.l >> 3) & 0x7].x;		// 3 o 7??
        
 				switch(Pipe2.mod) {
 					case 2:
-						Pipe2.b.h=*src++;
+//						Pipe2.b.h=*src++;
+						src++;
 					case 1:
-						Pipe2.b.u=*src++;
+//						Pipe2.b.u=*src++;
+						src++;
 					case 0:
+						r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+						outputText(dest,r);
+						outputComma(dest);
+						immofs=1;
 						r=getAddressing(Pipe2,&src,&immofs);
+						outputPtr(dest,2);
 						outputText(dest,r);
-						GetPipe(_cs,_ip);
-            op3.mem=(int16_t)(int8_t)Pipe2.b.l;
-						outputByte(Pipe2.b.l);
-            res1.x=GetShortValue(*theDs,op2.mem);
-            res2.x=op3.mem;
-						res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;
+						outputComma(dest);
 					if(CPUType>=3) {
-            *op1.reg32=res3.d;		// finire!
-					}
-						else {
-            *op1.reg16=res3.x;
-						}
-            break;
-          case 3:
-						r=getRegister2(Pipe2);
-						outputText(dest,r);
-						//GET_REGISTER_8_16_2
-            op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;			// 3 o 7 ??
-						GetMorePipe(_cs,_ip); 
-            op3.mem=(int16_t)(int8_t)Pipe2.b.h;
-						outputByte(Pipe2.b.h);
-            res1.x=*op2.reg16;
-            res2.x=op3.mem;
-						res3.d=(int32_t)((int16_t)res1.x)*(int16_t)res2.x;
-					if(CPUType>=3) {
-            *op1.reg32=res3.d;		// finire!
+						outputDWord(dest,Pipe2.d);
 					}
 					else {
-            *op1.reg16=res3.x;
+						outputByte(dest,Pipe2.bd[immofs]);
+					}
+            break;
+          case 3:
+						r=getRegister(Pipe1,(BYTE)Pipe2.reg);
+						outputText(dest,r);
+						outputComma(dest);
+					if(CPUType>=3) {
+						outputDWord(dest,Pipe2.d);
+					}
+					else {
+						outputByte(dest,Pipe2.bd[3]);
 					}
             break;
           }
-    		_ip++;      // imm8
+    		src+=2;      // imm8
 				}
 				
 				break;
@@ -1860,11 +1955,6 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
           }
-				PutValue(_es,_di,InValue(_dx));
-        if(_f.Dir)
-          _di--;
-        else
-          _di++;
 				break;
 
 			case 0x6d:        // INSW
@@ -1875,13 +1965,6 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
           }
 					if(CPUType>=3) {
 					}
-				PutShortValue(_es,_di,InShortValue(_dx));
-        if(_f.Dir) {
-          _di-=2;   // anche 32bit??
-          }
-        else {
-          _di+=2;
-          }
 				break;
 
 			case 0x6e:        // OUTSB
@@ -1890,7 +1973,6 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
           inRep=3;
           inRepStep=segOverride ? 2 : 1;
           }
-				OutValue(_dx,GetValue(_es,_di));
 				break;
 
 			case 0x6f:        // OUTSW
@@ -1901,177 +1983,176 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
           }
 					if(CPUType>=3) {
 					}
-				OutShortValue(_dx,GetShortValue(_es,_di));
 				break;
 #endif			// 186, V20
 
 #ifdef UNDOCUMENTED_8086				// su 8086 questi sono alias per 0x70..7f  (!)
 			case 0x60:    // JO
 				outputText(dest,"JO ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x61:    // JNO
 				outputText(dest,"JNO ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x62:    // JB, JC, JNAE
 				outputText(dest,"JC ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x63:    // JAE, JNB, JNC
 				outputText(dest,"JNC ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x68:          // JS
 				outputText(dest,"JS ");
 				src++;
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				break;
 
 			case 0x69:          // JNS
 				outputText(dest,"JNS ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
       case 0x6a:          // JP, JPE
 				outputText(dest,"JP ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
         
 			case 0x6b:          // JNP, JPO
 				outputText(dest,"JNP ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x6c:          // JL, JNGE
 				outputText(dest,"JL ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x6d:
 				outputText(dest,"JGE ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x6e:      // JLE, JNG
 				outputText(dest,"JLE ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x6f:      // JG, JNLE
 				outputText(dest,"JG ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 #endif
 
 			case 0x70:    // JO
 				outputText(dest,"JO ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x71:    // JNO
 				outputText(dest,"JNO ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x72:    // JB, JC, JNAE
 				outputText(dest,"JC ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x73:    // JAE, JNB, JNC
 				outputText(dest,"JNC ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x74:      // JE, JZ
 				outputText(dest,"JZ ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x75:      // JNE, JNZ
 				outputText(dest,"JNZ ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x76:    // JBE, JNA
 				outputText(dest,"JNA ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x77:      // JA, JNBE
 				outputText(dest,"JA ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x78:          // JS
 				outputText(dest,"JS ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x79:          // JNS
 				outputText(dest,"JNS ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
       case 0x7a:          // JP, JPE
 				outputText(dest,"JP ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
         
 			case 0x7b:          // JNP, JPO
 				outputText(dest,"JNP ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x7c:          // JL, JNGE
 				outputText(dest,"JL ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x7d:
 				outputText(dest,"JGE ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x7e:      // JLE, JNG
 				outputText(dest,"JLE ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0x7f:      // JG, JNLE
 				outputText(dest,"JG ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
@@ -2138,7 +2219,7 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 								outputText(dest,r);
 								break;
 							}
-						outputText(dest,",");
+						outputComma(dest);
 						outputByte(dest,(BYTE)op1.mem);
 						}
 					else {
@@ -2189,12 +2270,12 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 								outputText(dest,r);
 								break;
 							}
-						outputText(dest,",");
+						outputComma(dest);
 						outputWord(dest,op1.mem);
             }
           break;
         case 3:
-					r=getRegister(Pipe1,Pipe2.rm);
+					r=getRegister(Pipe1,(BYTE)Pipe2.rm);
 					if(!(Pipe1 & 1)) {
 						switch(Pipe2.reg) {
 			        case 0:       // ADD
@@ -2223,9 +2304,9 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 								break;
 							}
 						outputText(dest,r);
-						outputText(dest,",");
-						r=getRegister2(Pipe1,Pipe2.rm);
-						outputText(dest,r);
+						outputComma(dest);
+//						r=getRegister2(Pipe1,Pipe2.rm);
+						outputByte(dest,Pipe2.b.h);
 						} 
 					else {
       			src++;      // imm16...
@@ -2256,7 +2337,7 @@ int Disassemble(const BYTE *src,char *dest,BYTE len,WORD pcaddr,BYTE opzioni) {
 								break;
 							}
 						outputText(dest,r);
-						outputText(dest,",");
+						outputComma(dest);
 						if(Pipe1 & 2) 			// sign extend  BOH verificare come va sotto... 2024
 							outputWord(dest,(int16_t)(int8_t)Pipe2.bd[immofs+1]);
 						else
@@ -2286,7 +2367,7 @@ istest:
               }
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
             if(!(Pipe1 & 1)) {
 							}
 						else {
@@ -2294,8 +2375,8 @@ istest:
             break;
           }
 				outputText(dest,r);
-				outputText(dest,",");
-				r=getRegister(Pipe1,Pipe2.reg);
+				outputComma(dest);
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
 				outputText(dest,r);
 				src++;
 				break;
@@ -2303,9 +2384,9 @@ istest:
 			case 0x86:				// XCHG
 			case 0x87:
 				outputText(dest,"XCHG ");
-				r=getRegister(Pipe1,Pipe2.reg);
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
 				outputText(dest,r);
-				outputText(dest,",");
+				outputComma(dest);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -2313,13 +2394,15 @@ istest:
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
+						outputPtr(dest,(BYTE)(Pipe1 & 1 ? 2 : 1));
 						outputText(dest,r);
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
             break;
           }
+				src++;
 				break;
         
 			case 0x88:				//MOV8
@@ -2327,7 +2410,7 @@ istest:
 			case 0x8a:
 			case 0x8b:
 				outputText(dest,"MOV ");
-				r=getRegister(Pipe1,Pipe2.reg);
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -2340,50 +2423,50 @@ istest:
               case 0:
 								outputPtr(dest,1);
 								outputText(dest,r2);
-								outputText(dest,",");
+								outputComma(dest);
 								outputText(dest,r);
                 break;
               case 1:
 								outputPtr(dest,2);
 								outputText(dest,r2);
-								outputText(dest,",");
+								outputComma(dest);
 								outputText(dest,r);
                 break;
               case 2:
 								outputText(dest,r);
-								outputText(dest,",");
+								outputComma(dest);
 								outputPtr(dest,1);
 								outputText(dest,r2);
                 break;
               case 3:
 								outputText(dest,r);
-								outputText(dest,",");
+								outputComma(dest);
 								outputPtr(dest,2);
 								outputText(dest,r2);
                 break;
               }
             break;
           case 3:
-						r2=getRegister2(Pipe1,Pipe2.rm);
+						r2=getRegister2(Pipe1,(BYTE)Pipe2.rm);
             switch(Pipe1 & 0x3) {
               case 0:
 								outputText(dest,r2);
-								outputText(dest,",");
+								outputComma(dest);
 								outputText(dest,r);
                 break;
               case 1:
 								outputText(dest,r2);
-								outputText(dest,",");
+								outputComma(dest);
 								outputText(dest,r);
                 break;
               case 2:
 								outputText(dest,r);
-								outputText(dest,",");
+								outputComma(dest);
 								outputText(dest,r2);
                 break;
               case 3:
 								outputText(dest,r);
-								outputText(dest,",");
+								outputComma(dest);
 								outputText(dest,r2);
                 break;
               }
@@ -2401,20 +2484,21 @@ istest:
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
+						outputPtr(dest,2);
 						outputText(dest,r);
-						outputText(dest,",");
+						outputComma(dest);
 #ifdef EXT_80286
-						r=getSRegister(Pipe2.reg);
+						r=getSRegister((BYTE)Pipe2.reg);
 #else
-						r=getSRegister(Pipe2.reg & 0x3);
+						r=getSRegister((BYTE)(Pipe2.reg & 0x3));
 #endif
 						outputText(dest,r);
             break;
           case 3:
-						r=getRegister(1,Pipe2.rm);
+						r=getRegister(1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
-						outputText(dest,",");
-						r=getSRegister(Pipe2.reg & 3);
+						outputComma(dest);
+						r=getSRegister((BYTE)(Pipe2.reg & 3));
 						outputText(dest,r);
             break;
           }
@@ -2423,9 +2507,9 @@ istest:
         
 			case 0x8d:        // LEA
 				outputText(dest,"LEA ");
-				r=getRegister(Pipe1,Pipe2.reg);
+				r=getRegister(Pipe1,(BYTE)Pipe2.reg);
 				outputText(dest,r);
-				outputText(dest,",");
+				outputComma(dest);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -2436,7 +2520,7 @@ istest:
 						outputText(dest,r);
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
             break;
           }
@@ -2446,12 +2530,12 @@ istest:
 			case 0x8e:        // MOV SREG,rm16
 				outputText(dest,"MOV ");
 #ifdef EXT_80286
-				r=getSRegister(Pipe2.reg);
+				r=getSRegister((BYTE)Pipe2.reg);
 #else
 				r=getSRegister(Pipe2.reg & 0x3);
 #endif
 				outputText(dest,r);
-				outputText(dest,",");
+				outputComma(dest);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -2459,10 +2543,11 @@ istest:
 						Pipe2.b.u=*src++;
 					case 0:
 						r=getAddressing(Pipe2,&src,&immofs);
+						outputPtr(dest,2);
 						outputText(dest,r);
             break;
           case 3:
-						r=getRegister2(1,Pipe2.rm);
+						r=getRegister2(1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
             break;
           }
@@ -2483,7 +2568,7 @@ istest:
 						outputText(dest,r);
             break;
           case 3:			// 
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
             break;
           }
@@ -2499,7 +2584,7 @@ istest:
       case 0x96:
       case 0x97:
 				outputText(dest,"XCHG AX,");
-				r=getRegister2(Pipe1,Pipe1 & 7);
+				r=getRegister2(Pipe1,(BYTE)(Pipe1 & 7));
 				outputText(dest,r);
         break;
         
@@ -2514,7 +2599,7 @@ istest:
 			case 0x9a:      // CALLF
 				outputText(dest,"CALLF ");
 				Pipe2.x.h=*((WORD*)(src+2));
-				outputFarAddress(dest,MAKELONG(Pipe2.x.h,Pipe2.x.l));
+				outputFarAddress(dest,MAKELONG(Pipe2.x.l,Pipe2.x.h));
         src+=4;
 				break;
 
@@ -2549,24 +2634,25 @@ istest:
  			case 0xa3:      // MOV ,ax
 				if(!(Pipe1 & 2)) {
 					if(Pipe1 & 1) {
-						outputText(dest,"MOV AX,[");
+						outputText(dest,"MOV AX, WORD PTR [");
 						outputWord(dest,Pipe2.x.l);
 						}
 					else {
-						outputText(dest,"MOV AL,[");
+						outputText(dest,"MOV AL, BYTE PTR [");
 						outputWord(dest,Pipe2.x.l);
 						}
-					outputText(dest,"]");
+					outputChar(dest,']');
 					}
 				else {        
-					outputText(dest,"MOV [");
 					if(Pipe1 & 1) {
+						outputText(dest,"MOV WORD PTR [");
 						outputWord(dest,Pipe2.x.l);
-						outputText(dest,"],AX");
+						outputText(dest,"], AX");
 						}
 					else {
+						outputText(dest,"MOV BYTE PTR [");
 						outputWord(dest,Pipe2.x.l);
-						outputText(dest,"],AL");
+						outputText(dest,"], AL");
 						}
 					}
         src+=2;
@@ -2591,13 +2677,13 @@ istest:
 				break;
 
 			case 0xa8:        // TESTB
-				outputText(dest,"TESTB AL,");
+				outputText(dest,"TESTB AL, ");
 				outputByte(dest,Pipe2.b.l);
         src++;
 				break;
 
 			case 0xa9:        // TESTW
-				outputText(dest,"TESTW AX,");
+				outputText(dest,"TESTW AX, ");
 				outputWord(dest,Pipe2.x.l);
         src+=2;
 				break;
@@ -2635,9 +2721,9 @@ istest:
       case 0xb6:
       case 0xb7:
 				outputText(dest,"MOVB ");
-				r=getRegister(0,Pipe1 & 7);
+				r=getRegister(0,(BYTE)(Pipe1 & 7));
 				outputText(dest,r);
-				outputText(dest,",");
+				outputComma(dest);
 				outputByte(dest,Pipe2.b.l);
         src++;
 				break;
@@ -2651,15 +2737,16 @@ istest:
       case 0xbe:
       case 0xbf:
 				outputText(dest,"MOVW ");
-				r=getRegister(1,Pipe1 & 7);
+				r=getRegister(1,(BYTE)(Pipe1 & 7));
 				outputText(dest,r);
-				outputText(dest,",");
+				outputComma(dest);
 				outputWord(dest,Pipe2.x.l);
         src+=2;
 				break;
         
 #if defined(EXT_80186) || defined(EXT_NECV20)
 			case 0xc0:      // RCL, RCR, SHL ecc
+				src++;
 				switch(Pipe2.reg) {
 					case 0:       /* ROL */
 						outputText(dest,"ROL ");
@@ -2686,47 +2773,29 @@ istest:
 						outputText(dest,"SAR ");
 						break;
 					}
-			  if(Pipe2.mod<3)
-					GetMorePipe(_cs,_ip-1);   // 
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
 					case 1:
 						Pipe2.b.u=*src++;
 					case 0:
+						outputPtr(dest,1);
 						r=getAddressing(Pipe2,&src,&immofs);
-            op1.mem=Pipe2.bd[immofs];
-						i=res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-						res3.b=res1.b=GetValue(*theDs,op2.mem);
-						i=0;
-						ROTATE_SHIFT8
-						PutValue(*theDs,op2.mem,res3.b);
+						outputText(dest,r);
             break;
           case 3:
-            op2.reg8= Pipe2.rm & 0x4 ? &regs.r[Pipe2.rm & 0x3].b.h : &regs.r[Pipe2.rm & 0x3].b.l;
-						op1.mem=Pipe2.b.h;
-						i=res2.b=(uint8_t)op1.mem;
-#ifndef EXT_NECV20
-#ifdef EXT_80286
-						res2.b &= 31;		// non va dentro la macro...
-#endif
-#endif
-    				_ip++;      // imm8
-						res3.b=res1.b=*op2.reg8;
-						i=0;
-						ROTATE_SHIFT8
-						*op2.reg8=res3.b;
+						r=getRegister(0,(BYTE)(Pipe2.b.l & 7) );
+						outputText(dest,r);
+//    				src++;      // imm8
 						break;
 					}
-				src++;
+				outputComma(dest);
+				Pipe2.bd[immofs]=*src++;
+				outputByte(dest,Pipe2.bd[immofs] /*& 31*/);
 				break;
 
 			case 0xc1:
+				src++;
 				switch(Pipe2.reg) {
 					case 0:       /* ROL */
 						outputText(dest,"ROL ");
@@ -2753,34 +2822,25 @@ istest:
 						outputText(dest,"SAR ");
 						break;
 					}
-			  if(Pipe2.mod<3)
-					GetMorePipe(_cs,_ip-1);   // 
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
 					case 1:
 						Pipe2.b.u=*src++;
 					case 0:
+						outputPtr(dest,2);
 						r=getAddressing(Pipe2,&src,&immofs);
-            op1.mem=Pipe2.bd[immofs];
-						i=res2.b=(uint8_t)op1.mem;
-						res3.x=res1.x=GetShortValue(*theDs,op2.mem);
-						i=0;
-						ROTATE_SHIFT16
-						PutShortValue(*theDs,op2.mem,res3.x);
+						outputText(dest,r);
             break;
           case 3:
-            op2.reg16= &regs.r[Pipe2.b.l & 0x7].x;
-						op1.mem=Pipe2.b.h;
-						i=res2.b=(uint8_t)op1.mem;
-    				_ip++;      // imm8
-						res3.x=res1.x=*op2.reg16;
-						i=0;
-						ROTATE_SHIFT16
-						*op2.reg16=res3.x;
+						r=getRegister(1,(BYTE)(Pipe2.b.l & 3));
+						outputText(dest,r);
+//						src++;
 						break;
 					}
-				src++;
+				outputComma(dest);
+				Pipe2.bd[immofs]=*src++;
+				outputByte(dest,Pipe2.bd[immofs] /*& 31*/);
 				break;
 #endif
         
@@ -2803,14 +2863,14 @@ istest:
 				break;
 
 			case 0xc4:				//LES
-				outputText(dest,"LES ");
+				outputText(dest,"LES "); 
 				goto isLes;
 			case 0xc5:				//LDS
 				outputText(dest,"LDS ");
 isLes:
-				r=getRegister(Pipe1,Pipe2.reg);
+				r=getRegister(1,(BYTE)Pipe2.reg);
 				outputText(dest,r);
-				outputText(dest,",");
+				outputComma(dest);
 				switch(Pipe2.mod) {
 					case 2:
 						Pipe2.b.h=*src++;
@@ -2840,7 +2900,7 @@ isLes:
 						immofs=1;
 						r=getAddressing(Pipe2,&src,&immofs);
 						outputText(dest,r);
-						outputText(dest,",");
+						outputComma(dest);
 					  if(!(Pipe1 & 1)) {
               src++;
               op1.mem=Pipe2.bd[immofs];
@@ -2853,9 +2913,9 @@ isLes:
 							}
             break;
           case 3:		// 
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
-						outputText(dest,",");
+						outputComma(dest);
             if(!(Pipe1 & 1)) {
 							src++;
               op1.mem=Pipe2.b.h;
@@ -2875,7 +2935,9 @@ isLes:
 #if defined(EXT_80186) || defined(EXT_NECV20)
 			case 0xc8:        //ENTER
 				outputText(dest,"ENTER ");
-				outputWord(dest,(uint8_t)Pipe2.b.u);
+				outputWord(dest,(uint16_t)Pipe2.x.l);
+				outputComma(dest);
+				outputByte(dest,(uint8_t)Pipe2.b.u);
         src+=3;
         break;
 #endif
@@ -2883,8 +2945,6 @@ isLes:
 #ifdef EXT_80186
 			case 0xc9:        // LEAVE
 				outputText(dest,"LEAVE");
-        _sp=_bp;
-				POP_STACK(_bp);
         break;
 #endif
         
@@ -2968,11 +3028,14 @@ do_rcl8:
 						outputText(dest,r);
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
 						break;
 					}
-				outputText(dest,i ? "" : ",CL");
+				if(i)
+					outputText(dest,", 1");
+				else
+					outputText(dest,", CL");
 				src++;
 				break;
 
@@ -3019,11 +3082,14 @@ do_rcl16:
 						outputText(dest,r);
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						outputText(dest,r);
 						break;
 					}
-				outputText(dest,i ? "" : ",CL");
+				if(i)
+					outputText(dest,",1");
+				else
+					outputText(dest,",CL");
 				src++;
 				break;
 
@@ -3179,7 +3245,7 @@ do_rcl16:
 							}
 						break;
 					}
-//no				outputText(dest,",");
+//no				outputComma(dest);
 				if(i) {
 					switch(Pipe2.mod) {
 						case 2:
@@ -3224,36 +3290,36 @@ do_rcl16:
         
 			case 0xe0:      // LOOPNZ/LOOPNE
 				outputText(dest,"LOOPNZ ");
-				outputWord(dest,pcaddr+(int8_t)Pipe2.b.l);
+				outputWord(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
         
 			case 0xe1:      // LOOPZ/LOOPE
 				outputText(dest,"LOOPZ ");
-				outputWord(dest,pcaddr+(int8_t)Pipe2.b.l);
+				outputWord(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
         
 			case 0xe2:      // LOOP
 				outputText(dest,"LOOP ");
-				outputWord(dest,pcaddr+(int8_t)Pipe2.b.l);
+				outputWord(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0xe3:      // JCXZ
 				outputText(dest,"JCXZ ");
-				outputWord(dest,pcaddr+(int8_t)Pipe2.b.l);
+				outputWord(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 
 			case 0xe4:        // INB
-				outputText(dest,"INB AL,");
+				outputText(dest,"INB AL, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
 
 			case 0xe5:        // INW
-				outputText(dest,"INW AX,");
+				outputText(dest,"INW AX, ");
 				outputByte(dest,Pipe2.b.l);
 				src++;
 				break;
@@ -3261,31 +3327,31 @@ do_rcl16:
 			case 0xe6:      // OUTB
 				outputText(dest,"OUTB ");
 				outputByte(dest,Pipe2.b.l);
-				outputText(dest,",AL");
+				outputText(dest,", AL");
 				src++;
 				break;
 
 			case 0xe7:      // OUTW
 				outputText(dest,"OUTW ");
 				outputByte(dest,Pipe2.b.l);
-				outputText(dest,",AX");
+				outputText(dest,", AX");
 				src++;
 				break;
 
 			case 0xe8:      // CALL rel16
 				outputText(dest,"CALL ");
-				outputAddress(dest,pcaddr+(int16_t)Pipe2.x.l+3);
+				outputAddress(dest,(uint16_t)(pcaddr+(int16_t)Pipe2.x.l+3));
         src+=2;
 				break;
 
 			case 0xe9:      // JMP rel16 (32 su 386)
 				outputText(dest,"JMP ");
-				outputAddress(dest,pcaddr+(int16_t)Pipe2.x.l+3);
+				outputAddress(dest,(uint16_t)(pcaddr+(int16_t)Pipe2.x.l+3));
         src+=2;
 				break;
         
 			case 0xea:      // JMP abs  (32 su 386)
-				outputText(dest,"JMPF ");		// ljmp
+				outputText(dest,"LJMP ");		// ljmp o jmpf :)
 //        GetMorePipe(_cs,_ip-1);
 				Pipe2.x.h=*((WORD*)(src+2));
 				outputFarAddress(dest,MAKELONG(Pipe2.x.l,Pipe2.x.h));
@@ -3294,16 +3360,16 @@ do_rcl16:
 
 			case 0xeb:      // JMP rel8
 				outputText(dest,"JMPS ");
-				outputAddress(dest,pcaddr+(int8_t)Pipe2.b.l+2);
+				outputAddress(dest,(uint16_t)(pcaddr+(int8_t)Pipe2.b.l+2));
 				src++;
 				break;
 			
 			case 0xec:        // INB
-				outputText(dest,"INB AL,DX");
+				outputText(dest,"INB AL, DX");
 				break;
 
 			case 0xed:        // INW
-				outputText(dest,"INW AX,DX");
+				outputText(dest,"INW AX, DX");
 
 #ifdef EXT_NECV20
 				// dice che ED FD è RETEM, ritorno da modo 8080...
@@ -3313,11 +3379,11 @@ do_rcl16:
 				break;
 
 			case 0xee:        // OUTB
-				outputText(dest,"OUTB DX,AL");
+				outputText(dest,"OUTB DX, AL");
 				break;
 
 			case 0xef:        // OUTW
-				outputText(dest,"OUTW DX,AX");
+				outputText(dest,"OUTW DX, AX");
 				break;
 
 			case 0xf0:				// LOCK (prefisso...
@@ -3362,6 +3428,8 @@ do_rcl16:
 									outputText(dest,"TEST ");
 									outputPtr(dest,1);
 									outputText(dest,r);
+									outputComma(dest);
+									outputByte(dest,Pipe2.bd[immofs+1]);		
                   src++;
 									break;
 								case 2:			// NOT
@@ -3395,7 +3463,6 @@ do_rcl16:
 									outputText(dest,r);
 									break;
 								}
-							src++;
 							}
 						else {
 							switch(Pipe2.reg) {
@@ -3404,6 +3471,8 @@ do_rcl16:
 									outputText(dest,"TEST ");
 									outputPtr(dest,2);
 									outputText(dest,r);
+									outputComma(dest);
+									outputWord(dest,MAKEWORD(Pipe2.bd[immofs+1],Pipe2.bd[immofs+2]));		// VERIFICARE!
                   src+=2;
 									break;
 								case 2:			// NOT
@@ -3437,18 +3506,20 @@ do_rcl16:
 									outputText(dest,r);
 									break;
 								}
-							src+=2;
               }
+						src++;
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						if(!(Pipe1 & 1)) {
 							switch(Pipe2.reg) {
 								case 0:       // TEST
 								case 1:       // TEST forse....
 									outputText(dest,"TEST ");
-                  src++;
 									outputText(dest,r);
+									outputComma(dest);
+									outputByte(dest,Pipe2.b.h);		// VERIFICARE!
+                  src+=2;
 									break;
 								case 2:			// NOT
 									outputText(dest,"NOT ");
@@ -3482,6 +3553,8 @@ do_rcl16:
 								case 1:       // TEST forse....
 									outputText(dest,"TEST ");
 									outputText(dest,r);
+									outputComma(dest);
+									outputWord(dest,Pipe2.xm.w);		// VERIFICARE!
                   src+=2;
 									break;
 								case 2:			// NOT
@@ -3510,6 +3583,7 @@ do_rcl16:
 									break;
 								}
               }
+						src++;
             break;
           }
 				break;
@@ -3562,12 +3636,12 @@ do_rcl16:
 #ifdef EXT_NECV20
 								case 3:
 								case 5:			// sono "nonsense" a 8 bit, dice!
-									outputUnknown(dest,Pipe2.b.l);
+									outputUnknown(dest,(BYTE*)oldsrc,src+1-oldsrc);
 //								  CPUPins |= DoHalt;
 									break;
 #endif
 								default:
-									outputUnknown(dest,Pipe2.b.l);
+									outputUnknown(dest,(BYTE*)oldsrc,(BYTE)(src+1-oldsrc));
 									break;
 								}
 							src++;
@@ -3603,11 +3677,11 @@ do_rcl16:
 									outputText(dest,r);
 									break;
 								case 5:       // JMP FAR DWORD PTR
-									outputText(dest,"JMPF ");		// LJMP
+									outputText(dest,"LJMP ");		// LJMP o jmpf
 									outputPtr(dest,4);
 									outputText(dest,r);
-									outputText(dest,":");
-									outputText(dest,r);
+//									outputText(dest,":");
+//									outputText(dest,r);
 //									_ip=res1.x;
 //									_cs=GetShortValue(*theDs,op2.mem+2);
 									break;
@@ -3620,14 +3694,14 @@ do_rcl16:
 									outputText(dest,r);
 									break;
 								default:
-									outputUnknown(dest,Pipe2.b.l);
+									outputUnknown(dest,(BYTE*)oldsrc,(BYTE)(src+1-oldsrc));
 									break;
 								}
 	 						src++;
 		          }
             break;
           case 3:
-						r=getRegister2(Pipe1,Pipe2.rm);
+						r=getRegister2(Pipe1,(BYTE)Pipe2.rm);
 						if(!(Pipe1 & 1)) {
 							switch(Pipe2.reg) {
 								case 0:       // INC
@@ -3639,9 +3713,10 @@ do_rcl16:
 									outputText(dest,r);
 									break;
 								default:
-									outputUnknown(dest,Pipe2.b.l);
+									outputUnknown(dest,(BYTE*)oldsrc,(BYTE)(src+1-oldsrc));
 									break;
 								}
+	 						src++;
 							} 
 						else {
 							switch(Pipe2.reg) {
@@ -3662,8 +3737,6 @@ do_rcl16:
 									outputText(dest,"CALLF ");	// LCALL
 									outputPtr(dest,4);
 									outputText(dest,r);
-//									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-//									_cs=*op2.reg16+2;
 									break;
 								case 4:       // JMP DWORD PTR jmp [100]
 									outputText(dest,"JMP ");
@@ -3671,46 +3744,63 @@ do_rcl16:
 									outputText(dest,r);
 									break;
 								case 5:       // JMP FAR DWORD PTR
-									outputText(dest,"JMPF ");		// LJMP
+									outputText(dest,"LJMP ");		// LJMP o jmpf
 									outputPtr(dest,4);
-// finire									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-//									_cs=*op2.reg16+2;
 									outputText(dest,r);
-									outputText(dest,":");
-									outputText(dest,r);
+//									outputText(dest,":");
+//									outputText(dest,r);
 									break;
 								case 6:       // PUSH 
 #ifdef UNDOCUMENTED_8086
 								case 7:
 #endif
-					if(CPUType>=2) {
-					}
-					else {
-					}
+									if(CPUType>=2) {
 									outputText(dest,"PUSH ");
+							}
+							else {
+									outputUnknown(dest,(BYTE*)oldsrc,(BYTE)(src+1-oldsrc));
+								}
 									break;
 								default:
-									outputUnknown(dest,Pipe2.b.l);
+									outputUnknown(dest,(BYTE*)oldsrc,(BYTE)(src+1-oldsrc));
 									break;
 								}
+	 						src++;
               }
             break;
           }
 				break;
         
 			default:
-				outputUnknown(dest,Pipe2.b.l);
+				outputUnknown1(dest,Pipe2.b.l);
 				break;
 			}
     
 		pcaddr+=(src-oldsrc);
+		if(len)
+			len-=(src-oldsrc);
 		if(opzioni & 1) {
 			char myBuf[256],myBuf2[32];
 
 			strcpy(myBuf,dest);
 			*dest=0;
 			if(opzioni & 2) {
-				wsprintf(dest,"%04X: ",pcaddr-(src-oldsrc));
+#ifdef EXT_80286
+				extern uint8_t ram_seg[];
+				struct SEGMENT_DESCRIPTOR *sd;
+				uint32_t t;
+				if(pcaddrH>0x1000)
+					t=MAKELONG(pcaddr-(src-oldsrc),pcaddrH ->s.x	);		// occhio real mode da main/disassemble non va, mettere seg
+				else {
+					sd=(struct SEGMENT_DESCRIPTOR*)&ram_seg[GDTR.Base+(pcaddrH->s.Index << 3)];
+					t=MAKELONG(sd->Base,sd->BaseH);
+					}
+				wsprintf(dest,"%04X:%04X: ",HIWORD(t),
+					pcaddr-(src-oldsrc));
+#else
+				wsprintf(dest,"%04X:%04X: ",pcaddrH->s.x,
+					pcaddr-(src-oldsrc));
+#endif
 				}
 			while(oldsrc<src) {
 				wsprintf(myBuf2,"%02X ",*oldsrc);
@@ -3727,8 +3817,15 @@ do_rcl16:
 			}
 		strcat(dest,"\r\n");
 
-		if(!len)
+		if(f != -1/*INVALID_HANDLE*/) {
+			_lwrite(spoolFile,dest,strlen(dest));
+			*dest=0;
+			}
+
+		if((int)len<=0)
 			fExit=1;
 
 		} while(!fExit);
+
+		return src-oldsrc;
 	}

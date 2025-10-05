@@ -227,7 +227,7 @@ extern union PIPE Pipe2;
 			Exception86.descr.ud=EXCEPTION_GP;\
 			goto exception286;\
 			}\
-		if(seg->d.Limit		&& ofs>seg->d.Limit) {/*0=65536, ma v. anche DOWN Expand*/\
+		if(seg->d.Limit		&& ofs>(seg->d.Limit+1  /*SISTEMARE, MIGLIORARE*/)) {/*0=65536, ma v. anche DOWN Expand*/\
 			Exception86.descr.ud=EXCEPTION_STACK;\
 			goto exception286;\
 			}\
@@ -3540,7 +3540,7 @@ void OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_
         case 0:     // 0x20 per EOI interrupt, 0xb per "chiedere" quale... subito dopo c'è lettura a 0x20
           i8259RegW[0]=t1;      // 
 					if(t1 & 0b00010000) {// se D4=1 qua (0x10) è una sequenza di Init,
-						i8259OCW[2] = 2;		// dice, default su lettura IRR
+						i8259OCW[2] = PIC_WANTSIRR;		// dice, default su lettura IRR
 //						i8259RegR[0]=0;
 						// boh i8259IMR=0xff; disattiva tutti
 						i8259ICW[0]=t1;
@@ -3650,16 +3650,18 @@ void OutValue(uint16_t t,uint8_t t1) {      // https://wiki.preterhuman.net/XT,_
               // latching operation... v. sotto
               break;
             case PIT_LOADLOW:
-              i8253TimerL[t]=i8253TimerR[t]=i8253TimerW[t]=MAKEWORD(t1,HIBYTE(i8253TimerW[t]));
+              i8253TimerL[t]=i8253TimerR[t]=i8253TimerW[t]=MAKEWORD(t1,0/*glabios usa così a me pare cagata HIBYTE(i8253TimerW[t])*/);
 //		          i8253Flags[t] &= ~PIT_LOHIBYTE;
 							i8253Flags[t] &= ~(PIT_ACTIVE | PIT_LOHIBYTE);          // 
-#ifdef PC_IBM5150
+#if defined(PC_IBM5150) || defined(PC_IBM5160)
 								i8253Flags[t] |= PIT_ACTIVE;          // award del c, 5150 di merda PATCH perché così vanno tutti gli altri @#£$%
 #endif
 							goto reload0;
               break;
             case PIT_LOADHIGH:
-              i8253TimerL[t]=i8253TimerR[t]=i8253TimerW[t]=MAKEWORD(LOBYTE(i8253TimerW[t]),t1);
+              i8253TimerL[t]=i8253TimerR[t]=i8253TimerW[t]=MAKEWORD(0/* glabios usa così a me pare cagata LOBYTE(i8253TimerW[t])*/,
+								t1);
+								// 5160 ANDAVA senza patch qua sopra, se uso HIBYTE/LOBYTE ma SPARATEVI CRISTO!
 //		          i8253Flags[t] &= ~PIT_LOHIBYTE;
 							i8253Flags[t] &= ~(PIT_ACTIVE | PIT_LOHIBYTE);          // 
 							goto reload0;

@@ -637,11 +637,11 @@ int Emulate(int mode) {
 
 rallenta:
 #ifndef PCAT
-		if(++timerDivider >= 4          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
+//		if(++timerDivider >= 4          *1/**CPUdivider*/) {			// 4.77 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (questa merda è indispensabile per GLABios che fa un test ridicolo sui timer... #nerd #froci [diventano troppo lenti i timer...
 #else
-		if(++timerDivider >= 5          *1/**CPUdivider*/) {			// 10 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (
+//		if(++timerDivider >= 5          *1/**CPUdivider*/) {			// 10 ->1.19  (MA SERVE rallentare ulteriormente, per i cicli/istruzione (
 #endif
-         
+  #warning TOLTO divider qua!       
 
       // Ma in effetti se consideriamo che ogni istruzione impiega da 3-4 a 100 cicli, diciamo max 20 http://aturing.umcs.maine.edu/~meadow/courses/cos335/80x86-Integer-Instruction-Set-Clocks.pdf
       // e passiamo di qua dopo ognuna, allora il divisore quasi non ha senso... anzi andrebbe invertito!
@@ -654,10 +654,6 @@ rallenta:
 			// aggiungere modo BCD a tutti i conteggi!! :)  i8253Mode[0] & B8(00000001)
       
 			for(i=0; i<3; i++) {
-				if(i8253Flags[i] & PIT_LOADED) {
-// PROVARE					i8253Flags[i] | PIT_ACTIVE;
-					i8253Flags[i] &= ~PIT_LOADED;
-					}
 				switch((i8253Mode[i] & 0b00001110) >> 1) {// VERIFICARE altri modi a parte i primi 4
 					case PIT_MODE_INTONTERMINAL:		// INTerrupt on terminal count
 						// (continous) output is low and goes high at counting end
@@ -813,6 +809,10 @@ rallenta:
 							}
 						break;
 					}
+				if(i8253Flags[i] & PIT_LOADED) {
+					i8253Flags[i] |= PIT_ACTIVE;
+					i8253Flags[i] &= ~PIT_LOADED;
+					}
 				}
 
 			if(i8253Flags[2] & PIT_OUTPUT)
@@ -877,7 +877,7 @@ rallenta:
 					}
 				}
 
-			}		// timerDivider
+//			}		// timerDivider
 
 		if(!(i8237RegW[8] & DMA_DISABLED)) {		// controller enable
 #ifndef PCAT
@@ -4349,9 +4349,6 @@ do_tasksw_call:
 #else
 				POP_STACK(_f.x);
 #endif
-#ifdef EXT_NECV20	
-				inEI++;			// boh, NECV20 emulator lo fa...
-#endif
 				goto fix_flags;
 				break;
 
@@ -4798,14 +4795,14 @@ fix_flags:
 
 					sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
 
-					if(sd->Access.DPL>_cs->s.RPL) {		// inter-level
+					if(sd->Access.DPL>_cs->s.RPL 
+						|| sd->Access.DPL<_cs->s.RPL) {		// inter-level
 
-
-						res2.x=_sp;
+//						res2.x=_sp;
 						POP_STACK(res1.x);
 //							_sp=res2.x;
-						POP_STACK(res3.x);
-						ASSIGN_SEGMENT(_ss,res3.x);
+						POP_STACK(res2.x);
+						ASSIGN_SEGMENT(_ss,res2.x);
 						_sp=res1.x;
 
 						ASSIGN_SEGMENT(_cs,res3.x);
@@ -4880,6 +4877,8 @@ do_irq:
 				if(_msw.PE) {
 					if(_sp<6) {
 // tecnicamente è un eccezione, non trap...            _f.Trap=1;
+						Exception86.descr.ud=EXCEPTION_DOUBLEFAULT;
+						Exception86.active=1;			// x forzare
 						goto exception286;
   					}
 					}
@@ -4901,7 +4900,7 @@ do_irq:
 		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 		//				else
-							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+IntIRQNum.Vector*8];
+							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+IntIRQNum.Vector];
 							sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((IntIRQNum.Vector *8))];
 
 			//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
@@ -4979,8 +4978,8 @@ do_irq:
 									// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
 								case 7:		// Trap gate
 									_f.NestedTask=0;
-									if(_cs->s.RPL>/*_cs->s.RPL*/ sdi->Access.DPL ||
-										_cs->s.RPL</*_cs->s.RPL*/ sdi->Access.DPL) {		// inter-level		FINIRE!
+									if(_cs->s.RPL> sdi->Access.DPL ||
+										_cs->s.RPL< sdi->Access.DPL) {		// inter-level		FINIRE!
 
 //finire
 										res3.x=_sp;
@@ -5000,7 +4999,10 @@ do_irq:
 											else {
 												PUSH_STACK(oldIp);		// (servirebbe ip PRIMA dell'istruzione...
 												}
-  										}
+											}
+										else {
+											PUSH_STACK(_ip);
+											}
 
 										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 										ASSIGN_SEGMENT(_cs,sdi->Selector);
@@ -5045,6 +5047,7 @@ do_irq:
 							}		// irq# > limit
 						else {
 							Exception86.descr.ud=EXCEPTION_DOUBLEFAULT;
+							Exception86.active=1;			// x forzare
 							goto exception286;
 							}
 						}		// PE
@@ -5198,9 +5201,9 @@ do_irq:
 
 						if(/*_f1.IOPL*/ seg->s.RPL>_cs->s.RPL) {		// inter-level  FINIRE!
 
-							res2.x=_sp;
+	//						res2.x=_sp;
 							POP_STACK(res1.x);
-//							_sp=res2.x;
+	//							_sp=res2.x;
 							POP_STACK(res2.x);
 							ASSIGN_SEGMENT(_ss,res2.x);
 							_sp=res1.x;
@@ -5224,9 +5227,9 @@ do_irq:
 							}
 						else if(/*_f1.IOPL*/ seg->s.RPL<_cs->s.RPL) {		// inter-level
 
-							res2.x=_sp;
+	//						res2.x=_sp;
 							POP_STACK(res1.x);
-//							_sp=res2.x;
+	//							_sp=res2.x;
 							POP_STACK(res2.x);
 							ASSIGN_SEGMENT(_ss,res2.x);
 							_sp=res1.x;
@@ -6734,12 +6737,9 @@ _lclose(spoolFile);
 				break;
         
 			default:
-				{
-					char myBuf[128];
+        
 unknown_istr:
-;
-      }
-
+        
 #if defined(EXT_80286)
 exception286UD:
 				Exception86.descr.ud=EXCEPTION_UD;
@@ -6750,21 +6750,32 @@ exception286:
 				Exception86.addrH=_cs->s.x;			// finire
 				Exception86.descr.rw=1;
 exception286ext:
-				Exception86.active=1;
 				Exception86.descr.in=1;
 				Exception86.descr.hascode=((Exception86.descr.ud>=10) || (Exception86.descr.ud==8)) ? 1 : 0;		// v. 9-9 table 9-3
 
+				if(Exception86.active) {		// se eccezione dentro eccezione...
+
+
+					// MA OCCHIO NON FUNZIA COSI'! non pulire sotto, o sopra...
+					// E POI quando arriva da fuori è già attivo
+					Exception86.descr.ud=EXCEPTION_DOUBLEFAULT;
+					Exception86.parm=0;
+					// e poi reset alla terza?? :)
+
+					CPUPins |= DoHalt;		// beh per ora :)
+					Exception86.active=0;
+					_sp=0;		// pulisco stack exception
+					goto skip_exception;
+
+					}
+
 //		if(Exception86.active) 
 				{
-        char myBuf[80];
-        sprintf(myBuf,"8086 exception %u (%c) %04X:%04X; %08X\r\n",Exception86.descr.ud,Exception86.descr.rw ? 'R' : 'W',
-          _msw.PE ? _cs->d.BaseH : _cs->s.x,_ip, Exception86.addr);
-        setTextColor(BRIGHTRED);
-        LCDXY(0,1);
-        gfx_print(myBuf);
-        Exception86.active=0;
+			Exception86.active=0;
 
-        }
+			}
+
+				Exception86.active=1;
 
 				//PUSHARE Exception86.parm  v. SOPRA
 				IntIRQNum.Vector=(uint8_t)Exception86.descr.ud;
@@ -6778,12 +6789,15 @@ exception286ext:
 				goto do_irq;
 #endif
 
+skip_exception:
 				break;
 			}
     
 #ifdef EXT_80286
-		if(_msw.PE && Exception86.active)
+		if(_msw.PE && Exception86.active)	{	// sempre o solo PE?? alcune sempre...
+			Exception86.active=0;  // tolgo per evitare double fault
 			goto exception286ext;
+			}
 #endif
 
     if(_f.Trap) {
@@ -6851,8 +6865,8 @@ exception286ext:
 	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(uint16_t)(2*8)];
-						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)(2*8)];
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(uint16_t)(2*8/*i8259ICW[0] & 4 ? 4 : 8 USARE */)];
+						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)(2*8/*i8259ICW[0] & 4 ? 4 : 8 USARE */)];
 
 		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
@@ -6992,16 +7006,16 @@ they return to the instruction following the division*/
 					PUSH_STACK(_ip);
 
 					_f.IF=0;
-					_ip=GetShortValue(&absSeg,(uint16_t)(2*4));
-					ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((2*4) +2)));
+					_ip=GetShortValue(&absSeg,(uint16_t)(2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */));
+					ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */) +2)));
 						
 #else
 
 				PUSH_STACK(_f.x);
 				PUSH_STACK(_cs->s.x);		// 
 				PUSH_STACK(_ip);
-				_ip=GetShortValue(&absSeg,2*4);
-				ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,2*4+2));
+				_ip=GetShortValue(&absSeg,2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */);
+				ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */+2));
 
 #endif
 
@@ -7015,20 +7029,25 @@ they return to the instruction following the division*/
 //			if(_f.IF) {  v.sopra
         CPUPins &= ~(DoIRQ | DoHalt);
 
+/*			if(inRep || inRepStep) {
+			char myBuf[256];
+			wsprintf(myBuf,"%u: IRQ durante REP %u\n",timeGetTime(),inRep 
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}*/
+
+/*{
+			char myBuf[256];
+			wsprintf(myBuf,"%u: IRQ  %X, i8259ICW=%08X\n",timeGetTime(),ExtIRQNum.Vector,i8259ICW[1] << 11
+				);
+			_lwrite(spoolFile,myBuf,strlen(myBuf));
+			}*/
+
 #if defined(EXT_80286)
 				// QUA usare (pag 149 tab 9.2) IDT vector a 16 bit, con b0=error code
 				// e c'è anche TI per selezionare QUALE selettore GDTR LDTR IDTR fig 7.5 pag 118
         if(_sp>=6) {
             
-					PUSH_STACK(_f.x);
-					PUSH_STACK(_cs->s.x);		// 
-  /*- all interrupts except the internal CPU exceptions push the
-	flags and the CS:IP of the next instruction onto the stack.
-	CPU exception interrupts are similar but push the CS:IP of the
-	causal instruction.	8086/88 divide exceptions are different,
-	they return to the instruction following the division*/
-          PUSH_STACK(_ip);
-
 					if(_msw.PE) {
 		//				union SEGMENT_SELECTOR *ss=(union SEGMENT_SELECTOR *)Pipe2.x.h;
 						struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
@@ -7039,9 +7058,9 @@ they return to the instruction following the division*/
 	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+ExtIRQNum.Vector *8];
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+ExtIRQNum.Vector *8 /*i8259ICW[0] & 4 ? 4 : 8 USARE */];
 //							memcpy(&sdi,&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8))],sizeof(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP));
-						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((ExtIRQNum.Vector *8))];
+						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((ExtIRQNum.Vector *8 /*i8259ICW[0] & 4 ? 4 : 8 USARE */))];
 
 		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
@@ -7116,13 +7135,41 @@ they return to the instruction following the division*/
 								_f.IF=0;
 							case 7:		// Trap gate NON dovrebbe esserci qua!
 								_f.NestedTask=0;
-								_f.Trap=0; 
-								if(_cs->s.RPL>sdi->Access.DPL) {		// inter-level
+								if(_cs->s.RPL> sdi->Access.DPL ||
+									_cs->s.RPL< sdi->Access.DPL) {		// inter-level		FINIRE!
+
+//finire
+									res3.x=_sp;
+									PUSH_STACK(_ss->s.x);		// 
+									PUSH_STACK(res3.x);		// 
+									PUSH_STACK(_f.x);
+									PUSH_STACK(_cs->s.x);		// 
+/*- all interrupts except the internal CPU exceptions push the
+flags and the CS:IP of the next instruction onto the stack.
+CPU exception interrupts are similar but push the CS:IP of the
+causal instruction.	8086/88 divide exceptions are different,
+they return to the instruction following the division*/
+									PUSH_STACK(_ip);
+
+									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
+									ASSIGN_SEGMENT(_cs,sdi->Selector);
+
+//										_f.IOPL=_cs->s.RPL /*sdi->Access.DPL*/;
+
 									}
 								else {		// intra-level
+									PUSH_STACK(_cs->s.x);		// 
+/*- all interrupts except the internal CPU exceptions push the
+flags and the CS:IP of the next instruction onto the stack.
+CPU exception interrupts are similar but push the CS:IP of the
+causal instruction.	8086/88 divide exceptions are different,
+they return to the instruction following the division*/
+									PUSH_STACK(_ip);
+									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
+									ASSIGN_SEGMENT(_cs,sdi->Selector);
+//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
 									}
-								_ip=GetShortValue(&absSeg, (uint16_t)(ExtIRQNum.Vector /*bus dati*/ *8));   // https://sw0rdm4n.wordpress.com/2014/09/09/old-knowledge-of-x86-architecture-8086-interrupt-mechanism/
-								ASSIGN_SEGMENT(_cs,(uint16_t)GetShortValue(&absSeg,((uint16_t)(ExtIRQNum.Vector /*bus dati*/ *8 +2))));
+							
 								break;
 
 							case 4:		// Call gate
@@ -7140,9 +7187,18 @@ they return to the instruction following the division*/
 
 						}		// PE
 					else {
+						PUSH_STACK(_f.x);
+						PUSH_STACK(_cs->s.x);		// 
+  /*- all interrupts except the internal CPU exceptions push the
+	flags and the CS:IP of the next instruction onto the stack.
+	CPU exception interrupts are similar but push the CS:IP of the
+	causal instruction.	8086/88 divide exceptions are different,
+	they return to the instruction following the division*/
+	          PUSH_STACK(_ip);
+
 						_f.Trap=0; _f.IF=0;	
-						_ip=GetShortValue(&absSeg, (uint16_t)(ExtIRQNum.Vector /*bus dati*/ *4));   // https://sw0rdm4n.wordpress.com/2014/09/09/old-knowledge-of-x86-architecture-8086-interrupt-mechanism/
-						ASSIGN_SEGMENT(_cs,(uint16_t)GetShortValue(&absSeg,((uint16_t)(ExtIRQNum.Vector /*bus dati*/ *4 +2))));
+						_ip=GetShortValue(&absSeg, (uint16_t)(ExtIRQNum.Vector /*bus dati*/ *4/*i8259ICW[0] & 4 ? 4 : 8 USARE */));   // https://sw0rdm4n.wordpress.com/2014/09/09/old-knowledge-of-x86-architecture-8086-interrupt-mechanism/
+						ASSIGN_SEGMENT(_cs,(uint16_t)GetShortValue(&absSeg,((uint16_t)(ExtIRQNum.Vector /*bus dati*/ *4 /*i8259ICW[0] & 4 ? 4 : 8 USARE */ +2))));
 						}
 					}
 				else {
@@ -7167,8 +7223,8 @@ they return to the instruction following the division*/
         PUSH_STACK(_ip);
         _f.IF=0;
 					// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
-        _ip=GetShortValue(&absSeg,(uint16_t)(ExtIRQNum.Vector *4));
-				ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((ExtIRQNum.Vector *4) +2)));
+        _ip=GetShortValue(&absSeg,(uint16_t)(ExtIRQNum.Vector *4/*i8259ICW[0] & 4 ? 4 : 8 USARE */));
+				ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((ExtIRQNum.Vector *4/*i8259ICW[0] & 4 ? 4 : 8 USARE */) +2)));
 
 #endif
 

@@ -1,3 +1,7 @@
+#ifndef _8086_IO_H_INCLUDED
+#define _8086_IO_H_INCLUDED
+
+
 #include <stdint.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -18,8 +22,8 @@ enum DMA_CONTROL {		//
 	DMA_DISABLED		= 0x01,
 	DMA_UPDOWN			= 0x20,
 	DMA_AUTORELOAD	= 0x10,
-    
-// masks
+
+//masks
 	DMA_READ				= 0x04,
 	DMA_TYPE				= 0x0C,
 	DMA_SINGLE			= 0x40,
@@ -28,11 +32,11 @@ enum DMA_CONTROL {		//
 	DMA_MODEVERIFY	= 0x00,
 	DMA_MODEWRITE		= 0x01,
 	DMA_MODEREAD		= 0x02,
-    
-	DMA_MODEDEMAND	=   0x00,
-	DMA_MODESINGLE	=   0x01,
-	DMA_MODEBLOCK	=   0x02,
-	DMA_MODECASCADE	=   0x03,
+
+	DMA_MODEDEMAND	= 0x00,
+	DMA_MODESINGLE	= 0x01,
+	DMA_MODEBLOCK		= 0x02,
+	DMA_MODECASCADE	= 0x03,
 
 	DMA_MASK0				= 0x01,
 	DMA_MASK1				= 0x02,
@@ -51,11 +55,11 @@ enum DMA_CONTROL {		//
 
 enum PIT_MODE {		// 
 	PIT_MODE_INTONTERMINAL		= 0,
-	PIT_MODE_ONESHOT			= 1,
-	PIT_MODE_FREECOUNTER		= 2,
+	PIT_MODE_ONESHOT					= 1,
+	PIT_MODE_FREECOUNTER			= 2,
 	PIT_MODE_SQUAREWAVEGEN		= 3,
-	PIT_MODE_SWTRIGGERED		= 4,
-	PIT_MODE_HWTRIGGERED		= 5,
+	PIT_MODE_SWTRIGGERED			= 4,
+	PIT_MODE_HWTRIGGERED			= 5,
 	};
 
 enum PIT_OPERATION {		// 
@@ -93,6 +97,21 @@ enum PIC_FLAGS {		//
 	PIC_WANTSISR							= 0x3,
 	};
 
+#define ICW1_ICW4	0x01		/* Indicates that ICW4 will be present */
+#define ICW1_SINGLE	0x02		/* Single (cascade) mode */
+#define ICW1_INTERVAL4	0x04		/* Call address interval 4 (8) */
+#define ICW1_LEVEL	0x08		/* Level triggered (edge) mode */
+#define ICW1_INIT	0x10		/* Initialization - required! */
+
+#define ICW4_8086	0x01		/* 8086/88 (MCS-80/85) mode */
+#define ICW4_AUTO	0x02		/* Auto (normal) EOI */
+#define ICW4_BUF_SLAVE	0x08		/* Buffered mode/slave */
+#define ICW4_BUF_MASTER	0x0C		/* Buffered mode/master */
+#define ICW4_SFNM	0x10		/* Special fully nested (not) */
+
+#define CASCADE_IRQ 2
+
+
 enum KB_CONTROL {		// 
 	KB_IRQENABLE			= 0x01,
 	KB_TRANSLATE			= 0x40,
@@ -126,7 +145,9 @@ enum FLOPPY_COMMANDS {		// https://wiki.osdev.org/Floppy_Disk_Controller  (da gr
 	FLOPPY_LOCK =                       20,     // protect controller params from a reset
 	FLOPPY_VERIFY =                     22,
 	FLOPPY_SCAN_LOW_OR_EQUAL =          25,
-	FLOPPY_SCAN_HIGH_OR_EQUAL =         29
+	FLOPPY_SCAN_HIGH_OR_EQUAL =         29,
+    
+	FLOPPY_COMMAND_MASK =         0x1f
   };
 enum FLOPPY_STATE {		// 
 	FLOPPY_STATE_DISKPRESENT =        0x80,
@@ -191,6 +212,8 @@ enum HD_COMMANDS_XT {
 	HD_XT_EXECUTE_CONTROLLER_DIAGNOSTIC = 0xe4,   // 
 	HD_XT_READ_LONG =                  0xe5,    // read from the disk
 	HD_XT_WRITE_LONG =                 0xe6,    // write to the disk
+    
+	HD_XT_COMMAND_MASK =         0x1f
   };
 enum HD_STATUS_XT {		// 
 	HD_XT_STATUS_XFER =							0x01,		// handshake
@@ -223,3 +246,4 @@ enum HD_STATUS_AT {		//
 	HD_AT_STATUS_BUSY =							0x80
 	};
 
+#endif

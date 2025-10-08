@@ -26,6 +26,7 @@
 #include "adafruit_gfx.h"
 
 #include "8086_PIC.h"
+#include "8086.h"
 #include "8086_io.h"
 
 
@@ -85,152 +86,6 @@ extern uint8_t LCDdirty;
 	union SEGMENTS_DESCRIPTOR segs;
 #endif
 
-
-#if 0
-
-	// boh van bene entrambi i gruppi... 8/8/25 MORTE AGLI UMANI
-	// quindi il blocco sotto sembra migliore, e ev. usare le CARRY del primo gruppo
-
-#define SIGN_8() (!!(res3.b & 0x80))
-#define ZERO_8() (!res3.b)
-#define SIGN_16() (!!(res3.x & 0x8000))
-#define ZERO_16() (!res3.x)
-#define	ZERO_32() (!res3.d)		// solo per moltiplicazione NECV20
-#define AUX_ADD_8() (((res1.b & 0xf) + (res2.b & 0xf)) & 0xf0 ? 1 : 0)
-#define AUX_ADC_8() (((res1.b & 0xf) + (res2.b & 0xf)+_f.Carry) & 0xf0 ? 1 : 0)
-	// secondo V20 emulator sembra servire anche questa/e...
-#define AUX_SUB_8() (((res1.b & 0xf) - (res2.b & 0xf)) & 0xf0 ? 1 : 0)
-#define AUX_SBB_8() (((res1.b & 0xf) - (res2.b & 0xf)-_f.Carry) & 0xf0 ? 1 : 0)
-/*AUX flag: 1-carry out from bit 3 on addition or borrow into bit 3 on subtraction
-	0-otherwise*/
-
-/*// da Makushi 68000 o come cazzo si chiama :D  + vari PD...
-// res2 è Source e res1 è Dest ossia quindi res3=Result  OCCHIO QUA*/
-	// https://github.com/kxkx5150/CPU-8086-cpp/blob/main/src/Intel8086.cpp
-	// https://github.com/zsteve/hard86/blob/master/src/emulator/emulator_engine/src/flags.c#L105
-#define CARRY_ADD_8()  (!!(((res2.b & res1.b) | (~res3.b & (res2.b | res1.b))) & 0x80))		// ((S & D) | (~R & (S | D)))
-//#define CARRY_ADD_8()  (!!(res3.b < res1.b))
-//#define CARRY_ADD_8()  ((((uint16_t)res1.b+res2.b) >> 8 ? 1 : 0))
-#define CARRY_ADC_8()  CARRY_ADD_8()
-//#define CARRY_ADC_8()  ((((uint16_t)res1.b+res2.b+_f.Carry) >> 8 ? 1 : 0))
-#define OVF_ADD_8()    (!!(((res2.b ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
-#define OVF_ADC_8()    (!!((((res2.b+_f.Carry) ^ res3.b) & ( res1.b ^ res3.b)) & 0x80))			// ((S^R) & (D^R))
-#define CARRY_ADD_16() (!!(((res2.x & res1.x) | (~res3.x & (res2.x | res1.x))) & 0x8000))
-//#define CARRY_ADD_16() (!!(res3.x < res1.x))
-//#define CARRY_ADD_16() ((((uint32_t)res1.x+res2.x) >> 16 ? 1 : 0))
-#define CARRY_ADC_16() CARRY_ADD_16()
-//#define CARRY_ADC_16() ((((uint32_t)res1.x+res2.x+_f.Carry) >> 16 ? 1 : 0))
-#define OVF_ADD_16()   (!!(((res2.x ^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
-#define OVF_ADC_16()   (!!((((res2.x+_f.Carry)^ res3.x) & ( res1.x ^ res3.x)) & 0x8000))
-#define CARRY_SUB_8()  (!!(((res2.b & res3.b) | (~res1.b & (res2.b | res3.b))) & 0x80))		// ((S & R) | (~D & (S | R)))
-//#define CARRY_SUB_8()  (!!(res1.b < res2.b))
-//#define CARRY_SUB_8() ((((uint16_t)res1.b-res2.b) >> 8 ? 1 : 0))
-#define CARRY_SBB_8()  CARRY_SUB_8()
-//#define CARRY_SBB_8()  (!!((((res2.b-_f.Carry) & res3.b) | (~res1.b & ((res2.b-_f.Carry) | res3.b))) & 0x80))		// ((S & R) | (~D & (S | R)))
-//#define CARRY_SBB_8() ((((uint16_t)res1.b-res2.b-_f.Carry) >> 8 ? 1 : 0))
-#define OVF_SUB_8()    (!!(((res2.b ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
-#define OVF_SBB_8()    (!!((((res2.b-_f.Carry) ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
-#define CARRY_SUB_16() (!!(((res2.x & res3.x) | (~res1.x & (res2.x | res3.x))) & 0x8000))
-//#define CARRY_SUB_16() (!!(res1.x < res2.x))
-//#define CARRY_SUB_16() ((((uint32_t)res1.x-res2.x) >> 16 ? 1 : 0))
-#define CARRY_SBB_16() CARRY_SUB_16()
-//#define CARRY_SBB_16() (!!((((res2.x-_f.Carry) & res3.x) | (~res1.x & ((res2.x-_f.Carry) | res3.x))) & 0x8000))
-//#define CARRY_SBB_16() ((((uint32_t)res1.x-res2.x-_f.Carry) >> 16 ? 1 : 0))
-#define OVF_SUB_16()   (!!(((res2.x ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
-#define OVF_SBB_16()   (!!((((res2.x-_f.Carry) ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
-
-#else
-
-#define SIGN_8() (!!(res3.b & 0x80))
-#define ZERO_8() (!res3.b)
-#define SIGN_16() (!!(res3.x & 0x8000))
-#define ZERO_16() (!res3.x)
-#define	ZERO_32() (!res3.d)		// solo per moltiplicazione NECV20
-#define AUX_ADD_8() (((res1.b ^ res2.b ^ res3.b)) & 0x10 ? 1 : 0)
-#define AUX_ADC_8() AUX_ADD_8()
-#define AUX_SUB_8() AUX_ADD_8()
-#define AUX_SBB_8() AUX_ADD_8()
-#define CARRY_ADD_8()  (res3.b < res1.b)
-#define CARRY_ADC_8()  (_f.Carry ? (res3.b <= res1.b) : (res3.b < res1.b))		// carry == 1 ? res <= dst : res < dst
-#define OVF_ADD_8()    (!!(((res2.b ^ res1.b ^ 0xff) & ( res3.b ^ res1.b)) & 0x80))
-#define OVF_ADC_8()    OVF_ADD_8()
-#define CARRY_ADD_16() (res3.x < res1.x)
-#define CARRY_ADC_16() (_f.Carry ? (res3.x <= res1.x) : (res3.x < res1.x))
-#define OVF_ADD_16()   (!!(((res2.x ^ res1.x ^ 0xffff) & ( res3.x ^ res1.x)) & 0x8000))
-#define OVF_ADC_16()   OVF_ADD_16()
-#define CARRY_SUB_8()  (res1.b < res2.b)
-#define CARRY_SBB_8()  (_f.Carry ? (res1.b <= res2.b) : (res1.b < res2.b))		// carry > 0 ? dst <= src : dst < src
-#define OVF_SUB_8()    (!!(((res2.b ^ res1.b) & ( res3.b ^ res1.b)) & 0x80))			// ((S^D) & (R^D))
-#define OVF_SBB_8()    OVF_SUB_8()
-#define CARRY_SUB_16() (res1.x < res2.x)
-#define CARRY_SBB_16() (_f.Carry ? (res1.x <= res2.x) : (res1.x < res2.x))
-#define OVF_SUB_16()   (!!(((res2.x ^ res1.x) & ( res3.x ^ res1.x)) & 0x8000))
-#define OVF_SBB_16()   OVF_SUB_16()
-#endif
-
-	/*
-void cmp_flags(T a, T b, T result) requires std::same_as<T,u8> || std::same_as<T,u16> {
-    commonflags(a,b,result);
-    set_flag(F_OVERFLOW, ((a ^ b) & (a ^ result)) >> (sizeof(T)*8-1));
-    set_flag(F_CARRY, a < b);
-}
-
-
-result = a-b
-oh SBB is a bit more cursed
-
-case 0x03: //SBB
-    out = p1-(p2+flag(F_CARRY));
-    commonflags(p1,p2,out);
-    set_flag(F_AUX_CARRY, (p1&0xF)-((p2&0xF)+flag(F_CARRY)) < 0x00);
-    set_flag(F_OVERFLOW, ((p1 ^ p2) & (p1 ^ out)) >> (sizeof(T)*8-1));
-    set_flag(F_CARRY, ((p1-(p2+flag(F_CARRY)))>>(sizeof(T)*8)) < 0);
-    break;
-
-
-for ADD it's set_flag(F_AUX_CARRY, ((a ^ b ^ result) & 0x10) != 0);
-for ADC it's set_flag(F_AUX_CARRY, (p1&0xF)+(p2&0xF)+flag(F_CARRY) >= 0x10);
-*/
-
-#if defined(EXT_80386)
-#define ASSIGN_SEGMENT {\
-	}
-#elif defined(EXT_80286)
-#define ASSIGN_SEGMENT(seg,v) {\
-	if(_msw.PE) {\
-	/*se segmento dati NON accettare selector di tipo call interrupt ecc*/\
-	/*mettere controlli*/\
-	/*dovrebbe esserci un "valid bit" da settare quando si assegna...*/\
-		(seg)->s.x=(v);\
-		memcpy(((uint8_t*)&(seg)->d),&ram_seg[\
-			(!(((struct REGISTERS_SEG*)(seg))->s.TI) ? MAKELONG(GDTR.Base,GDTR.BaseH) : \
-			MAKELONG(LDTR->Base,LDTR->BaseH)) +\
-			(((struct REGISTERS_SEG*)(seg))->s.Index << 3)],sizeof(struct SEGMENT_DESCRIPTOR)-sizeof(uint16_t));\
-		}\
-	else\
-		(seg)->s.x=v;\
-	}		// sempre RAM?? o GetValue?
-#else
-#define ASSIGN_SEGMENT(seg,v) { (seg)->s.x=v; }
-#endif
-
-#define OVERRIDE_SEG(seg) {\
-  if(segOverride) {\
-    theDs=&segs.r[segOverride-1];\
-    segOverride=0;\
-    }\
-  else\
-    theDs=seg;\
-	}
-#define OVERRIDE_SEG_REP(seg) {\
-  if(segOverride) {\
-    theDs=&segs.r[segOverride-1];\
-    if(!inRep)\
-    	segOverride=0;\
-    }\
-  else\
-    theDs=seg;\
-	}
 
 #define _ah regs.r[0].b.h
 #define _al regs.r[0].b.l
@@ -1066,6 +921,7 @@ fineRep:
     
      LED1 ^= 1;      // ~ 500/700nS  2/12/19 (con opt=1); un PC/XT @4.77 va a 200nS e impiega una media di 10/20 cicli per opcode => 2-4uS, ergo siamo 6-8 volte più veloci
                     // 500-1uS 22/7/24 con O2! [.9-2uS 16/7/24 senza ottimizzazioni (con O1 si pianta emulatore...
+     // da 1.8 a >3 uS con il 286 5/10/25, O2
      // 2025 dopo aggiunte varie, specie seg:ofs, siamo sui 1-1.5uS con O2
      
 #ifdef USING_SIMULATOR
@@ -1749,50 +1605,80 @@ FFFF:000F                Top of 8086 / 88 address space*/
 
 #ifdef EXT_80286
           case 0x0:      // LLDT/LTR/SLDT/STR/VERW
-						if(_cs->s.RPL>0)
-							goto exception286priv;
+						{
+						union SEGMENT_SELECTOR ss;
+						struct SEGMENT_DESCRIPTOR *sd=NULL;
   					GetPipe(_cs,(uint16_t)(_ip-1));
 						COMPUTE_RM
 								switch(Pipe2.reg) {
 									case 0:		// SLDT
+										if(!_msw.PE)
+											goto unknown_istr;
 										PutShortValue(theDs,(uint16_t)(op2.mem),(uint16_t)(LDTR ? (LDTR-MAKELONG(GDTR.Base,GDTR.BaseH)) : 0));		// 
 										break;
 									case 2:		// LLDT
-										LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+GetShortValue(theDs,(uint16_t)op2.mem)]);
+										if(_msw.PE) {
+											if(_CPL>0)
+											 goto exception286priv;
+											}
+										else
+											goto unknown_istr;
+										LDTR=(union _DTR*)(GET_GADDRESS_FROM_INDEX(GetShortValue(theDs,(uint16_t)op2.mem) & 0xfff8));
 										break;
 									case 1:		// STR
+										if(_msw.PE) {
+											if(_CPL>0)
+											 goto exception286priv;
+											}
+										else
+											goto unknown_istr;
 										PutShortValue(theDs,op2.mem,_tss.x);
 										break;
 									case 3:		// LTR
+										if(_msw.PE) {
+											if(_CPL>0)
+											 goto exception286priv;
+											}
+										else
+											goto unknown_istr;
 										_tss.x=GetShortValue(theDs,op2.mem);
+ltr:
 										{
-										struct SEGMENT_DESCRIPTOR_SYSTEM *sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-										struct SEGMENT_DESCRIPTOR_TSS *sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
+										struct SEGMENT_DESCRIPTOR_SYSTEM *sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)GET_GADDRESS_FROM_INDEX(_tss.Index<<3);
+										struct SEGMENT_DESCRIPTOR_TSS *sdt=(struct SEGMENT_DESCRIPTOR_TSS*)GET_GADDRESS_FROM_INDEX(_tss.Index<<3);
 // USARE! verificare packing										sdt->Access.Type.Busy=1;
 										_tsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-										LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
+										LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(_tsr->Ldt);
+										_tsr->SS_SP_CPL[0]=MAKELONG(_sp,_ss->s.x);
 										sds->Access.Type |= 2;			//.Busy=1;   è il b1 del Type del selector del tss!
 										}
 										break;
 									case 4:		// VERR
 									case 5:		// VERW
-										{
-										union SEGMENT_SELECTOR ss;
-										struct SEGMENT_DESCRIPTOR *sd=NULL;
+										if(!_msw.PE)
+											goto unknown_istr;
 										ss.x=GetShortValue(theDs,op2.mem);
+verr_verw:
 										if(ss.TI && LDTR)
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(LDTR->Base,LDTR->BaseH)+(ss.Index << 3)];
+											sd=(struct SEGMENT_DESCRIPTOR *)GET_LADDRESS_FROM_INDEX(ss.Index << 3);
 										else
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(ss.Index << 3)];
+											sd=(struct SEGMENT_DESCRIPTOR *)GET_GADDRESS_FROM_INDEX(ss.Index << 3);
 										if(!sd) {
 											// finire
 											goto exception286;
 											}
-										if(Pipe2.reg==4)
-											_f.Zero=(sd->Access.b & 0b00000001) == 0b00000000 ? 1 :0;		// boh readable
-										else
-											_f.Zero=(sd->Access.b & 0b00001010) == 0b00001000 ? 1 :0;		// writable
-										}
+										if(Pipe2.reg==4) {
+											if(sd->Access.b & 0b00001000)		// se code
+												_f.Zero=(sd->Access.b & 0b00000001) == 0b00000010 ? 1 : 0;		// readable
+											else
+												_f.Zero=1;		// readable
+											}
+										else {
+											if(sd->Access.b & 0b00001000)		// se code
+												_f.Zero=0;		// writable
+											else
+												_f.Zero=(sd->Access.b & 0b00000010) == 0b00000010 ? 1 : 0;		// writable
+											}
 										break;
 									}
 								break;
@@ -1800,51 +1686,51 @@ FFFF:000F                Top of 8086 / 88 address space*/
 								GET_REGISTER_8_16_2
 								switch(Pipe2.reg) {
 									case 0:		// SLDT
+										if(!_msw.PE)
+											goto unknown_istr;
 										*op2.reg16=LDTR ? (uint16_t)(LDTR-MAKELONG(GDTR.Base,GDTR.BaseH)) : 0;		// 
 										break;
 									case 2:		// LLDT
-										LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+*op2.reg16]);
+										if(_msw.PE) {
+											if(_CPL>0)
+											 goto exception286priv;
+											}
+										else
+											goto unknown_istr;
+										LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(*op2.reg16 & 0xfff8);
 										break;
 									case 1:		// STR
+										if(_msw.PE) {
+											if(_CPL>0)
+											 goto exception286priv;
+											}
+										else
+											goto unknown_istr;
 										*op2.reg16=_tss.x;
 										break;
 									case 3:		// LTR
+										if(_msw.PE) {
+											if(_CPL>0)
+											 goto exception286priv;
+											}
+										else
+											goto unknown_istr;
 										_tss.x=*op2.reg16;
-										{
-										struct SEGMENT_DESCRIPTOR_SYSTEM *sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-										struct SEGMENT_DESCRIPTOR_TSS *sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
-// USARE! verificare packing										sdt->Access.Type.Busy=1;
-										_tsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-										sds->Access.Type |= 2;			//.Busy=1;   è il b1 del Type del selector del tss!
-										}
+										goto ltr;
 										break;
 									case 4:		// VERR
 									case 5:		// VERW
-										{
-										union SEGMENT_SELECTOR ss;
-										struct SEGMENT_DESCRIPTOR *sd=NULL;
+										if(!_msw.PE)
+											goto unknown_istr;
 										ss.x=*op2.reg16;
-										if(ss.TI && LDTR)
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(LDTR->Base,LDTR->BaseH)+(ss.Index << 3)];
-										else
-											sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(ss.Index << 3)];
-										if(!sd) {
-											// finire
-											goto exception286;
-											}
-										if(Pipe2.reg==4)
-											_f.Zero=(sd->Access.b & 0b00000001) == 0b00000000 ? 1 :0;		// boh readable
-										else
-											_f.Zero=(sd->Access.b & 0b00001010) == 0b00001000 ? 1 :0;		// writable
-										}
+										goto verr_verw;
 										break;
 									}
 								break;
 							}
+						}
             break;
           case 0x1:      // LGDT/LIDT/LMSW/SMSW/SGDT/SIDT
-						if(_cs->s.RPL>0)
-							goto exception286priv;
   					GetPipe(_cs,(uint16_t)(_ip-1));
 						COMPUTE_RM
 								switch(Pipe2.reg) {
@@ -1862,14 +1748,20 @@ FFFF:000F                Top of 8086 / 88 address space*/
 										PutValue(theDs,(uint16_t)(op2.mem+5),0xff);		// 
 										break;
 									case 3:		// LIDT
+										if(_msw.PE && _CPL>0)
+											goto exception286priv;
 										for(i=0; i<5; i++)
 											IDTR.b[i]=GetValue(theDs,(uint16_t)(op2.mem+i));		// 
 										break;
 									case 2:		// LGDT
+										if(_msw.PE && _CPL>0)
+											goto exception286priv;
 										for(i=0; i<5; i++)
 											GDTR.b[i]=GetValue(theDs,(uint16_t)(op2.mem+i));		// 
 										break;
 									case 6:		// LMSW
+										if(_msw.PE && _CPL>0)
+											goto exception286priv;
 //										GetPipe(_cs,_ip);		// riempio cache
 //										GetMorePipe(_cs,_ip);
 
@@ -1894,6 +1786,8 @@ FFFF:000F                Top of 8086 / 88 address space*/
 										goto exception286UD;
 										break;
 									case 6:		// LMSW
+										if(_msw.PE && _CPL>0)
+											goto exception286priv;
 										GetPipe(_cs,_ip);		// riempio cache
 										GetMorePipe(_cs,_ip);
 
@@ -1948,6 +1842,8 @@ FFFF:000F                Top of 8086 / 88 address space*/
 						{
 						union SEGMENT_SELECTOR ss;
 						struct SEGMENT_DESCRIPTOR *sd=NULL;
+						if(!_msw.PE)
+							goto unknown_istr;
 						_f.Zero=0;
 						COMPUTE_RM
 								ss.x=GetShortValue(theDs,op2.mem);
@@ -1960,14 +1856,14 @@ FFFF:000F                Top of 8086 / 88 address space*/
 								break;
 							}
 						if(ss.TI && LDTR)
-							sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(LDTR->Base,LDTR->BaseH)+(ss.Index << 3)];
+							sd=(struct SEGMENT_DESCRIPTOR *)GET_LADDRESS_FROM_INDEX(ss.Index << 3);
 						else
-							sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(ss.Index << 3)];
+							sd=(struct SEGMENT_DESCRIPTOR *)GET_GADDRESS_FROM_INDEX(ss.Index << 3);
 						if(!sd) {
 							// finire
 							goto exception286;
 							}
-						if(ss.RPL > _cs->s.RPL) {
+						if(ss.RPL > _CPL) {
 							*op1.reg16=MAKEWORD(0,sd->Access.b);
 							_f.Zero=1;
 							}
@@ -1977,6 +1873,8 @@ FFFF:000F                Top of 8086 / 88 address space*/
 						{
 						union SEGMENT_SELECTOR ss;
 						struct SEGMENT_DESCRIPTOR *sd=NULL;
+						if(!_msw.PE)
+							goto unknown_istr;
 						_f.Zero=0;
 						COMPUTE_RM
 								ss.x=GetShortValue(theDs,op2.mem);
@@ -1989,14 +1887,14 @@ FFFF:000F                Top of 8086 / 88 address space*/
 								break;
 							}
 						if(ss.TI && LDTR)
-							sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(LDTR->Base,LDTR->BaseH)+(ss.Index << 3)];
+							sd=(struct SEGMENT_DESCRIPTOR *)GET_LADDRESS_FROM_INDEX(ss.Index << 3);
 						else
-							sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(ss.Index << 3)];
+							sd=(struct SEGMENT_DESCRIPTOR *)GET_GADDRESS_FROM_INDEX(ss.Index << 3);
 						if(!sd) {
 							// finire
 							goto exception286;
 							}
-						if(ss.RPL > _cs->s.RPL) {
+						if(ss.RPL > _CPL) {
 							*op1.reg16=sd->Limit;
 							_f.Zero=1;
 							}
@@ -2004,7 +1902,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
             break;
           case 0x5:      // LOADALL (undocumented) https://www.rcollins.org/articles/loadall/tspec_a3_doc.html
 						{	
-						if(_cs->s.RPL>0)
+						if(_CPL>0)
 							goto exception286priv;
 						op2.mem=0x800;
 						PutShortValue(&absSeg,(uint16_t)(op2.mem+4),_msw.x);
@@ -2015,7 +1913,7 @@ FFFF:000F                Top of 8086 / 88 address space*/
 						}
             break;
           case 0x6:      // CLTS
-						if(_cs->s.RPL>0)
+						if(_msw.PE && _CPL>0)
 							goto exception286priv;
 						_msw.TS=0;
             break;
@@ -2250,10 +2148,16 @@ FFFF:000F                Top of 8086 / 88 address space*/
 				break;
         
 			case 7:         // POP segment
-			case 0x17:
 			case 0x1f:
 				POP_STACK(res3.x);
-				ASSIGN_SEGMENT(&segs.r[(Pipe1 >> 3) & 3],res3.x);
+				ASSIGN_SEGMENT_DATA(&segs.r[(Pipe1 >> 3) & 3],res3.x);
+#ifdef EXT_NECV20	
+				inEI++;			// boh, NECV20 emulator lo fa...
+#endif
+				break;
+			case 0x17:
+				POP_STACK(res3.x);
+				ASSIGN_SEGMENT_STACK(&segs.r[(Pipe1 >> 3) & 3],res3.x);
 #ifdef EXT_NECV20	
 				inEI++;			// boh, NECV20 emulator lo fa...
 #endif
@@ -3236,6 +3140,8 @@ aggFlagDecW:
 #ifdef EXT_80286
 			case 0x63:        // ARPL
 				{	union SEGMENT_SELECTOR sd1,sd2;
+				if(!_msw.PE)
+					goto unknown_istr;
 				_f.Zero=0;
 				COMPUTE_RM
 						sd2.x=GetShortValue(theDs,op2.mem);		// 
@@ -3257,7 +3163,6 @@ aggFlagDecW:
 					_f.Zero=1;
 					}
 				}
-
 				break;
 #endif
 #ifdef EXT_NECV20
@@ -3326,7 +3231,7 @@ aggFlagDecW:
 #endif
         
 #if defined(EXT_80186) || defined(EXT_NECV20)
-			case 0x68:
+			case 0x68:			// PUSH imm
 				PUSH_STACK(Pipe2.x.l);
         _ip+=2;
 				break;
@@ -3444,7 +3349,7 @@ aggFlagDecW:
 
 			case 0x6c:        // INSB; NO OVERRIDE qua  https://www.felixcloutier.com/x86/ins:insb:insw:insd
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -3461,7 +3366,7 @@ aggFlagDecW:
 
 			case 0x6d:        // INSW
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -3482,7 +3387,7 @@ aggFlagDecW:
 
 			case 0x6e:        // OUTSB
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -3499,7 +3404,7 @@ aggFlagDecW:
 
 			case 0x6f:        // OUTSW
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -4094,36 +3999,49 @@ jmp_short:
 			case 0x8e:        // MOV SREG,rm16
 				{
 				struct REGISTERS_SEG *s;
-#ifdef EXT_80286
-				s= &segs.r[Pipe2.reg];		// ?? & 3? o per 386?
-#else
-				s= &segs.r[Pipe2.reg & 0x3];
-#endif
-       
 				COMPUTE_RM_OFS
 					GET_MEM_OPER
-						ASSIGN_SEGMENT(s,GetShortValue(theDs,op2.mem));
+						res3.x=GetShortValue(theDs,op2.mem);
             break;
           case 3:
     				op2.reg16= &regs.r[Pipe2.rm].x;
-            ASSIGN_SEGMENT(s,*op2.reg16);
+            res3.x=*op2.reg16;
             break;
           }
-#ifdef EXT_80286
-				// altri controlli, su null e altro..
-					if(s->s.x==0) {
-						// forse solo se usato poi...
-						}
-#endif
-        if(s == &segs.r[2]) {  // se SS...
-#ifdef EXT_80286
-					if((s->d.Access.b & 0b00001010) != 0b00000010) {/*data, writable*/
-						Exception86.descr.ud=EXCEPTION_GP;
-						goto exception286;
-						}
-#endif
-          inEI=1;
+#ifdef EXT_80386
+				switch(Pipe2.reg) {
 					}
+#else
+				switch(Pipe2.reg & 0x3) {
+					case 0:		// ES
+					case 3:		// DS
+						s=&segs.r[Pipe2.reg & 0x3];
+						ASSIGN_SEGMENT_DATA(s,res3.x);
+#ifdef EXT_80286
+				// altri controlli, su null e altro.. magari mettere in ASSIGN_SEGMENT
+						if(s->s.x==0) {
+							// forse solo se usato poi...
+							}
+#endif
+						break;
+					case 2:		// SS
+						ASSIGN_SEGMENT_STACK(_ss,res3.x);
+						// idem
+#ifdef EXT_80286
+						if(_msw.PE && (s->d.Access.b & 0b00001010) != 0b00000010) {/*data, writable*/
+							Exception86.descr.ud=EXCEPTION_GP;
+							goto exception286;
+							}
+#endif
+					  inEI=1;
+						break;
+					case 1:		// CS		?? apparentemente non c'è, v.iapx286, ma DEBUG lo compila e pure online...
+						s=&segs.r[Pipe2.reg & 0x3];
+						ASSIGN_SEGMENT_CODE(s,res3.x);
+// idem
+						break;
+					}
+#endif
 				}
         break;
         
@@ -4176,13 +4094,14 @@ jmp_short:
 				struct SEGMENT_DESCRIPTOR_GATE *sdg;
 				struct TASK_STATE_REGISTER *newtsr,*oldtsr;
 				struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
-//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-//				else
-					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-				sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
+				union SEGMENT_SELECTOR ss;
+				ss.x=Pipe2.x.h;
+				if(ss.TI)		// (dice "SICURO" in GDTR... NO! v. ldt_code.asm
+					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_LADDRESS_FROM_INDEX(ss.Index<<3);
+				else
+					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(ss.Index<<3);
+				sdg=(struct SEGMENT_DESCRIPTOR_GATE*)GET_GADDRESS_FROM_INDEX(ss.Index<<3);
 
-				// 0x1f;		// stack words da copiare
 				if(!sd->Access.System)	{	// se System
 					switch(sdg->Access.Type) {
 						case 1:		// TSS16
@@ -4193,9 +4112,9 @@ jmp_short:
 							break;
 
 						case 5:		// Task Gate (Segment / Descriptor  v. table B-11
-							sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
+							sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)GET_GADDRESS_FROM_INDEX(sd->Base);
 //							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-							if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
+							if(_CPL>sd->Access.DPL) {		// inter-level
 								}
 							else {		// intra-level
 								}
@@ -4203,7 +4122,7 @@ jmp_short:
 							newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
 
 do_tasksw_call:
-							oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
+							oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(_tss.Index<<3);
 
 							newtsr->PTSS=_tss.x;
 							memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
@@ -4228,7 +4147,7 @@ do_tasksw_call:
 							sd->Access.A=1;		// MUST be 0 before!
 							oldsd->Access.A=0;
 							_tsr=newtsr;
-							LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
+							LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(_tsr->Ldt);
 
 							_ax=newtsr->Ax;
 							_bx=newtsr->Bx;
@@ -4240,55 +4159,105 @@ do_tasksw_call:
 							_di=newtsr->Di;
 							_f.x=newtsr->Flags.x;
 							_f.NestedTask=1;
-							ASSIGN_SEGMENT(_ss,newtsr->Ss);
-							ASSIGN_SEGMENT(_cs,newtsr->Cs);
-							ASSIGN_SEGMENT(_es,newtsr->Es);
-							ASSIGN_SEGMENT(_ds,newtsr->Ds);
+							ASSIGN_SEGMENT_CODE(_cs,newtsr->Cs);
+							ASSIGN_SEGMENT_STACK(_ss,newtsr->Ss);
+							ASSIGN_SEGMENT_DATA(_es,newtsr->Es);
+							ASSIGN_SEGMENT_DATA(_ds,newtsr->Ds);
 							_ip=newtsr->EntryPoint;
 							res3.x=oldtsr->Ldt;
 							oldtsr->Ldt=newtsr->Ldt;
 							newtsr->Ldt=res3.x;
+// FORSE bisogna assegnare SS_SP_CPL qua...
+							if(_CPL<3)
+								newtsr->SS_SP_CPL[_CPL]=MAKELONG(_sp,_ss->s.x);
 
 							_msw.TS=1;
 							// v. table 8-7 per differenze tra CALL JMP IRET
 							break;
 
 						case 4:		// Call gate
-							if(_cs->s.RPL>sdg->Access.DPL ||
-								_cs->s.RPL<sdg->Access.DPL) {		// inter-level
-								if(sdg->WordCount) {
-									struct REGISTERS_SEG *_ss2;
-									res3.x=_sp;
-// dov'è??
-									_ss2=_ss;
-//									idem!!
+							if(_CPL>sdg->Access.DPL ||		//If the routine being entered is more privileged, then a new stack (both SS and SP) is loaded from
+																									// the task state segment for the new privilege level, and parameters determined by the wordcount field of the call gate are copied from the old stack to the new stack.
+						// A ME PARE CHE SI POSSA ANDARE A PRIVILEGIO SIA MINORE CHE MAGGIORE...
+								_CPL<sdg->Access.DPL) {		// inter-level
 
-
-									i=0;
-									while(sdg->WordCount--) {
-										PutShortValue(_ss,(uint16_t)(_sp+i),GetShortValue(_ss2,(uint16_t)(res3.x+i)));
-										i+=2;
-										}
-									}
+								// verificare spazio in SP destinazione
 
 								res3.x=_sp;
 								PUSH_STACK(_ss->s.x);		// 
 								PUSH_STACK(res3.x);		// 
 
+
+#if 1		// verificare...
+								if(sdg->WordCount) {
+									struct REGISTERS_SEG _ss2;
+									uint8_t oldcpl=_CPL;
+
+									_CPL=0;		// bah... se no non mi fa scrivere
+
+									// dov'è?? dice nel TSS... ma se non è stato assegnato?
+									if(_tsr) {
+										union SEGMENT_SELECTOR ss2;
+										ss2.x=HIWORD(_tsr->SS_SP_CPL[ss.RPL]);
+
+
+										ASSIGN_SEGMENT_STACK(&_ss2,ss2.x);		// NON VA perché da ring3 sto chiamando ring0 e il suo stack non posso scriverlo! v. callgate.asm
+										res2.x=LOWORD(_tsr->SS_SP_CPL[ss.RPL]);
+										}
+									else {
+
+									_ss2=*_ss;
+//									idem!!
+									res2.x=_sp;
+									}
+
+
+									i=0;
+									while(sdg->WordCount--) {
+										PutShortValue(&_ss2,(uint16_t)(_sp-i),GetShortValue(_ss,(uint16_t)(res2.x-i)));
+										i+=2;
+										_sp-=2;
+										}
+									_CPL=oldcpl;
+									}
+#endif
+
+
 								PUSH_STACK(_cs->s.x);		// 
 								PUSH_STACK((uint16_t)(_ip+4));
 
 								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 
-								ASSIGN_SEGMENT(_cs,sdg->Selector);
-//								_cs->d.Access.DPL=sdg->Access.DPL;		// STRANO... VERIFICARE
+								ASSIGN_SEGMENT_CODE(_cs,sdg->Selector);
+// 								_cs->d.Access.DPL=sdg->Access.DPL;		// STRANO... VERIFICARE
+
+ 								_CPL=sdg->Access.DPL;		// STRANO... VERIFICARE
+
+//								CMQ credo dovrebbe prendere il privilegio in qualche modo...
+
+
+
+								// NON va... verificare
+//								_CPL=sdg->Access.DPL;		// STRANO... VERIFICARE idem
+
+
 								}
 							else {		// intra-level
 								PUSH_STACK(_cs->s.x);		// 
 								PUSH_STACK((uint16_t)(_ip+4));
 								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-								ASSIGN_SEGMENT(_cs,sdg->Selector);
+								ASSIGN_SEGMENT_CODE(_cs,sdg->Selector);
 //								_cs->d.Access.DPL=sdg->Access.DPL;		// STRANO... VERIFICARE
+
+
+ 								_CPL=sdg->Access.DPL;		// STRANO... VERIFICARE
+
+//								_CPL=sdg->Access.DPL;		// STRANO... VERIFICARE idem
+								// NON VAN più idem
+
+
+
+
 								}
 							break;
 
@@ -4300,23 +4269,30 @@ do_tasksw_call:
 						}
 					}
 				else {
+					if(_CPL != ss.RPL)
+// NO! usare DPL
+
+
+
+
+						goto exception286priv;
 					PUSH_STACK(_cs->s.x);		// 
 					PUSH_STACK((uint16_t)(_ip+4));
 					_ip=Pipe2.x.l;
-					ASSIGN_SEGMENT(_cs,Pipe2.x.h);
+					ASSIGN_SEGMENT_CODE(_cs,Pipe2.x.h);
 					}
 				}
 			else {
 				PUSH_STACK(_cs->s.x);		// 
 				PUSH_STACK((uint16_t)(_ip+4));
 				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
+				ASSIGN_SEGMENT_CODE(_cs,Pipe2.x.h);
 				}
 #else
 				PUSH_STACK(_cs->s.x);		// 
 				PUSH_STACK((uint16_t)(_ip+4));
 				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
+				ASSIGN_SEGMENT_CODE(_cs,Pipe2.x.h);
 #endif
 				break;
 
@@ -4341,7 +4317,7 @@ do_tasksw_call:
           _f.x = (_f.x & (ID_IOPL | ID_IF)) | (res3.x & ~(ID_IOPL | ID_IF));
           if(_f.IOPL==0)
             _f.x = (_f.x & ~ID_IOPL) | (res3.x & ID_IOPL);
-          if(_cs->s.RPL<=_f.IOPL)
+          if(_CPL<=_f.IOPL)
             _f.x = (_f.x & ~ID_IF) | (res3.x & ID_IF);
 					}
         else
@@ -4705,10 +4681,10 @@ fix_flags:
 						*op1.reg16=GetShortValue(theDs,op2.mem);
 						op2.mem+=2;
 						if(Pipe1 & 1) {
-							ASSIGN_SEGMENT(_ds,GetShortValue(theDs,op2.mem));
+							ASSIGN_SEGMENT_DATA(_ds,GetShortValue(theDs,op2.mem));
 							}
 						else {
-							ASSIGN_SEGMENT(_es,GetShortValue(theDs,op2.mem));
+							ASSIGN_SEGMENT_DATA(_es,GetShortValue(theDs,op2.mem));
 							}
             break;
           case 3:		// 
@@ -4777,8 +4753,10 @@ fix_flags:
         
 #if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, così dicono..
 			case 0xc8:
+			case 0xc9:
 #endif
 			case 0xca:      // RETF
+			case 0xcb:
 
 #ifdef EXT_80286
 				if(_msw.PE /*&& _f.IOPL      >   0/* IOPL tas klevel*/) {
@@ -4788,30 +4766,34 @@ fix_flags:
 					POP_STACK(_ip);
 					POP_STACK(res3.x);
 
-//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-//				else
-					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
+					if(!(Pipe1 & 1))	{		// 0xCA
+						_sp+=Pipe2.x.l;
+						}
 
-					sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
+					if(res3.x & 4 /*ss.TI*/)		// (dice "SICURO" in GDTR... NO! v. ldt_code.asm
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_LADDRESS_FROM_INDEX(res3.x & 0xfff8);
+					else
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(res3.x & 0xfff8);
 
-					if(sd->Access.DPL>_cs->s.RPL 
-						|| sd->Access.DPL<_cs->s.RPL) {		// inter-level
+					sdg=(struct SEGMENT_DESCRIPTOR_GATE*)GET_GADDRESS_FROM_INDEX(res3.x & 0xfff8);
+
+					if(/*sd->Access.DPL>_CPL*/			// Returns to a lesser. privilege level cause the stack to be reloaded from the value saved beyond the parameter block.
+						// A ME PARE CHE SI POSSA ANDARE A PRIVILEGIO SIA MINORE CHE MAGGIORE...boh
+						/*||*/ sd->Access.DPL<_CPL) {		// inter-level
 
 //						res2.x=_sp;
 						POP_STACK(res1.x);
 //							_sp=res2.x;
 						POP_STACK(res2.x);
-						ASSIGN_SEGMENT(_ss,res2.x);
+						ASSIGN_SEGMENT_STACK(_ss,res2.x);
 						_sp=res1.x;
 
-						ASSIGN_SEGMENT(_cs,res3.x);
+						ASSIGN_SEGMENT_CODE(_cs,res3.x);
 
 //???			        _sp+=Pipe2.x.l;
 						}
 					else {		// intra-level
-						ASSIGN_SEGMENT(_cs,res3.x);
-			      _sp+=Pipe2.x.l;
+						ASSIGN_SEGMENT_CODE(_cs,res3.x);
 						}
 
 					}		// PE
@@ -4819,23 +4801,20 @@ fix_flags:
 #endif
 					POP_STACK(_ip);
 					POP_STACK(res3.x);
-					ASSIGN_SEGMENT(_cs,res3.x);
-	        _sp+=Pipe2.x.l;
+					ASSIGN_SEGMENT_CODE(_cs,res3.x);
+
+
+// VERIFICARE PRIViLEGI ANCHE QUA??
+
+
+					if(!(Pipe1 & 1))	{		// 0xCA
+						_sp+=Pipe2.x.l;
+						}
 #ifdef EXT_80286
 					}
 #endif
         break;
         
-#if !defined(EXT_80186) && !defined(EXT_NECV20)     // bah, così dicono..
-			case 0xc9:
-#endif
-			case 0xcb:
-Return32:
-				POP_STACK(_ip);
-				POP_STACK(res3.x);
-				ASSIGN_SEGMENT(_cs,res3.x);
-				break;
-
 			case 0xcc:
 				IntIRQNum.Vector=3 /*INT3*/ ;
 #ifdef EXT_80286
@@ -4897,33 +4876,25 @@ do_irq:
         THEN #SS; FI;*/
 		        if(IntIRQNum.Vector < (IDTR.Limit/8)) {
 
-		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-		//				else
-							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+IntIRQNum.Vector];
-							sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((IntIRQNum.Vector *8))];
-
-			//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-			//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-			//				else
-//								sd=(struct SEGMENT_DESCRIPTOR*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
+							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+IntIRQNum.Vector*8];
+							sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)sd;
 
 //							sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
 
 							switch(sdi->Access.Type) {
 								struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
 								case 5:		// Task Gate (Segment / Descriptor   v. table B-11
-									tss=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+MAKELONG(sd->Base,0/*sd->BaseH*/)];
-									oldsdg=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+tss->PTSS];
-
-									sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
+									if(sd->Base & 4)		// NON dev'essere LDT
+										goto exception286;
+									sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)GET_GADDRESS_FROM_INDEX(sd->Base & 0xfff8);
 		//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-									if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
+									if(_CPL>sd->Access.DPL) {		// inter-level
 										}
 									else {		// intra-level
 										}
+
 									newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-									oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
+									oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(_tss.Index<<3);
 
 									newtsr->PTSS=_tss.x;
 									memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
@@ -4943,12 +4914,12 @@ do_irq:
 									oldtsr->Ds=_ds->s.x;
 									oldtsr->Ss=_ss->s.x;
 									oldtsr->Cs=_cs->s.x;
-									oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
+									oldtsr->EntryPoint=_ip;			// istruzione seguente questa!
 
 									sd->Access.A=1;		// MUST be 0 before!
 									oldsd->Access.A=0;
 									_tsr=newtsr;
-									LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
+									LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(_tsr->Ldt);
 									_ax=newtsr->Ax;
 									_bx=newtsr->Bx;
 									_cx=newtsr->Cx;
@@ -4959,14 +4930,17 @@ do_irq:
 									_di=newtsr->Di;
 									_f.x=newtsr->Flags.x;
 									_f.NestedTask=1;
-									ASSIGN_SEGMENT(_ss,newtsr->Ss);
-									ASSIGN_SEGMENT(_cs,newtsr->Cs);
-									ASSIGN_SEGMENT(_es,newtsr->Es);
-									ASSIGN_SEGMENT(_ds,newtsr->Ds);
+									ASSIGN_SEGMENT_CODE(_cs,newtsr->Cs);
+									ASSIGN_SEGMENT_STACK(_ss,newtsr->Ss);
+									ASSIGN_SEGMENT_DATA(_es,newtsr->Es);
+									ASSIGN_SEGMENT_DATA(_ds,newtsr->Ds);
 									_ip=newtsr->EntryPoint;
 									res3.x=oldtsr->Ldt;
 									oldtsr->Ldt=newtsr->Ldt;
 									newtsr->Ldt=res3.x;
+// FORSE bisogna assegnare SS_SP_CPL qua...
+									if(_CPL<3)
+										newtsr->SS_SP_CPL[_CPL]=MAKELONG(_sp,_ss->s.x);
 
 									_msw.TS=1;
 									// v. table 8-7 per differenze tra CALL JMP IRET
@@ -4978,10 +4952,29 @@ do_irq:
 									// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
 								case 7:		// Trap gate
 									_f.NestedTask=0;
-									if(_cs->s.RPL> sdi->Access.DPL ||
-										_cs->s.RPL< sdi->Access.DPL) {		// inter-level		FINIRE!
-
-//finire
+									if(_CPL==sdi->Access.DPL) {		// intra-level		, verificare Conforming
+										PUSH_STACK(_cs->s.x);		// 
+  /*- all interrupts except the internal CPU exceptions push the
+	flags and the CS:IP of the next instruction onto the stack.
+	CPU exception interrupts are similar but push the CS:IP of the
+	causal instruction.	8086/88 divide exceptions are different,
+	they return to the instruction following the division*/
+										if(!IntIRQNum.Type) { 		// se eccezione
+											if(IntIRQNum.Vector==1 || IntIRQNum.Vector==3 || IntIRQNum.Vector==4) {
+												PUSH_STACK(_ip);		// (succ.
+												}
+											else {
+												PUSH_STACK(oldIp);		// (servirebbe ip PRIMA dell'istruzione...
+												}
+											}
+										else {
+											PUSH_STACK(_ip);
+											}
+										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
+										ASSIGN_SEGMENT_CODE(_cs,sdi->Selector);
+//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+										}
+									else if(sdi->Access.DPL<_CPL) {		// inter-level
 										res3.x=_sp;
 										PUSH_STACK(_ss->s.x);		// 
 										PUSH_STACK(res3.x);		// 
@@ -5004,34 +4997,21 @@ do_irq:
 											PUSH_STACK(_ip);
 											}
 
+
+										// DICE CHE SS e SP vanno presi dal TSS!!!??
+
 										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-										ASSIGN_SEGMENT(_cs,sdi->Selector);
+
+
+
+//Selector's RPL must equal DPL of code segment else #TS (SS selector+EXT)
+//Stack segment DPL must equal DPL of code segment else #TS (SS selector+ EXT)
+
+										ASSIGN_SEGMENT_CODE(_cs,sdi->Selector);
 //										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
-
-//										_f.IOPL=_cs->s.RPL /*sdi->Access.DPL*/;
-
 										}
-									else {		// intra-level
-										PUSH_STACK(_cs->s.x);		// 
-  /*- all interrupts except the internal CPU exceptions push the
-	flags and the CS:IP of the next instruction onto the stack.
-	CPU exception interrupts are similar but push the CS:IP of the
-	causal instruction.	8086/88 divide exceptions are different,
-	they return to the instruction following the division*/
-										if(!IntIRQNum.Type) { 		// se eccezione
-											if(IntIRQNum.Vector==1 || IntIRQNum.Vector==3 || IntIRQNum.Vector==4) {
-												PUSH_STACK(_ip);		// (succ.
-												}
-											else {
-												PUSH_STACK(oldIp);		// (servirebbe ip PRIMA dell'istruzione...
-												}
-											}
-										else {
-											PUSH_STACK(_ip);
-											}
-										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-										ASSIGN_SEGMENT(_cs,sdi->Selector);
-//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+									else {
+										goto exception286priv;
 										}
 
 									if(!IntIRQNum.Type && Exception86.descr.hascode) 		// se eccezione e con codice
@@ -5068,7 +5048,7 @@ do_irq:
 	
 							_f.IF=0;
 							_ip=GetShortValue(&absSeg,(uint16_t)(IntIRQNum.Vector *4));
-							ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((IntIRQNum.Vector *4) +2)));
+							ASSIGN_SEGMENT_CODE(_cs,GetShortValue(&absSeg,(uint16_t)((IntIRQNum.Vector *4) +2)));
 							}
 						}
 						
@@ -5086,7 +5066,7 @@ do_irq:
           _f.IF=0;
 						// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
           _ip=GetShortValue(&absSeg,(uint16_t)(IntIRQNum.Vector *4));
-					ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((IntIRQNum.Vector *4) +2)));
+					ASSIGN_SEGMENT_CODE(_cs,GetShortValue(&absSeg,(uint16_t)((IntIRQNum.Vector *4) +2)));
         }
       else {
 //          _f.Trap=1;
@@ -5111,19 +5091,19 @@ do_irq:
 					struct SEGMENT_DESCRIPTOR_TASK_GATE *sd,*oldsd;
 					struct SEGMENT_DESCRIPTOR_GATE *sdg;
 					struct TASK_STATE_REGISTER *oldtsr,*newtsr;
-					struct REGISTERS_SEG *seg;
+					union SEGMENT_SELECTOR seg;
 					union REGISTRO_F _f1;			// mi serve qua per privilegi in Protected...
 					
 					if(_f.NestedTask) {
 						struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
 //						struct SEGMENT_DESCRIPTOR_TSS *sdt;
 
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tsr->PTSS & 0xfff8)];
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(_tsr->PTSS & 0xfff8);
 						// usarne solo 1 ovviamente :)
-						sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tsr->PTSS & 0xfff8)];
+						sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)sd;
 //						sdt=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tsr->PTSS & 0xfff8)];
-						oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index << 3)];
-						if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
+						oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(_tss.Index << 3);
+						if(_CPL>sd->Access.DPL) {		// inter-level
 							}
 						else {		// intra-level
 							}
@@ -5134,7 +5114,7 @@ do_irq:
 //						newtsr->PTSS=_tss.x;
 //						_tss.x=oldtsr->PTSS;
 // FARE??							
-						memcpy(&_tss,&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(oldtsr->PTSS & 0xfff8)],sizeof(union SEGMENT_SELECTOR));
+						memcpy(&_tss,GET_GADDRESS_FROM_INDEX(oldtsr->PTSS & 0xfff8),sizeof(union SEGMENT_SELECTOR));
 
 						oldtsr->Ax=_ax;
 						oldtsr->Bx=_bx;
@@ -5153,7 +5133,7 @@ do_irq:
 						sd->Access.A=1;		// MUST be 0 before!
 						oldsd->Access.A=0;
 						_tsr=newtsr;
-						LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+newtsr->Ldt]);
+						LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(newtsr->Ldt);
 						_ax=newtsr->Ax;
 						_bx=newtsr->Bx;
 						_cx=newtsr->Cx;
@@ -5163,10 +5143,10 @@ do_irq:
 						_si=newtsr->Si;
 						_di=newtsr->Di;
 						_f.x=newtsr->Flags.x;
-						ASSIGN_SEGMENT(_ss,newtsr->Ss);
-						ASSIGN_SEGMENT(_cs,newtsr->Cs);
-						ASSIGN_SEGMENT(_es,newtsr->Es);
-						ASSIGN_SEGMENT(_ds,newtsr->Ds);
+						ASSIGN_SEGMENT_CODE(_cs,newtsr->Cs);
+						ASSIGN_SEGMENT_STACK(_ss,newtsr->Ss);
+						ASSIGN_SEGMENT_DATA(_es,newtsr->Es);
+						ASSIGN_SEGMENT_DATA(_ds,newtsr->Ds);
 						res3.x=newtsr->EntryPoint;
 						oldtsr->EntryPoint=_ip;			// istruzione seguente questa! ossia dove torneremo al prossimo giro
 						_ip=res3.x;
@@ -5178,81 +5158,57 @@ do_irq:
 
 						_msw.TS=1;
 						// v. table 8-7 per differenze tra CALL JMP IRET
-
-
-//METTERE								_f.IOPL=sd->Access.DPL;
-
-
 						}
 					else {
-
 						POP_STACK(_ip);
-						POP_STACK(res3.x);
+						POP_STACK(seg.x);
 						POP_STACK(_f1.x);
 
-	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
+						if(seg.TI)		// (dice "SICURO" in GDTR... NO! v. ldt_code.asm
+							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_LADDRESS_FROM_INDEX(seg.Index << 3);
+						else
+							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(seg.Index << 3);
+						sdg=(struct SEGMENT_DESCRIPTOR_GATE*)sd;
 
-						sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+res3.x];
-
-						seg=(struct REGISTERS_SEG*)&res3.x;
-
-						if(/*_f1.IOPL*/ seg->s.RPL>_cs->s.RPL) {		// inter-level  FINIRE!
-
-	//						res2.x=_sp;
-							POP_STACK(res1.x);
-	//							_sp=res2.x;
-							POP_STACK(res2.x);
-							ASSIGN_SEGMENT(_ss,res2.x);
-							_sp=res1.x;
-
-							ASSIGN_SEGMENT(_cs,res3.x);
-
-
-							/*    IF CPL = IOPL
-            THEN EFLAGS(IF) := tempEFLAGS; FI;
-    IF CPL = 0
-            THEN
-                        EFLAGS(IOPL) := tempEFLAGS;
-                        IF OperandSize = 32 or OperandSize = 64
-                                THEN EFLAGS(VIF, VIP) := tempEFLAGS; FI;
-    FI;*/
-					// SOLO SE alterano flag I !! fare
-	//					goto exception286priv;
-
-//							_f.IOPL=seg->s.RPL /*_f1.IOPL*/ /*sdg->Access.DPL*/;
-
-							}
-						else if(/*_f1.IOPL*/ seg->s.RPL<_cs->s.RPL) {		// inter-level
-
-	//						res2.x=_sp;
-							POP_STACK(res1.x);
-	//							_sp=res2.x;
-							POP_STACK(res2.x);
-							ASSIGN_SEGMENT(_ss,res2.x);
-							_sp=res1.x;
-
-							ASSIGN_SEGMENT(_cs,res3.x);
-
-							/*    IF CPL = IOPL
-            THEN EFLAGS(IF) := tempEFLAGS; FI;
-    IF CPL = 0
-            THEN
-                        EFLAGS(IOPL) := tempEFLAGS;
-                        IF OperandSize = 32 or OperandSize = 64
-                                THEN EFLAGS(VIF, VIP) := tempEFLAGS; FI;
-    FI;*/
-					// SOLO SE alterano flag I !! fare
-	//					goto exception286priv;
-
-//							_f.IOPL=seg->s.RPL /*_f1.IOPL*/ /*sdg->Access.DPL*/;
-
-							}
-						else {		// intra-level
-							ASSIGN_SEGMENT(_cs,res3.x);
+						if(seg.RPL==_CPL) {		// intra-level
+							ASSIGN_SEGMENT_CODE(_cs,seg.x);
+							if(sdg->Access.DPL>_CPL) {			// e Conforming?
+								goto exception286priv;
+								}
 							_f.x=_f1.x;
+							}
+						else {		// inter-level  (verificare la cosa del Conforming...
+	//						res2.x=_sp;
+							POP_STACK(res1.x);
+	//							_sp=res2.x;
+							POP_STACK(res2.x);
+							if(sdg->Access.DPL<=_CPL) {			// e Conforming?
+								goto exception286priv;
+								}
+							ASSIGN_SEGMENT_STACK(_ss,res2.x);
+							if(seg.RPL != _ss->s.RPL) {			// e Conforming?
+								goto exception286priv;
+								}
+							_sp=res1.x;
+
+							ASSIGN_SEGMENT_CODE(_cs,seg.x);
+							if(_ss->d.Access.DPL != _CPL) {			// 
+								goto exception286priv;
+								}
+
+
+							/*    IF CPL = IOPL
+            THEN EFLAGS(IF) := tempEFLAGS; FI;
+    IF CPL = 0
+            THEN
+                        EFLAGS(IOPL) := tempEFLAGS;
+                        IF OperandSize = 32 or OperandSize = 64
+                                THEN EFLAGS(VIF, VIP) := tempEFLAGS; FI;
+    FI;*/
+					// SOLO SE alterano flag I !! fare
+	//					goto exception286priv;
+							_f.x=_f1.x;
+
 							}
 
 						}
@@ -5263,7 +5219,7 @@ do_irq:
 				else {
 					POP_STACK(_ip);
 					POP_STACK(res3.x);
-					ASSIGN_SEGMENT(_cs,res3.x);
+					ASSIGN_SEGMENT_CODE(_cs,res3.x);
 					POP_STACK(_f.x);
 					}
 #else
@@ -5276,7 +5232,7 @@ do_irq:
 #endif
 				POP_STACK(_ip);
 				POP_STACK(res3.x);
-				ASSIGN_SEGMENT(_cs,res3.x);
+				ASSIGN_SEGMENT_CODE(_cs,res3.x);
 				POP_STACK(_f.x);
 #endif
 
@@ -5744,7 +5700,7 @@ res3.x=_ax;
 			Exception86.descr.ud=EXCEPTION_NOMATH;
 
 
-//#pragma message			qua niente push parm !!
+#warning qua niente push parm !!
 
 			Exception86.parm=Pipe1;
 
@@ -5791,7 +5747,7 @@ res3.x=_ax;
 
 			case 0xe4:        // INB
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -5801,7 +5757,7 @@ res3.x=_ax;
 
 			case 0xe5:        // INW
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -5811,7 +5767,7 @@ res3.x=_ax;
 
 			case 0xe6:      // OUTB
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -5821,7 +5777,7 @@ res3.x=_ax;
 
 			case 0xe7:      // OUTW
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -5857,11 +5813,16 @@ memcpy(((uint8_t*)_cs)+2,&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h],size
 				struct SEGMENT_DESCRIPTOR_GATE *sdg;
 				struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
 				struct TASK_STATE_REGISTER *newtsr,*oldtsr;
+				union SEGMENT_SELECTOR ss;
+				ss.x=Pipe2.x.h;
 //				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 //					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 //				else
-					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
-				sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h];
+				if(ss.TI)		// (dice "SICURO" in GDTR... NO! v. ldt_code.asm
+					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_LADDRESS_FROM_INDEX(ss.Index << 3);
+				else
+					sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(ss.Index<<3);
+				sdg=(struct SEGMENT_DESCRIPTOR_GATE*)GET_GADDRESS_FROM_INDEX(ss.Index<<3);
 
 //				WordCount & 0x1f;		// stack words da copiare
 				if(!sd->Access.System)	{	// se System
@@ -5873,18 +5834,18 @@ memcpy(((uint8_t*)_cs)+2,&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+Pipe2.x.h],size
 							// e forse fa anche meno controlli...
 							break;
 						case 5:		// Task Gate (Segment / Descriptor   v. table B-11
-							sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
+							sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)GET_GADDRESS_FROM_INDEX(sd->Base);
 //							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
 							// usarne solo 1 ovviamente!
 //							sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-							if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
+							if(_CPL>sd->Access.DPL) {		// inter-level
 								}
 							else {		// intra-level
 								}
 							newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
 
 do_tasksw_jmp:
-							oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
+							oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(_tss.Index<<3);
 
 //no! qua							newtsr->PTSS=_tss.x;
 							memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
@@ -5910,7 +5871,7 @@ do_tasksw_jmp:
 							oldsd->Access.A=0;
 
 							_tsr=newtsr;
-							LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
+							LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(_tsr->Ldt);
 
 							_ax=newtsr->Ax;
 							_bx=newtsr->Bx;
@@ -5922,57 +5883,76 @@ do_tasksw_jmp:
 							_di=newtsr->Di;
 							_f.x=newtsr->Flags.x;
 							_f.NestedTask=1;
-							ASSIGN_SEGMENT(_ss,newtsr->Ss);
-							ASSIGN_SEGMENT(_cs,newtsr->Cs);
-							ASSIGN_SEGMENT(_es,newtsr->Es);
-							ASSIGN_SEGMENT(_ds,newtsr->Ds);
+							ASSIGN_SEGMENT_CODE(_cs,newtsr->Cs);
+							ASSIGN_SEGMENT_STACK(_ss,newtsr->Ss);
+							ASSIGN_SEGMENT_DATA(_es,newtsr->Es);
+							ASSIGN_SEGMENT_DATA(_ds,newtsr->Ds);
 							_ip=newtsr->EntryPoint;
 
 							res3.x=oldtsr->Ldt;
 							oldtsr->Ldt=newtsr->Ldt;
 							newtsr->Ldt=res3.x;
+// FORSE bisogna assegnare SS_SP_CPL qua...
+							if(_CPL<3)
+								newtsr->SS_SP_CPL[_CPL]=MAKELONG(_sp,_ss->s.x);
 
 							_msw.TS=1;
 							// v. table 8-7 per differenze tra CALL JMP IRET
 
 
-//METTERE								_f.IOPL=sd->Access.DPL;
-
 							break;
 
 						case 4:		// Call gate
-							if(_cs->s.RPL>sd->Access.DPL ||
-								_cs->s.RPL<sd->Access.DPL) {		// inter-level
+// NON è CHIARO come un JMP usa la call gate... salvare indirizzo di partenza qua?? e quindi word count???
 
-								if(sdg->WordCount) {
-									struct REGISTERS_SEG *_ss2;
-									res3.x=_sp;
-// dov'è??
-									_ss2=_ss;
-//									idem!!
-
-
-									i=0;
-									while(sdg->WordCount--) {
-										PutShortValue(_ss,(uint16_t)(_sp+i),GetShortValue(_ss2,(uint16_t)(res3.x+i)));
-										i+=2;
-										}
-									}
-
+							if(_CPL>sd->Access.DPL ||
+								_CPL<sd->Access.DPL) {		// inter-level
 
 								res3.x=_sp;
 								PUSH_STACK(_ss->s.x);		// 
 								PUSH_STACK(res3.x);		// 
+								// verificare spazio in SP destinazione
+
+								if(sdg->WordCount) {
+									struct REGISTERS_SEG _ss2;
+									uint8_t oldcpl=_CPL;
+
+									_CPL=0;		// bah... se no non mi fa scrivere
+
+									// dov'è?? dice nel TSS... ma se non è stato assegnato?
+									if(_tsr) {
+										union SEGMENT_SELECTOR ss2;
+										ss2.x=HIWORD(_tsr->SS_SP_CPL[ss.RPL]);
+
+
+										ASSIGN_SEGMENT_STACK(&_ss2,ss2.x);		// NON VA perché da ring3 sto chiamando ring0 e il suo stack non posso scriverlo! v. callgate.asm
+										res2.x=LOWORD(_tsr->SS_SP_CPL[ss.RPL]);
+										}
+									else {
+
+									_ss2=*_ss;
+//									idem!!
+									res2.x=_sp;
+									}
+
+
+									i=0;
+									while(sdg->WordCount--) {
+										PutShortValue(&_ss2,(uint16_t)(_sp-i),GetShortValue(_ss,(uint16_t)(res2.x-i)));
+										i+=2;
+										_sp-=2;
+										}
+									_CPL=oldcpl;
+									}
 
 								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 
-//								_f.IOPL=sd->Access.DPL;
-
+								_CPL=sdg->Access.DPL;		// STRANO... VERIFICARE idem
 
 								}
 							else {		// intra-level
 								_ip=sdg->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-								ASSIGN_SEGMENT(_cs,sdg->Selector);
+								ASSIGN_SEGMENT_CODE(_cs,sdg->Selector);
 								}
 							break;
 
@@ -5985,19 +5965,21 @@ do_tasksw_jmp:
 						}
 					}
 				else {
-					_ip=Pipe2.x.l;
-					ASSIGN_SEGMENT(_cs,Pipe2.x.h);
-
+					if(_cs->s.x < 0x1000) {/*PATCH  LMSW   sistemare*/ 
+					if(_CPL != ss.RPL)
+						goto exception286priv;
 					}
-
+					_ip=Pipe2.x.l;
+					ASSIGN_SEGMENT_CODE(_cs,Pipe2.x.h);
+					}
 				}
 			else {
 				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
+				ASSIGN_SEGMENT_CODE(_cs,Pipe2.x.h);
 				}
 #else
 				_ip=Pipe2.x.l;
-				ASSIGN_SEGMENT(_cs,Pipe2.x.h);
+				ASSIGN_SEGMENT_CODE(_cs,Pipe2.x.h);
 #endif
 
 
@@ -6033,7 +6015,7 @@ do_tasksw_jmp:
 
 			case 0xf0:				// LOCK (prefisso...
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 					goto exception286priv;
 					}
 #endif
@@ -6088,12 +6070,11 @@ Trap:
 
 			case 0xf4:				// HLT
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL /*_f.IOPL direi*/>0) {
+				if(_msw.PE && _CPL /*_f.IOPL direi*/>0) {
 					goto exception286priv;
 					}
 #endif
 			  CPUPins |= DoHalt;
-				debug=0;		// beh se no riempie il log di roba
 				break;
 
 			case 0xf5:				// CMC
@@ -6545,7 +6526,7 @@ divide0:
         
 			case 0xfa:        // CLI
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 
 					goto exception286priv;
 					}
@@ -6555,7 +6536,7 @@ divide0:
 
 			case 0xfb:        // STI
 #if defined(EXT_80286)
-				if(_msw.PE && _cs->s.RPL>_f.IOPL) {
+				if(_msw.PE && _CPL>_f.IOPL) {
 
 exception286priv:
 					Exception86.descr.ud=EXCEPTION_GP;
@@ -6634,14 +6615,14 @@ aggFlagDecB:
 									PUSH_STACK(_cs->s.x);		// 
 									PUSH_STACK(_ip);
 									_ip=res1.x;
-									ASSIGN_SEGMENT(_cs,GetShortValue(theDs,(uint16_t)(op2.mem+2)));
+									ASSIGN_SEGMENT_CODE(_cs,GetShortValue(theDs,(uint16_t)(op2.mem+2)));
 									break;
 								case 4:       // JMP DWORD PTR jmp [100]
 									_ip=res1.x;
 									break;
 								case 5:       // JMP FAR DWORD PTR
 									_ip=res1.x;
-									ASSIGN_SEGMENT(_cs,GetShortValue(theDs,(uint16_t)(op2.mem+2)));
+									ASSIGN_SEGMENT_CODE(_cs,GetShortValue(theDs,(uint16_t)(op2.mem+2)));
 
 									/*{
 												spoolFile=_lcreat("ibmbioetc.bin",0);
@@ -6707,14 +6688,14 @@ _lclose(spoolFile);
 									PUSH_STACK(_cs->s.x);		// 
 									PUSH_STACK((_ip   /*+2*/));
 									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-									ASSIGN_SEGMENT(_cs,(*op2.reg16+2));
+									ASSIGN_SEGMENT_CODE(_cs,(*op2.reg16+2));
 									break;
 								case 4:       // JMP DWORD PTR jmp [100]
 									_ip=res1.x;
 									break;
 								case 5:       // JMP FAR DWORD PTR
 									_ip=res1.x;			// VERIFICARE COME SI FA! o forse non c'è
-									ASSIGN_SEGMENT(_cs,(*op2.reg16+2));
+									ASSIGN_SEGMENT_CODE(_cs,(*op2.reg16+2));
 									break;
 								case 6:       // PUSH 
 #if defined(UNDOCUMENTED_8086) || defined(EXT_NECV20)		// in effetti è undocumented pure per V20 e credo anche 286...
@@ -6737,9 +6718,12 @@ _lclose(spoolFile);
 				break;
         
 			default:
-        
+				{
+
 unknown_istr:
-        
+          ;
+				}
+
 #if defined(EXT_80286)
 exception286UD:
 				Exception86.descr.ud=EXCEPTION_UD;
@@ -6767,11 +6751,16 @@ exception286ext:
 					_sp=0;		// pulisco stack exception
 					goto skip_exception;
 
+
 					}
 
 //		if(Exception86.active) 
 				{
 			Exception86.active=0;
+
+
+//			debug=1;
+
 
 			}
 
@@ -6865,27 +6854,22 @@ skip_exception:
 	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(uint16_t)(2*8/*i8259ICW[0] & 4 ? 4 : 8 USARE */)];
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX((uint16_t)(2*8/*i8259ICW[0] & 4 ? 4 : 8 USARE */));
 						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)(2*8/*i8259ICW[0] & 4 ? 4 : 8 USARE */)];
-
-		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-		//				else
-//								sd=(struct SEGMENT_DESCRIPTOR*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
 
 //							sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
 
 						switch(sdi->Access.Type) {
 							struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
 							case 5:		// Task Gate (Segment / Descriptor   v. table B-11
-								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
+								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)GET_GADDRESS_FROM_INDEX(sd->Base);
 	//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-								if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
+								if(_CPL>sd->Access.DPL) {		// inter-level
 									}
 								else {		// intra-level
 									}
 								newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
+								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(_tss.Index<<3);
 
 								newtsr->PTSS=_tss.x;
 								memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
@@ -6905,12 +6889,12 @@ skip_exception:
 								oldtsr->Ds=_ds->s.x;
 								oldtsr->Ss=_ss->s.x;
 								oldtsr->Cs=_cs->s.x;
-								oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
+								oldtsr->EntryPoint=_ip;			// istruzione seguente questa!
 
 								sd->Access.A=1;		// MUST be 0 before!
 								oldsd->Access.A=0;
 								_tsr=newtsr;
-								LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
+								LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(_tsr->Ldt);
 								_ax=newtsr->Ax;
 								_bx=newtsr->Bx;
 								_cx=newtsr->Cx;
@@ -6921,31 +6905,40 @@ skip_exception:
 								_di=newtsr->Di;
 								_f.x=newtsr->Flags.x;
 								_f.NestedTask=1;
-								ASSIGN_SEGMENT(_ss,newtsr->Ss);
-								ASSIGN_SEGMENT(_cs,newtsr->Cs);
-								ASSIGN_SEGMENT(_es,newtsr->Es);
-								ASSIGN_SEGMENT(_ds,newtsr->Ds);
+								ASSIGN_SEGMENT_CODE(_cs,newtsr->Cs);
+								ASSIGN_SEGMENT_STACK(_ss,newtsr->Ss);
+								ASSIGN_SEGMENT_DATA(_es,newtsr->Es);
+								ASSIGN_SEGMENT_DATA(_ds,newtsr->Ds);
 								_ip=newtsr->EntryPoint;
 								res3.x=oldtsr->Ldt;
 								oldtsr->Ldt=newtsr->Ldt;
 								newtsr->Ldt=res3.x;
 
+// FORSE bisogna assegnare SS_SP_CPL qua...
+								if(_CPL<3)
+									newtsr->SS_SP_CPL[_CPL]=MAKELONG(_sp,_ss->s.x);
+
 								_msw.TS=1;
 								// v. table 8-7 per differenze tra CALL JMP IRET
-
-// METTERE										_f.IOPL=sd->Access.DPL;
 
 								break;
 
 							case 6:		// Interrupt gate
-								_f.IF=0;
-								// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
-							case 7:		// Trap gate
 								_f.NestedTask=0;
-								if(_cs->s.RPL>/*_cs->s.RPL*/ sdi->Access.DPL ||
-									_cs->s.RPL</*_cs->s.RPL*/ sdi->Access.DPL) {		// inter-level		FINIRE!
-
-//finire
+								if(_CPL==sdi->Access.DPL) {		// intra-level		, verificare Conforming
+									PUSH_STACK(_f.x);
+									PUSH_STACK(_cs->s.x);		// 
+/*- all interrupts except the internal CPU exceptions push the
+flags and the CS:IP of the next instruction onto the stack.
+CPU exception interrupts are similar but push the CS:IP of the
+causal instruction.	8086/88 divide exceptions are different,
+they return to the instruction following the division*/
+									PUSH_STACK(_ip);
+									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
+									ASSIGN_SEGMENT_CODE(_cs,sdi->Selector);
+//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+									}
+								else if(sdi->Access.DPL<_CPL) {		// inter-level
 									res3.x=_sp;
 									PUSH_STACK(_ss->s.x);		// 
 									PUSH_STACK(res3.x);		// 
@@ -6958,29 +6951,26 @@ causal instruction.	8086/88 divide exceptions are different,
 they return to the instruction following the division*/
 									PUSH_STACK(_ip);
 
-									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-									ASSIGN_SEGMENT(_cs,sdi->Selector);
-//									_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+										// DICE CHE SS e SP vanno presi dal TSS!!!??
 
-//									_f.IOPL=_cs->s.RPL /*sdi->Access.DPL*/;
+										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 
+
+
+//Selector's RPL must equal DPL of code segment else #TS (SS selector+EXT)
+//Stack segment DPL must equal DPL of code segment else #TS (SS selector+ EXT)
+
+
+									ASSIGN_SEGMENT_CODE(_cs,sdi->Selector);
 									}
-								else {		// intra-level
-									PUSH_STACK(_cs->s.x);		// 
-/*- all interrupts except the internal CPU exceptions push the
-flags and the CS:IP of the next instruction onto the stack.
-CPU exception interrupts are similar but push the CS:IP of the
-causal instruction.	8086/88 divide exceptions are different,
-they return to the instruction following the division*/
-									PUSH_STACK(_ip);
-									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-									ASSIGN_SEGMENT(_cs,sdi->Selector);
-//									_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+								else {
+									goto exception286priv;
 									}
-
+								_f.IF=0;
 								break;
 
 							case 4:		// Call gate
+							case 7:		// Trap gate NON dovrebbe esserci qua!
 							default:
 								goto exception286;
 								break;
@@ -7007,7 +6997,7 @@ they return to the instruction following the division*/
 
 					_f.IF=0;
 					_ip=GetShortValue(&absSeg,(uint16_t)(2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */));
-					ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */) +2)));
+					ASSIGN_SEGMENT_CODE(_cs,GetShortValue(&absSeg,(uint16_t)((2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */) +2)));
 						
 #else
 
@@ -7015,7 +7005,7 @@ they return to the instruction following the division*/
 				PUSH_STACK(_cs->s.x);		// 
 				PUSH_STACK(_ip);
 				_ip=GetShortValue(&absSeg,2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */);
-				ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */+2));
+				ASSIGN_SEGMENT_CODE(_cs,GetShortValue(&absSeg,2*4/*i8259ICW[0] & 4 ? 4 : 8 USARE */+2));
 
 #endif
 
@@ -7058,30 +7048,27 @@ they return to the instruction following the division*/
 	//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
 	//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
 	//				else
-						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+ExtIRQNum.Vector *8 /*i8259ICW[0] & 4 ? 4 : 8 USARE */];
+						sd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+ExtIRQNum.Vector *8 /*i8259ICW[0] & 4 ? 4 : 8 USARE */];
 //							memcpy(&sdi,&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8))],sizeof(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP));
-						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)&ram_seg[MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((ExtIRQNum.Vector *8 /*i8259ICW[0] & 4 ? 4 : 8 USARE */))];
-
-		//				if(ss->TI)		// bah dice "SICURO" in GDTR... e cmq ce l'ho solo dopo...
-		//					sd=(struct SEGMENT_DESCRIPTOR *)&ram_seg[LDTR.Base+(ss->Index << 3)];
-		//				else
-//								sd=(struct SEGMENT_DESCRIPTOR*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
+						sdi=(struct SEGMENT_DESCRIPTOR_INTERRUPT_TRAP*)sd;
 
 //							sdg=(struct SEGMENT_DESCRIPTOR_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(seg.s.Index << 3)];
 
 						switch(sdi->Access.Type) {
 							struct SEGMENT_DESCRIPTOR_SYSTEM *sds;
 							case 5:		// Task Gate (Segment / Descriptor   v. table B-11
-								tss=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+MAKELONG(sd->Base,0/*sd->BaseH*/)];
+								tss=(struct TASK_STATE_REGISTER*)GET_GADDRESS_FROM_INDEX(MAKELONG(sd->Base,sd->BaseH));
 
-								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
+								if(sd->Base & 4)		// NON dev'essere LDT
+									goto exception286;
+								sds=(struct SEGMENT_DESCRIPTOR_SYSTEM*)GET_GADDRESS_FROM_INDEX(sd->Base & 0xfff8);
 	//							sdt=(struct SEGMENT_DESCRIPTOR_TSS*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+sd->Base];
-								if(_cs->s.RPL>sd->Access.DPL) {		// inter-level
+								if(_CPL>sd->Access.DPL) {		// inter-level
 									}
 								else {		// intra-level
 									}
 								newtsr=(struct TASK_STATE_REGISTER*)&ram_seg[MAKELONG(sds->Base,sds->BaseH)];
-								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+(_tss.Index<<3)];
+								oldsd=(struct SEGMENT_DESCRIPTOR_TASK_GATE*)GET_GADDRESS_FROM_INDEX(_tss.Index<<3);
 
 								newtsr->PTSS=_tss.x;
 								memcpy(&_tss,sd,sizeof(union SEGMENT_SELECTOR));
@@ -7101,12 +7088,12 @@ they return to the instruction following the division*/
 								oldtsr->Ds=_ds->s.x;
 								oldtsr->Ss=_ss->s.x;
 								oldtsr->Cs=_cs->s.x;
-								oldtsr->EntryPoint=_ip+4;			// istruzione seguente questa!
+								oldtsr->EntryPoint=_ip;			// istruzione seguente questa!
 
 								sd->Access.A=1;		// MUST be 0 before!
 								oldsd->Access.A=0;
 								_tsr=newtsr;
-								LDTR=(union _DTR*)(&ram_seg[MAKELONG(GDTR.Base,GDTR.BaseH)+_tsr->Ldt]);
+								LDTR=(union _DTR*)GET_GADDRESS_FROM_INDEX(_tsr->Ldt);
 								_ax=newtsr->Ax;
 								_bx=newtsr->Bx;
 								_cx=newtsr->Cx;
@@ -7117,14 +7104,17 @@ they return to the instruction following the division*/
 								_di=newtsr->Di;
 								_f.x=newtsr->Flags.x;
 								_f.NestedTask=1;
-								ASSIGN_SEGMENT(_ss,newtsr->Ss);
-								ASSIGN_SEGMENT(_cs,newtsr->Cs);
-								ASSIGN_SEGMENT(_es,newtsr->Es);
-								ASSIGN_SEGMENT(_ds,newtsr->Ds);
+								ASSIGN_SEGMENT_CODE(_cs,newtsr->Cs);
+								ASSIGN_SEGMENT_STACK(_ss,newtsr->Ss);
+								ASSIGN_SEGMENT_DATA(_es,newtsr->Es);
+								ASSIGN_SEGMENT_DATA(_ds,newtsr->Ds);
 								_ip=newtsr->EntryPoint;
 								res3.x=oldtsr->Ldt;
 								oldtsr->Ldt=newtsr->Ldt;
 								newtsr->Ldt=res3.x;
+// FORSE bisogna assegnare SS_SP_CPL qua...
+								if(_CPL<3)
+									newtsr->SS_SP_CPL[_CPL]=MAKELONG(_sp,_ss->s.x);
 
 								_msw.TS=1;
 								// v. table 8-7 per differenze tra CALL JMP IRET
@@ -7132,13 +7122,21 @@ they return to the instruction following the division*/
 								break;
 
 							case 6:		// Interrupt gate
-								_f.IF=0;
-							case 7:		// Trap gate NON dovrebbe esserci qua!
 								_f.NestedTask=0;
-								if(_cs->s.RPL> sdi->Access.DPL ||
-									_cs->s.RPL< sdi->Access.DPL) {		// inter-level		FINIRE!
-
-//finire
+								if(_CPL==sdi->Access.DPL) {		// intra-level		, verificare Conforming
+									PUSH_STACK(_f.x);
+									PUSH_STACK(_cs->s.x);		// 
+/*- all interrupts except the internal CPU exceptions push the
+flags and the CS:IP of the next instruction onto the stack.
+CPU exception interrupts are similar but push the CS:IP of the
+causal instruction.	8086/88 divide exceptions are different,
+they return to the instruction following the division*/
+									PUSH_STACK(_ip);
+									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
+									ASSIGN_SEGMENT_CODE(_cs,sdi->Selector);
+//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+									}
+								else if(sdi->Access.DPL<_CPL) {		// inter-level
 									res3.x=_sp;
 									PUSH_STACK(_ss->s.x);		// 
 									PUSH_STACK(res3.x);		// 
@@ -7151,34 +7149,32 @@ causal instruction.	8086/88 divide exceptions are different,
 they return to the instruction following the division*/
 									PUSH_STACK(_ip);
 
-									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-									ASSIGN_SEGMENT(_cs,sdi->Selector);
+										// DICE CHE SS e SP vanno presi dal TSS!!!??
 
-//										_f.IOPL=_cs->s.RPL /*sdi->Access.DPL*/;
+										_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
 
+
+
+//Selector's RPL must equal DPL of code segment else #TS (SS selector+EXT)
+//Stack segment DPL must equal DPL of code segment else #TS (SS selector+ EXT)
+
+
+									ASSIGN_SEGMENT_CODE(_cs,sdi->Selector);
 									}
-								else {		// intra-level
-									PUSH_STACK(_cs->s.x);		// 
-/*- all interrupts except the internal CPU exceptions push the
-flags and the CS:IP of the next instruction onto the stack.
-CPU exception interrupts are similar but push the CS:IP of the
-causal instruction.	8086/88 divide exceptions are different,
-they return to the instruction following the division*/
-									PUSH_STACK(_ip);
-									_ip=sdi->Offset;//GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)((i *8)));
-									ASSIGN_SEGMENT(_cs,sdi->Selector);
-//										_cs->d.Access.DPL=sdi->Access.DPL;		// STRANO... VERIFICARE
+								else {
+									goto exception286priv;
 									}
-							
+								_f.IF=0;
 								break;
 
 							case 4:		// Call gate
+							case 7:		// Trap gate NON dovrebbe esserci qua!
 							default:
 								goto exception286;
 
 /*									_f.IF=0;
 								_ip=GetShortValue(&absSeg,MAKELONG(IDTR.Base,IDTR.BaseH)+(uint16_t)(i *4));
-								ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((i *4) +2)));
+								ASSIGN_SEGMENT_CODE(_cs,GetShortValue(&absSeg,(uint16_t)((i *4) +2)));
 
 								IDTR.BaseH;*/
 
@@ -7198,7 +7194,7 @@ they return to the instruction following the division*/
 
 						_f.Trap=0; _f.IF=0;	
 						_ip=GetShortValue(&absSeg, (uint16_t)(ExtIRQNum.Vector /*bus dati*/ *4/*i8259ICW[0] & 4 ? 4 : 8 USARE */));   // https://sw0rdm4n.wordpress.com/2014/09/09/old-knowledge-of-x86-architecture-8086-interrupt-mechanism/
-						ASSIGN_SEGMENT(_cs,(uint16_t)GetShortValue(&absSeg,((uint16_t)(ExtIRQNum.Vector /*bus dati*/ *4 /*i8259ICW[0] & 4 ? 4 : 8 USARE */ +2))));
+						ASSIGN_SEGMENT_CODE(_cs,(uint16_t)GetShortValue(&absSeg,((uint16_t)(ExtIRQNum.Vector /*bus dati*/ *4 /*i8259ICW[0] & 4 ? 4 : 8 USARE */ +2))));
 						}
 					}
 				else {
@@ -7224,7 +7220,7 @@ they return to the instruction following the division*/
         _f.IF=0;
 					// anche AF=0??  https://www.felixcloutier.com/x86/intn:into:int3:int1
         _ip=GetShortValue(&absSeg,(uint16_t)(ExtIRQNum.Vector *4/*i8259ICW[0] & 4 ? 4 : 8 USARE */));
-				ASSIGN_SEGMENT(_cs,GetShortValue(&absSeg,(uint16_t)((ExtIRQNum.Vector *4/*i8259ICW[0] & 4 ? 4 : 8 USARE */) +2)));
+				ASSIGN_SEGMENT_CODE(_cs,GetShortValue(&absSeg,(uint16_t)((ExtIRQNum.Vector *4/*i8259ICW[0] & 4 ? 4 : 8 USARE */) +2)));
 
 #endif
 

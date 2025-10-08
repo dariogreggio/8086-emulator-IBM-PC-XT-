@@ -3,6 +3,8 @@
 #include <string.h>
 #include <xc.h>
 #include "8086_pic.h"
+#include "8086_io.h"
+#include "8086.h"
 
 #include <sys/attribs.h>
 #include <sys/kmem.h>
@@ -98,8 +100,12 @@
 
 
 
+#ifdef PCAT
+const char CopyrightString[]= {'P','C','/','A','T',' ','E','m','u','l','a','t','o','r',' ','v',
+#else
 const char CopyrightString[]= {'P','C','/','X','T',' ','E','m','u','l','a','t','o','r',' ','v',
-	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '0','6','/','0','9','/','2','5', 0 };
+#endif
+	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '0','8','/','1','0','/','2','5', 0 };
 
 const char Copyr1[]="(C) Dario's Automation 2019-2025 - G.Dar\xd\xa\x0";
 
@@ -110,22 +116,22 @@ extern BYTE CPUPins;
 extern BYTE ColdReset;
 extern BYTE ram_seg[];
 extern BYTE CGAram[],VGAram[];
-extern BYTE CGAreg[16];
-extern BYTE i8237RegR[16],i8237RegW[16],i8237Reg2R[16],i8237Reg2W[16];
-extern BYTE i8259RegR[2],i8259RegW[2],i8259Reg2R[2],i8259Reg2W[2];
-extern BYTE i8253RegR[4],i8253RegW[4],i8253Mode[3],i8253ModeSel;
-extern WORD i8253TimerR[3],i8253TimerW[3];
-extern BYTE i8250Reg[8],i8250Regalt[3];
-extern BYTE i6845RegR[18],i6845RegW[18];
-extern BYTE i146818RegR[2],i146818RegW[2],i146818RAM[64];
-extern BYTE i8042RegR[2],i8042RegW[2],KBRAM[32],KBCommand,KBStatus;
-extern BYTE i8259IRR,i8259IMR;
+extern BYTE CGAreg[];
+extern BYTE i8237RegR[],i8237RegW[],i8237Reg2R[],i8237Reg2W[];
+extern BYTE i8259RegR[],i8259RegW[],i8259Reg2R[],i8259Reg2W[];
+extern BYTE i8253RegR[],i8253RegW[],i8253Mode[],i8253ModeSel;
+extern WORD i8253TimerR[],i8253TimerW[];
+extern BYTE i8250Reg[],i8250Regalt[];
+extern BYTE i6845RegR[],i6845RegW[];
+extern BYTE i146818RegR[],i146818RegW[],i146818RAM[];
+extern BYTE i8042RegR[],i8042RegW[],KBRAM[],KBCommand,KBStatus,i8042OutPtr;
+extern BYTE i8259IRR,i8259IMR,i8259IRR2,i8259IMR2;
 extern uint8_t i8255RegW[];
-extern uint8_t FloppyContrRegR[8],FloppyContrRegW[8],FloppyFIFO[16],FloppyFIFOPtr;
+extern uint8_t FloppyContrRegR[],FloppyContrRegW[],FloppyFIFO[],FloppyFIFOPtr;
 extern volatile BYTE Keyboard[];
 extern BYTE mouseState;
 int8_t mouseX,mouseY;
-extern BYTE COMDataEmuFifo[3];
+extern BYTE COMDataEmuFifo[];
 extern BYTE COMDataEmuFifoCnt;
 extern volatile BYTE VIDIRQ /*TIMIRQ,KBDIRQ,SERIRQ,RTCIRQ,FDCIRQ*/;
 uint16_t VICRaster;
@@ -817,14 +823,14 @@ plot_cursor:
 
   rowFin=min(rowFin,VERT_SIZE);
   if(rowIni==0) {
-    CGAreg[0xa] &= ~B8(00001000); // CGA not in retrace V
-//		VGAstatus0 |= B8(10000000);			
-//		VGAstatus1 &= ~B8(00001000);
+    CGAreg[0xa] &= ~0b00001000; // CGA not in retrace V
+//		VGAstatus0 |= 0b10000000;			
+//		VGAstatus1 &= ~0b00001000;
 		}
   else if(rowFin>=VERT_SIZE-8) {
-    CGAreg[0xa] |= B8(00001000); // CGA in retrace V
-//		VGAstatus0 &= ~B8(10000000);			
-//		VGAstatus1 |= B8(00001000);
+    CGAreg[0xa] |= 0b00001000; // CGA in retrace V
+//		VGAstatus0 &= ~0b10000000;			
+//		VGAstatus1 |= 0b00001000;
 		}
   
 
@@ -992,7 +998,7 @@ plot_cursor:
 /* gloriouscow dice che qua non esiste        if(CGAreg[8] & 4)      // disable color ovvero palette #3
           color=2;     // quale palette
         else*/
-						color=CGAreg[9] & B8(00100000) ? 1 : 0;
+						color=CGAreg[9] & 0b00100000 ? 1 : 0;
 						pVideoRAM=(BYTE*)&VideoRAM[0]+(rowIni +VERT_OFFSCREEN)*(((640)+(HORIZ_OFFSCREEN)))+HORIZ_OFFSCREEN/2;
 						switch(VGAcrtcReg[1]) {
 							case 39:		// mode 4,5 : 320x200x4
@@ -2174,32 +2180,35 @@ int emulateKBD(BYTE ch) {
 			Keyboard[0]=i | 0x80;
   
 			if(!(KBCommand & 0b10000000) && (KBCommand & 0b01000000)) {     //..e se enabled e non reset...
-				KBStatus |= 0b00000001;			// output available
+				KBStatus |= KB_OUTPUTFULL;			// output available
 			//    KBDIRQ=1;
 				i8259IRR |= 0b00000010;
 				}
-			}
 #else
-			if(KBCommand & 0b01000000) {//  XT opp AT translation, 1=XT  MA NON è CHIARO, forse non su XT ma solo su AT con 8042!
-				Keyboard[0]=i | 0x80;
-				}
-			else {
-				Keyboard[0] = 0xe0;
-				Keyboard[1] = i;
-				}
-			KBStatus |= 0b00000001;			// output available
-			KBStatus &= ~0b00001000;		// data
+			if(KBStatus & KB_ENABLED) {   // se attiva... dice che KBCommand<3> =1 può fare override!
+				if(!(KBRAM[0] & 0x10))		// verificare... da granite
+					;
+				if(KBCommand & KB_TRANSLATE) {//  XT opp AT translation, 1=XT  MA NON è CHIARO, forse non su XT ma solo su AT con 8042!
+					Keyboard[0]=i | 0x80;
+          i8042OutPtr=1;
+					}
+				else {
+					Keyboard[1] = 0xe0;
+					Keyboard[0] = i;
+          i8042OutPtr=2;
+					}
+				KBStatus |= KB_OUTPUTFULL;			// output available
+				KBStatus &= ~KB_COMMAND;		// data
   
 	//#ifndef _DEBUG
-			if(!(KBStatus & 0b00010000)) {   // se attiva...
-				if((KBCommand & 0b00000001)) {     //..e se interrupt attivi...
+				if(KBCommand & KB_IRQENABLE) {     //..e se interrupt attivi...
 			//    KBDIRQ=1;
 					i8259IRR |= 0b00000010;
 					}
 				}
-			}
 //#endif
 #endif
+			}
     }
   else {
 		i=xlat_key(ch);
@@ -2208,23 +2217,27 @@ int emulateKBD(BYTE ch) {
 			Keyboard[0]=i;
   
 			if(!(KBCommand & 0b10000000) && (KBCommand & 0b01000000)) {     //..e se enabled e non reset...
-				KBStatus |= 0b00000001;			// output available
+				KBStatus |= KB_OUTPUTFULL;			// output available
 			//    KBDIRQ=1;
 				i8259IRR |= 0b00000010;
 				}
 #else
-			if(KBCommand & 0b01000000) {//  XT opp AT translation, 1=XT  MA NON è CHIARO, forse non su XT ma solo su AT con 8042!
-				Keyboard[0]=i;
-				}
-			else {
-				Keyboard[0]=i;
-				}
-			KBStatus |= 0b00000001;			// output available
-			KBStatus &= ~0b00001000;		// data
+			if(KBStatus & KB_ENABLED) {   // se attiva... dice che KBCommand<3> =1 può fare override!
+				if(!(KBRAM[0] & 0x10))		// verificare... da granite
+					;
+
+				if(KBCommand & KB_TRANSLATE) {//  XT opp AT translation, 1=XT  MA NON è CHIARO, forse non su XT ma solo su AT con 8042!
+					Keyboard[0]=i;
+          i8042OutPtr=1;
+					}
+				else {
+					Keyboard[0]=i;
+          i8042OutPtr=1;
+					}
+				KBStatus |= KB_OUTPUTFULL;			// output available
+				KBStatus &= ~KB_COMMAND;		// data
   
-	//#ifndef _DEBUG
-			if(!(KBStatus & 0b00010000)) {   // se attiva...
-				if((KBCommand & 0b00000001)) {     //..e se interrupt attivi...
+				if(KBCommand & KB_IRQENABLE) {     //..e se interrupt attivi...
 			//    KBDIRQ=1;
 					i8259IRR |= 0b00000010;
 					}
@@ -2234,14 +2247,6 @@ int emulateKBD(BYTE ch) {
 			}
     }
 
-  KBStatus |= 0b00000001;
-  
-  if((KBStatus & 0b00010000)) {   // se attiva...
-		if(KBCommand & 0b00000001) {     //..e se interrupt attivi...
-			//    KBDIRQ=1;
-			i8259IRR |= 2;
-			}
-    }
   
 no_irq:
     ;
@@ -2262,6 +2267,9 @@ const char *keysFeed7="CHKDSK \r";
 const char *keysFeed8="SCREEN 1\r";
 const char *keysFeed9="LIST\r";
 const char *keysFeed10="SPEED\r";
+const char *keysFeed11="\r";
+const char *keysFeed12="\x1b";
+const char *keysFeed13="INTHW\r";
 
 void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   //100Hz 2024
 // https://www.microchip.com/forums/m842396.aspx per IRQ priority ecc
@@ -2276,14 +2284,19 @@ void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   /
   dividerTim++;
   if(dividerTim>=100) {   // 1Hz RTC
 
-#warning usare anche se GLATick!!
-#ifdef PCAT
     // vedere registro 0A, che ha i divisori...
     // i146818RAM[10] & 15
     dividerTim=0;
     if(!(i146818RAM[11] & 0b10000000)) {    // SET
-#warning VERIFICARE se il bios ABILITA RTC!! e occhio PCXTbios che usa un diverso RTC...
-      i146818RAM[10] |= 0b10000000;
+//#warning VERIFICARE se il bios ABILITA RTC (sì con GLATICK)!! e occhio PCXTbios che usa un diverso RTC...
+
+#ifndef PCAT
+//     i146818RAM[10] |= 0b10000000;		// per glatick, v.sotto (cmq non ha senso fatto così
+#else
+//      i146818RAM[10] ^= 0b10000000;			// simulo attività
+#endif
+     
+      i146818RAM[10] |= 0b10000000;   // v. lettura registro 12 IRQ (NO) e vertical retrace sopra (truschino
 			if(!(i146818RAM[11] & 0b00000100)) 			// BCD mode
 				currentTime.sec=from_bcd(currentTime.sec);
       currentTime.sec++;
@@ -2343,7 +2356,10 @@ void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   /
           }
         } 
       i146818RAM[12] |= 0b10010000;
-      i146818RAM[10] &= ~0b10000000;
+
+#ifndef PCAT
+//      i146818RAM[10] &= ~0b10000000;		// o glatick si incazza, v. sopra
+#endif
       } 
     else
       i146818RAM[10] &= ~0b10000000;
@@ -2354,14 +2370,12 @@ void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   /
        i146818RAM[12] & 0b00010000 && i146818RAM[11] & 0b00010000)
       i146818RAM[12] |= 0b10000000;
     if(i146818RAM[12] & 0b10000000) {
-#ifdef EXT_80286			// solo PC/AT!
+#ifdef PCAT		// solo PC/AT!
 //        RTCIRQ=1;
-        i8259IRR2 |= 1;
-	      if(!(i8259IMR & 2)) {		// poi forse andrebbe gestito il Cascaded...  http://www.osdever.net/tutorials/view/irqs
-        }
+				 i8259IRR2 |= 0b00000001;
+				 i8259IRR |= 0b00000100;
 #endif
       }
-#endif
 		} 
 
 //  dividerVICpatch++;
@@ -2406,9 +2420,18 @@ void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   /
 			case 9:
 				strcpy(keysFeed,keysFeed10);
 				break;
+			case 10:
+				strcpy(keysFeed,keysFeed11);
+				break;
+			case 11:
+				strcpy(keysFeed,keysFeed12);
+				break;
+			case 12:
+				strcpy(keysFeed,keysFeed13);
+				break;
       }
 		whichKeysFeed++;
-		if(whichKeysFeed>=10)
+		if(whichKeysFeed>=13)
 			whichKeysFeed=0;
 //    goto fine;
 		}

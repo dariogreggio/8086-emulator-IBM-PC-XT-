@@ -57,8 +57,35 @@ gdt_tss:									; TSS descriptor
 gdt_end:
 
 idt_start:									; bare minimum IDT
-		times 32	dq	0
+		times 2	dq	0
 ; METTERE un dummy per eccezione/i!
+
+nmi:										; NMI int 2
+		dw	doreset							; offset
+		dw	gdt_code_ring0 - gdt_start	; destination selector
+		db	0								; unused
+		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
+		dw	0								; (not used in 80286)
+
+		times	16 dq 0
+
+int13h:										; int 13h (futuro disk I/O)
+		dw	doint13							; offset
+		dw	gdt_code_ring0 - gdt_start		; destination selector
+		db	0								; unused
+		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
+		dw	0								; (not used in 80286)
+
+		dq 0
+
+int15h:										; int 15h (futuro BIOS)
+		dw	doint15							; offset
+		dw	gdt_code_ring0 - gdt_start		; destination selector
+		db	0								; unused
+		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
+		dw	0								; (not used in 80286)
+
+		times	10 dq 0
 
 int8:										; int 32 (timer remapped)
 		dw	irqtimer						; offset
@@ -242,7 +269,7 @@ irqtimer_end:
 		pop es
 		pop ds
 		popa
-		sti
+;		sti
 		iret
 
 irqkb:
@@ -275,8 +302,41 @@ irqkb_end:
 		pop es
 		pop ds
 		popa
+;		sti
+		iret
+
+doint13:
+		pusha
+		push ds
+		push es
+
+		cmp  ah,0
+
+		pop es
+		pop ds
+		popa
 		sti
 		iret
+
+doint15:
+		pusha
+		push ds
+		push es
+
+		cmp  ah,0
+
+		pop es
+		pop ds
+		popa
+		sti
+		iret
+
+
+doreset:
+		mov al,0xfe							; forzo reset!
+		out 0x64,al
+		iret
+
 
 start_pm_ring3:
 .loop2:

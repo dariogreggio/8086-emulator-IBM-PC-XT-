@@ -67,41 +67,101 @@ nmi:										; NMI int 2
 		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
 		dw	0								; (not used in 80286)
 
-		times	16 dq 0
+		times	(13+16) dq 0
 
-int13h:										; int 13h (futuro disk I/O)
+
+; (fino a 32 sono riservati per eccezioni 286! rilocare...
+
+int20h:										; int 20h (futuro BIOS/DOS)
+		dw	doint20							; offset
+		dw	gdt_code_ring0 - gdt_start		; destination selector
+		db	0								; unused
+		db	10000111b						; present, privilege level 0 (max privilege), system, trap
+		dw	0								; (not used in 80286)
+
+int21h:										; int 21h (futuro BIOS/DOS)
+		dw	doint21							; offset
+		dw	gdt_code_ring0 - gdt_start		; destination selector
+		db	0								; unused
+		db	10000111b						; present, privilege level 0 (max privilege), system, trap
+		dw	0								; (not used in 80286)
+
+		times	3 dq 0
+
+int25h:										; int 25h (futuro BIOS/DOS)
+		dw	doint25							; offset
+		dw	gdt_code_ring0 - gdt_start		; destination selector
+		db	0								; unused
+		db	10000111b						; present, privilege level 0 (max privilege), system, trap
+		dw	0								; (not used in 80286)
+
+int26h:										; int 26h (futuro BIOS/DOS)
+		dw	doint26							; offset
+		dw	gdt_code_ring0 - gdt_start		; destination selector
+		db	0								; unused
+		db	10000111b						; present, privilege level 0 (max privilege), system, trap
+		dw	0								; (not used in 80286)
+
+		times	(9+16) dq 0
+
+int10h:										; int 10h (futuro video) diventa 40h
+		dw	doint10							; offset
+		dw	gdt_code_ring0 - gdt_start		; destination selector
+		db	0								; unused
+		db	10000111b						; present, privilege level 0 (max privilege), system, trap
+		dw	0								; (not used in 80286)
+
+		times	2 dq 0
+
+int13h:										; int 13h (futuro disk I/O)  diventa 43h
 		dw	doint13							; offset
 		dw	gdt_code_ring0 - gdt_start		; destination selector
 		db	0								; unused
-		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
+		db	10000111b						; present, privilege level 0 (max privilege), system, trap
 		dw	0								; (not used in 80286)
 
 		dq 0
 
-int15h:										; int 15h (futuro BIOS)
+int15h:										; int 15h (futuro BIOS) diventa 45h
 		dw	doint15							; offset
 		dw	gdt_code_ring0 - gdt_start		; destination selector
 		db	0								; unused
-		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
+		db	10000111b						; present, privilege level 0 (max privilege), system, trap
 		dw	0								; (not used in 80286)
 
 		times	10 dq 0
 
-int8:										; int 32 (timer remapped)
+		times	16 dq 0
+		times	16 dq 0
+
+int70h:
+		times	8 dq 0
+
+int8:										; int 78 (timer remapped)
 		dw	irqtimer						; offset
 		dw	gdt_code_ring0 - gdt_start	; destination selector
 		db	0								; unused
 		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
 		dw	0								; (not used in 80286)
 
-int9:										; int 33 (keyboard remapped)
+int9:										; int 79 (keyboard remapped)
 		dw	irqkb						; offset
 		dw	gdt_code_ring0 - gdt_start	; destination selector
 		db	0								; unused
 		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
 		dw	0								; (not used in 80286)
 
-		times 30 dq 0			; boh 64 tanto per!
+		times 2 dq 0
+
+int12:										; int 82 (mouse/com1 remapped)
+		dw	irqmouse						; offset
+		dw	gdt_code_ring0 - gdt_start	; destination selector
+		db	0								; unused
+		db	10000110b						; present, privilege level 0 (max privilege), system, interrupt
+		dw	0								; (not used in 80286)
+
+		times 3 dq 0			; altri 3 hw (128 in tutto)
+
 idt_end:
 
 gdt_descriptor:
@@ -192,9 +252,11 @@ boot:
 textcolor1	equ 0x1b        ; BG color : blue, FG color : bright cyan, no blink
 textcolor2	equ 0x8000		;0x1e + 0x80	; BG color : blue, FG color : yellow, with blink
 textcolor3	equ 0x8001		;0x1e + 0x80	; BG color : blue, FG color : yellow, with blink
+textcolor4	equ 0x8002
 
 start_pm_ring0:							; now entered into the 16 bit-protected mode ring 0 from the real mode
 		cli								; To avoid unintended interrupts. It is noted that software interrupt is not maskable. 
+		cld
 
 		mov ax, data_seg_ring0
 		mov ds, ax
@@ -205,21 +267,20 @@ start_pm_ring0:							; now entered into the 16 bit-protected mode ring 0 from t
 
 		mov byte [textcolor2],0x1d
 		mov byte [textcolor3],0x1e
+		mov byte [textcolor4],0x18
 
-		mov ax, vram_seg
+		mov ax,vram_seg
 		mov es, ax							; reload ES to make it point to video memory
-		xor di, di
-		mov ah, textcolor1			; clear screen
-		mov al, ' ' 
-		mov cx, 80 * 25
-		cld
-		rep stosw
+
+		xor ah,ah
+		mov al,3							; 80x25 color
+		int 40h
 
 ; rimappo offset per non andare in conflitto
 		mov al,0x15		;outb(PIC1_COMMAND, ICW1_INIT | ICW1_INTERVAL8 | ICW1_ICW4);  // starts the initialization sequence (in cascade mode, 286)
 		out  0x20,al
 		jmp $+2
-		mov al,0x20		;outb(PIC1_DATA, 0x20);                 // ICW2: Master PIC vector offset = 32 ora, 0=Timer 1=Kbd
+		mov al,0x78		;outb(PIC1_DATA, 0x78);                 // ICW2: Master PIC vector offset = 78 ora, 0=Timer 1=Kbd
 		out  0x21,al
 		jmp $+2
 		mov al,1<<2		;outb(PIC1_DATA, 1 << CASCADE_IRQ);        // ICW3: tell Master PIC that there is a slave PIC at IRQ2
@@ -228,10 +289,27 @@ start_pm_ring0:							; now entered into the 16 bit-protected mode ring 0 from t
 		mov al,0x1		;outb(PIC1_DATA, ICW4_8086);               // ICW4: have the PICs use 8086 mode (and not 8080 mode)
 		out  0x21,al
 		jmp $+2
-		mov al,0x0		;enable all ??
+		mov al,0x0		;enable all ?? (TIMER, KB,  MOUSE)
 		out  0x21,al
 		jmp $+2
 
+		mov al,0x0
+		mov dx,0x3f8+3
+		out dx,al
+		mov al,0x0
+		mov dx,0x3f8+4
+		out dx,al
+		mov al,0x1		; attivo COM1 IRQ (mouse
+		mov dx,0x3f8+1
+		out dx,al
+
+		lea si, hello_msg
+		xor di, di							; print a greeting message at the uppper left corner of the screen
+;		mov ah, 0xf
+;		call print_msg
+		mov ah,0x13
+		mov bl,0xf							; 80x25 color
+		int 40h
 
 		sti
 
@@ -243,29 +321,21 @@ start_pm_ring0:							; now entered into the 16 bit-protected mode ring 0 from t
 		push start_pm_ring3
 		iret								; make it get to ring 3
 
+
 ; interrupt handlers just for printing the message
 irqtimer:
 		pusha
 		push ds
 		push es
-		mov ax, data_seg_ring0				; era ring3...
-		mov ds, ax							; reload DS
-		mov ax, vram_seg
-		mov es, ax							; reload ES to make it point to video memory
-		xor di, di							; print a greeting message at the uppper left corner of the screen
-		lea si, hello_msg
-		mov ah, [textcolor2]
-		inc byte [ds:textcolor2]
-.loop:
-		lodsb
-		cmp al, 0
-		jz irqtimer_end
-		stosw
-		jmp .loop
-
-irqtimer_end:
 		mov al,0x20
 		out  0x20,al
+		mov di, 0x200						; print a message 
+		lea si, timer_msg
+		mov bl, [textcolor2]
+		inc byte [ds:textcolor2]
+		mov ah,0x13
+		int 40h
+;		call print_msg
 		pop es
 		pop ds
 		popa
@@ -276,31 +346,138 @@ irqkb:
 		pusha
 		push ds
 		push es
+		mov al,0x20
+		out  0x20,al
 		in al,0x60
 		and al,0x7f
-		mov bl,al
+		mov dl,al
+		mov di, 0x400						; print a message 
+		lea si, kb_msg
+		mov bl, [textcolor3]
+		inc byte [ds:textcolor3]
+		mov ah,0x13
+		int 40h
+;		call print_msg
+
+		mov al,dl
+		add di,9*2
+		stosw
+		pop es
+		pop ds
+		popa
+;		sti
+		iret
+
+irqmouse:
+		pusha
+		push ds
+		push es
+		mov al,0x20
+		out  0x20,al
+		mov dx,0x3f8+0			; leggo 3 byte mouse
+		in al,dx
+		jmp $+2
+		mov dx,0x3f8+5
+		in al,dx
+
+		mov dx,0x3f8+0			; 
+		in al,dx
+		jmp $+2
+		mov dx,0x3f8+5
+		in al,dx
+		mov dx,0x3f8+0			; 
+		in al,dx
+		jmp $+2
+		mov dx,0x3f8+5
+		in al,dx
+
+		mov di, 0x600						; print a message 
+		lea si, mouse_msg
+		mov bl, [textcolor4]
+		inc byte [ds:textcolor4]
+;		call print_msg
+		mov ah,0x13
+		int 40h
+
+		pop es
+		pop ds
+		popa
+;		sti
+		iret
+
+
+doint10:				; fare come https://www.stanislavs.org/helppc/int_10.html
+		pusha
+		pushf
+		push ds
+		push es
+		push ax
+		cld
 		mov ax, data_seg_ring0				; era ring3...
 		mov ds, ax							; reload DS
 		mov ax, vram_seg
 		mov es, ax							; reload ES to make it point to video memory
-		mov di, 0x200						; print a message 
-		lea si, kb_msg
-		mov ah, [textcolor3]
-		inc byte [ds:textcolor3]
-.loop3:
-		lodsb
-		cmp al, 0
-		jz irqkb_end
-		stosw
-		jmp .loop3
+		pop ax
 
-irqkb_end:
-		mov al,bl
+		cmp  ah,0			; usare jump table
+		jz  .mode
+		cmp  ah,0x9
+		jz  .writetextattrib
+		cmp  ah,0xa
+		jz  .writetext
+		cmp  ah,0xe
+		jz  .writechar
+		cmp  ah,0x13
+		jz  .writestring
+
+		jmp .bad
+
+.mode:					; https://www.stanislavs.org/helppc/int_10-0.html
+						; if AL bit 7=1, prevents EGA,MCGA & VGA from clearing display
+		test al, 0x80
+
+		xor di, di
+		mov ah, textcolor1			; clear screen
+		mov al, ' ' 
+		mov cx, 80 * 25
+		cld
+		rep stosw
+		jmp .ok
+
+.writetext:
+.writetextattrib:
+		mov ah,bl
+.writetext_:
 		stosw
-		mov al,0x20
-		out  0x20,al
+		loop .writetext_
+		jmp .ok
+
+.writechar:
+		mov ah,bl
+		stosw
+		jmp .ok
+
+.writestring:
+		mov ah,bl
+.loop:
+		lodsb
+		or al,al
+		jz .writestring_end
+		stosw
+		jmp .loop
+.writestring_end:
+.ok:
+		clc
+		jmp .end
+
+.bad:
+		stc
+
+.end:
+
 		pop es
 		pop ds
+		popf
 		popa
 ;		sti
 		iret
@@ -331,6 +508,114 @@ doint15:
 		sti
 		iret
 
+doint20:				; beh "Terminate" :)
+		mov al,0xfe							; forzo reset!
+		out 0x64,al
+		iret
+
+doint21:				; fare 
+		pusha
+		pushf
+		push ds
+		push es
+		push ax
+		cld
+		mov ax, data_seg_ring0				; era ring3...
+		mov ds, ax							; reload DS
+		mov ax, vram_seg
+		mov es, ax							; reload ES to make it point to video memory
+		pop ax
+
+		cmp  ah,0			; usare jump table
+		jz  .terminate
+		cmp  ah,0x1
+		jz  .readkeyecho
+		cmp  ah,0x2
+		jz  .writechar
+		cmp  ah,0xf
+		jz  .openfile
+		cmp  ah,0x9
+		jz  .writestring
+
+		jmp .bad
+
+.terminate:
+		mov al,0xfe							; forzo reset!
+		out 0x64,al
+
+.readkeyecho:
+		in al, 0x60
+		jmp .ok
+
+.writechar:
+		mov al,dl
+		mov ah,0xe
+		int 40h
+		jmp .ok
+
+.openfile:
+
+.writestring:
+		mov ah,bl
+.loop:
+		mov al,[bx]
+		inc bx
+		cmp al,'$'
+		jz .writestring_end
+		stosw
+		jmp .loop
+.writestring_end:
+
+.ok:
+		clc
+		jmp .end
+
+.bad:
+		stc
+
+.end:
+		iret
+
+doint25:				; fare  disk read
+		pusha
+		pushf
+		push ds
+		push es
+		push ax
+		cld
+		mov ax, data_seg_ring0				; era ring3...
+		mov ds, ax							; reload DS
+		mov ax, vram_seg
+		mov es, ax							; reload ES to make it point to video memory
+		pop ax
+
+
+		jmp .bad
+
+.bad:
+		stc
+		iret
+
+doint26:				; fare  disk write
+		pusha
+		pushf
+		push ds
+		push es
+		push ax
+		cld
+		mov ax, data_seg_ring0				; era ring3...
+		mov ds, ax							; reload DS
+		mov ax, vram_seg
+		mov es, ax							; reload ES to make it point to video memory
+		pop ax
+
+
+		jmp .bad
+
+.bad:
+		stc
+		iret
+
 
 doreset:
 		mov al,0xfe							; forzo reset!
@@ -340,25 +625,60 @@ doreset:
 
 start_pm_ring3:
 .loop2:
-		inc byte [es:0x400]
+		mov ax, vram_seg
+		mov es, ax							; reload ES to make it point to video memory
+		inc byte [es:0x800]
 		jmp .loop2
 
+print_msg:
+		push ax
+		mov ax, data_seg_ring0				; era ring3...
+		mov ds, ax							; reload DS
+		mov ax, vram_seg
+		mov es, ax							; reload ES to make it point to video memory
+		pop ax
+.loop:
+		lodsb
+		or al,al
+		jz .end
+		stosw
+		jmp .loop
+.end:
+		ret
+
+byte_hex:		; da glatick, fare anche per base 10
+		push ax
+		shr		al,4
+		call	nib_hex
+		pop ax
+
+nib_hex:
+		and	al, 0x0f
+		cmp	al, 0x0a 
+		sbb	al, -('0'+0x66+1)
+		das
+out_char:
+		push	ax
+		push	bx
+		mov	bh, 0
+		mov	ah, 0xe
+		int	40H
+		pop	bx
+		pop	ax
+		ret
+
+
 hello_msg:
+		db  "INTHW test 0.4", 0
+timer_msg:
 		db  "TIMER", 0
 kb_msg:
 		db  "KEYBOARD:", 0
+mouse_msg:
+		db  "MOUSE:", 0
 
 ; un po' di stack :)
-		dd	0
-		dd	0
-		dd	0
-		dd	0
-		dd	0
-		dd	0
-		dd	0
-		dd	0
-		dd	0
-		dd	0
+		times 128 dw	0
 
 
 stack_ring3:

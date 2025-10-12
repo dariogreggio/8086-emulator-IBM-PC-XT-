@@ -52,6 +52,7 @@ extern uint8_t i8042Input;
 #else
 extern uint8_t i8255RegR[];
 #endif
+extern uint8_t KBStatus;
 extern uint8_t i8237Mode[],i8237Mode2[],i8237Command,i8237Command2;
 extern uint8_t i8237RegR[],i8237RegW[],i8237Reg2R[],i8237Reg2W[];
 extern uint16_t i8237DMAAddr[],i8237DMALen[],i8237DMAAddr2[],i8237DMALen2[];
@@ -169,7 +170,7 @@ int Emulate(int mode) {
   register uint16_t i;
 	int c=0;
   uint8_t screenDivider=0;
-	uint8_t timerDivider=0;
+//	uint8_t timerDivider=0;
 
 
 
@@ -190,6 +191,16 @@ int Emulate(int mode) {
 #endif
 
   CPUPins = 0; ExtIRQNum.x=IntIRQNum.x=0; 
+  
+  if(ColdReset) {
+    ColdReset=0;
+    initHW();
+#ifdef PCAT
+//			KBStatus |= 000000100);		// flag power-on VIENE FATTO quando manda 0xAA alla tastiera!
+#endif
+    CPUPins = DoReset;
+    }
+
 	do {
 
 		c++;
@@ -205,16 +216,6 @@ int Emulate(int mode) {
 // yield()
         }
       }
-
-		if(ColdReset) {
-			ColdReset=0;
-			initHW();
-#ifdef PCAT
-//			KBStatus |= 000000100);		// flag power-on VIENE FATTO quando manda 0xAA alla tastiera!
-#endif
-			CPUPins = DoReset;
-			continue;
-			}
 
 //		if(debug) {
 #ifdef __DEBUG
@@ -241,9 +242,29 @@ int Emulate(int mode) {
         if(VICRaster >= MAX_RASTER) {		 // 
           VICRaster=MIN_RASTER; 
           screenDivider++;
+          
+          extern char keysFeed[];
+          extern volatile BYTE keysFeedPhase;
+
+          if(keysFeedPtr<254) {
+            if(keysFeed[keysFeedPtr]) {
+              if(!keysFeedPhase) {
+                keysFeedPhase=1;
+                emulateKBD(keysFeed[keysFeedPtr]);
+                }
+              else {
+                keysFeedPhase=0;
+                emulateKBD(0);
+                keysFeedPtr++;
+                }
+              }
+            else
+              keysFeedPtr=255;
+            }
+      
           }
 #ifdef MOUSE_TYPE 
-      manageTouchScreen();
+        manageTouchScreen();
 #endif
         }
       else {
@@ -253,6 +274,7 @@ int Emulate(int mode) {
           LED2 ^= 1;      // VIDIRQ attivato come flag qua, ogni 10mS => 60mS qua
           screenDivider++;
           screenDivider %= 4;
+         
           }
         }
 #endif
@@ -285,7 +307,7 @@ int Emulate(int mode) {
         __delay_ms(100); ClrWdt();
         CPUPins=DoReset;
         }
-    
+
       }
 
 //questa parte equivale a INTA sequenza ecc  http://www.icet.ac.in/Uploads/Downloads/3_mod3.pdf
@@ -503,7 +525,7 @@ rallenta:
       // rimesso 3 per ERSO/DTCBIOS... paiono tutti ok
 			// GLABios è il più critico dopo la modifica di "rallenta", funzia da 17 a 125 circa! 22 pare abbastanza preciso, per TIME e i secondi
 			// AMIbios 87 ancora peggio, vuole max 18
-			timerDivider=0;
+//			timerDivider=0;
 			// https://stanislavs.org/helppc/8253.html   http://wiki.osdev.org/Programmable_Interval_Timer#Mode_0_-_Interrupt_On_Terminal_Count
 			// devono andare a ~1.1MHz qua
 			// aggiungere modo BCD a tutti i conteggi!! :)  i8253Mode[0] & B8(00000001)
@@ -734,102 +756,6 @@ rallenta:
 
 //			}		// timerDivider
 
-		if(!(i8237RegW[8] & DMA_DISABLED)) {		// controller enable
-#ifndef PCAT
-			// canale 0 = RAM refresh (ignoro gli altri, v. floppy ecc in loco!
-#endif
-			switch((i8237Mode[0] & 0b00001100) >> 2) {		// DMA mode
-				case DMA_MODEVERIFY:			// verify
-					break;
-				case DMA_MODEWRITE:			// write
-					break;
-				case DMA_MODEREAD:			// read
-					break;
-				}
-			i8237RegR[13] /* = */; // ultimo byte trasferito :)
-			if(!(i8237RegW[15] & DMA_MASK0))	{	// mask...
-				switch((i8237Mode[0] & DMA_MODE) >> 6) {		// DMA mode
-					case DMA_MODEDEMAND:			// demand
-						break;
-					case DMA_MODECASCADE:			// cascade
-						break;
-					case DMA_MODESINGLE:			// single
-					case DMA_MODEBLOCK:			// block
-//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
-						if(i8237Mode[0] & DMA_UPDOWN)
-							i8237DMACurAddr[0]--;
-						else
-							i8237DMACurAddr[0]++;
-						i8237DMACurLen[0]--;
-						if(!i8237DMACurLen[0]) {
-							i8237RegR[8] |= DMA_TC0;		// TC 0
-							if(i8237Mode[0] & DMA_AUTORELOAD) {
-								i8237DMACurAddr[0]=i8237DMAAddr[0];
-								i8237DMACurLen[0]=i8237DMALen[0];
-								i8237RegR[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
-								}
-#ifdef PCAT
-// no, su AT non è qua							i8042Input ^= 0x10;		// SIMULO refresh... v. port 61h
-#endif
-
-							}
-						break;
-					}
-				}
-			}
-
-#ifdef PCAT
-
-		{static uint8_t refreshdivider=0;
-		refreshdivider++;
-		if(refreshdivider>5) {		// valori tra 5 e 10 sono ok ; v. forse registri a 22h/23h chip 82C211 [a volte PORCODDIO non va di nuovo
-			// parlano di 2mS circa... ma granite dice 15uS
-			i8042Input ^= 0x10;		// SIMULO refresh...  qua non usa DMA pare; 
-			refreshdivider=0;
-			}
-		}
-
-		// POTREBBE servire ciclare "Index" dell'hard disc ATA, hdState<1>
-
-		if(!(i8237Reg2W[8] & DMA_DISABLED)) {		// controller enable
-			// canale 0 = cascaded 4
-			switch((i8237Mode[0] & 0b00001100) >> 2) {		// DMA mode
-				case DMA_MODEVERIFY:			// verify
-					break;
-				case DMA_MODEWRITE:			// write
-					break;
-				case DMA_MODEREAD:			// read
-					break;
-				}
-			i8237Reg2R[13] /* = */; // ultimo byte trasferito :)
-			if(!(i8237Reg2W[15] & DMA_MASK0))	{	// mask...
-				switch((i8237Mode2[0] & DMA_MODE) >> 6) {		// DMA mode
-					case DMA_MODEDEMAND:			// demand
-						break;
-					case DMA_MODECASCADE:			// cascade, ok award bios 286
-
-						break;
-					case DMA_MODESINGLE:			// single
-					case DMA_MODEBLOCK:			// block
-//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
-						if(i8237Mode2[0] & DMA_UPDOWN)
-							i8237DMACurAddr2[0]--;
-						else
-							i8237DMACurAddr2[0]++;
-						i8237DMACurLen2[0]--;
-						if(!i8237DMACurLen2[0]) {
-							i8237Reg2R[8] |= DMA_TC0;		// TC 0
-							if(i8237Mode2[0] & DMA_AUTORELOAD) {
-								i8237DMACurAddr2[0]=i8237DMAAddr2[0];
-								i8237DMACurLen2[0]=i8237DMALen2[0];
-								i8237Reg2R[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
-								}
-							}
-						break;
-					}
-				}
-			}
-#endif
     
 /* 			c2++;
 			if(c2<CPUDivider)
@@ -4953,6 +4879,7 @@ do_irq:
 								case 7:		// Trap gate
 									_f.NestedTask=0;
 									if(_CPL==sdi->Access.DPL) {		// intra-level		, verificare Conforming
+										PUSH_STACK(_f.x);
 										PUSH_STACK(_cs->s.x);		// 
   /*- all interrupts except the internal CPU exceptions push the
 	flags and the CS:IP of the next instruction onto the stack.
@@ -5694,8 +5621,7 @@ res3.x=_ax;
 
 
 #ifdef EXT_80286
-			if(_msw.EM || _msw.TS)
-				;
+			if(_msw.EM || _msw.TS) {
       // causare INT 07
 			Exception86.descr.ud=EXCEPTION_NOMATH;
 
@@ -5706,6 +5632,7 @@ res3.x=_ax;
 
 
 			goto exception286;
+      }
 
 #endif
 
@@ -7164,7 +7091,7 @@ they return to the instruction following the division*/
 								else {
 									goto exception286priv;
 									}
-								_f.IF=0;
+    						_f.Trap=0; _f.IF=0;	
 								break;
 
 							case 4:		// Call gate
@@ -7240,6 +7167,146 @@ they return to the instruction following the division*/
       sizeOverrideA--;
 #endif
 
+		if(!(i8237RegW[8] & DMA_DISABLED)) {		// controller enable
+#ifndef PCAT
+			// canale 0 = RAM refresh (ignoro gli altri, v. floppy ecc in loco!
+#endif
+			switch((i8237Mode[0] & 0b00001100) >> 2) {		// DMA mode
+				case DMA_MODEVERIFY:			// verify
+					break;
+				case DMA_MODEWRITE:			// write
+					break;
+				case DMA_MODEREAD:			// read
+					break;
+				}
+			i8237RegR[13] /* = */; // ultimo byte trasferito :)
+			if(!(i8237RegW[15] & DMA_MASK0))	{	// mask...
+				if(i8237RegR[8] & DMA_REQUEST0) {
+					switch((i8237Mode[0] & DMA_MODE) >> 6) {		// DMA mode
+						case DMA_MODEDEMAND:			// demand
+							break;
+						case DMA_MODECASCADE:			// cascade
+							break;
+						case DMA_MODESINGLE:			// single
+	//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
+							if(i8237Mode[0] & DMA_UPDOWN)
+								i8237DMACurAddr[0]--;
+							else
+								i8237DMACurAddr[0]++;
+							i8237DMACurLen[0]--;
+							if(!i8237DMACurLen[0]) {
+								i8237RegR[8] |= DMA_TC0;		// TC 0
+								if(i8237Mode[0] & DMA_AUTORELOAD) {
+									i8237DMACurAddr[0]=i8237DMAAddr[0];
+									i8237DMACurLen[0]=i8237DMALen[0];
+									}
+	#ifdef PCAT
+	// no, su AT non è qua							i8042Input ^= 0x10;		// SIMULO refresh... v. port 61h
+	#endif
+
+								}
+							i8237RegR[8] &= ~DMA_REQUEST0;  // 
+							break;
+						case DMA_MODEBLOCK:			// block
+							while(i8237DMACurLen[0]--) {
+
+								if(i8237Mode[0] & DMA_UPDOWN)
+									i8237DMACurAddr[0]--;
+								else
+									i8237DMACurAddr[0]++;
+								i8237DMACurLen[0]--;
+								if(!i8237DMACurLen[0]) {
+									i8237RegR[8] |= DMA_TC0;		// TC 0
+									if(i8237Mode[0] & DMA_AUTORELOAD) {
+										i8237DMACurAddr[0]=i8237DMAAddr[0];
+										i8237DMACurLen[0]=i8237DMALen[0];
+										}
+#ifdef PCAT
+// no, su AT non è qua							i8042Input ^= 0x10;		// SIMULO refresh... v. port 61h
+#endif
+
+									}
+								}
+							i8237RegR[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
+							break;
+						}
+					}
+				}
+			}
+
+#ifdef PCAT
+
+		{static uint8_t refreshdivider=0;
+		refreshdivider++;
+		if(refreshdivider>=15) {		// valori tra 5 e 10 sono ok ; v. forse registri a 22h/23h chip 82C211 [a volte PORCODDIO non va di nuovo
+			// parlano di 2mS circa... ma granite dice 15uS
+			i8042Input ^= 0x10;		// SIMULO refresh...  qua non usa DMA pare; 
+			refreshdivider=0;
+			}
+		}
+
+		// POTREBBE servire ciclare "Index" dell'hard disc ATA, hdState<1>
+
+		if(!(i8237Reg2W[8] & DMA_DISABLED)) {		// controller enable
+			// canale 0 = cascaded 4
+			switch((i8237Mode2[0] & 0b00001100) >> 2) {		// DMA mode
+				case DMA_MODEVERIFY:			// verify
+					break;
+				case DMA_MODEWRITE:			// write
+					break;
+				case DMA_MODEREAD:			// read
+					break;
+				}
+			i8237Reg2R[13] /* = */; // ultimo byte trasferito :)
+			if(!(i8237Reg2W[15] & DMA_MASK0))	{	// mask...
+				switch((i8237Mode2[0] & DMA_MODE) >> 6) {		// DMA mode
+					case DMA_MODEDEMAND:			// demand
+						break;
+					case DMA_MODECASCADE:			// cascade, ok award bios 286
+
+						break;
+					case DMA_MODESINGLE:			// single
+
+//						i8237RegR[8] |= ((1 << 0) << 4);  // request??... NO! IBM5160 si incazza; v. anche nel floppy anche se la va
+						if(i8237Mode2[0] & DMA_UPDOWN)
+							i8237DMACurAddr2[0]--;
+						else
+							i8237DMACurAddr2[0]++;
+						i8237DMACurLen2[0]--;
+						if(!i8237DMACurLen2[0]) {
+							i8237Reg2R[8] |= DMA_TC0;		// TC 0
+							if(i8237Mode2[0] & DMA_AUTORELOAD) {
+								i8237DMACurAddr2[0]=i8237DMAAddr2[0];
+								i8237DMACurLen2[0]=i8237DMALen2[0];
+								}
+#ifdef PCAT
+// no, su AT non è qua							i8042Input ^= 0x10;		// SIMULO refresh... v. port 61h
+#endif
+
+							}
+						i8237RegR[8] &= ~DMA_REQUEST0;  // 
+						break;
+					case DMA_MODEBLOCK:			// block
+						while(i8237DMACurLen2[0]--) {
+
+							if(i8237Mode2[0] & DMA_UPDOWN)
+								i8237DMACurAddr2[0]--;
+							else
+								i8237DMACurAddr2[0]++;
+							if(!i8237DMACurLen2[0]) {
+								i8237Reg2R[8] |= DMA_TC0;		// TC 0
+								if(i8237Mode2[0] & DMA_AUTORELOAD) {
+									i8237DMACurAddr2[0]=i8237DMAAddr2[0];
+									i8237DMACurLen2[0]=i8237DMALen2[0];
+									}
+								}
+							}
+						i8237Reg2R[8] &= ~DMA_REQUEST0;  // request done??... se confermato, mettere anche in floppy, HD
+						break;
+					}
+				}
+			}
+#endif
 
 
 		} while(!fExit);

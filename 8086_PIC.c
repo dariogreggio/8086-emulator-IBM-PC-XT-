@@ -105,7 +105,7 @@ const char CopyrightString[]= {'P','C','/','A','T',' ','E','m','u','l','a','t','
 #else
 const char CopyrightString[]= {'P','C','/','X','T',' ','E','m','u','l','a','t','o','r',' ','v',
 #endif
-	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '0','8','/','1','0','/','2','5', 0 };
+	VERNUMH+'0','.',VERNUML/10+'0',(VERNUML % 10)+'0',' ','-',' ', '1','2','/','1','0','/','2','5', 0 };
 
 const char Copyr1[]="(C) Dario's Automation 2019-2025 - G.Dar\xd\xa\x0";
 
@@ -1760,17 +1760,16 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
   ADCTRG1=0;
   ADCTRG2=0;
   ADCTRG3=0;
-  ADCTRG1bits.TRGSRC3 = 0b00011; // Set AN3 to trigger from scan trigger
+  ADCTRG2bits.TRGSRC4 = 0b00001; // Set AN2 to trigger from global trigger  NO SCAN QUA NO CSS PORCOILDIO DELLA MICROCHIP
+  ADCTRG1bits.TRGSRC3 = 0b00001; // Set AN3 to trigger from global trigger
   
   // I PRIMI 12 POSSONO OVVERO DEVONO USARE gli ADC dedicati! e anche se si usano
   // poi gli SCAN, per quelli >12, bisogna usarli entrambi (e quindi TRGSRC passa a STRIG ossia "common")
 
+  ADCIMCON1bits.DIFF4 = 0; // 
+  ADCIMCON1bits.SIGN4 = 0; // 
   ADCIMCON1bits.DIFF3 = 0; // single ended, unsigned
   ADCIMCON1bits.SIGN3 = 0; // 
-  ADCIMCON2bits.DIFF16 = 0; // 
-  ADCIMCON2bits.SIGN16 = 0; // 
-  ADCCON1bits.SELRES = 0b10; // ADC7 resolution is 10 bits
-  ADCCON1bits.STRGSRC = 1; // Select scan trigger.
 
   // Initialize warm up time register
   ADCANCON = 0;
@@ -1778,20 +1777,20 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
 
   ADCEIEN1 = 0;
     
-  ADCCON2bits.ADCDIV = 64; // per SHARED: 2 TQ * (ADCDIV<6:0>) = 64 * TQ = TAD
-  ADCCON2bits.SAMC = 10;
-    
   ADCCON3bits.ADCSEL = 0;   //0=periph clock 3; 1=SYSCLK
   ADCCON3bits.CONCLKDIV = 4; // 25MHz, sotto è poi diviso 2 per il canale, = max 50MHz come da doc
 
+  ADC4TIMEbits.SELRES=0b10;        // 10 bits
+  ADC4TIMEbits.ADCDIV=4;       // 
+  ADC4TIMEbits.SAMC=10;        //   
   ADC3TIMEbits.SELRES=0b10;        // 10 bits
   ADC3TIMEbits.ADCDIV=4;       // 
   ADC3TIMEbits.SAMC=10;        //   
   
   ADCCSS1 = 0; // Clear all bits
   ADCCSS2 = 0;
-  ADCCSS1bits.CSS3 = 1; // AN3 (Class 1) set for scan
-  ADCCSS1bits.CSS16 = 1; // AN16 (Class 2) set for scan
+
+
 
   ADC0CFG=DEVADC0;
   ADC1CFG=DEVADC1;
@@ -1810,43 +1809,45 @@ void ADC_Init(void) {   // v. LCDcontroller e PC_PIC_audio
 #endif
 
   // Enable clock to the module.
-  ADCANCONbits.ANEN7 = 1;
-  ADCCON3bits.DIGEN7 = 1;
+  ADCANCONbits.ANEN4 = 1;
+  ADCCON3bits.DIGEN4 = 1;
   ADCANCONbits.ANEN3 = 1;
   ADCCON3bits.DIGEN3 = 1;
   
 #ifndef USING_SIMULATOR
+  while(!ADCANCONbits.WKRDY4); // Wait until ADC is ready
   while(!ADCANCONbits.WKRDY3); // Wait until ADC is ready
-  while(!ADCANCONbits.WKRDY7); // 
 #endif
   
-  // ADCGIRQEN1bits.AGIEN7=1;     // IRQ (anche ev. per DMA))
+  // ADCGIRQEN1bits.AGIEN2=1;     // IRQ (anche ev. per DMA))
+  ADCDATA3;
+  ADCDATA4;
 
 	}
 
-BYTE readADC(BYTE n) { // http://ww1.microchip.com/downloads/en/DeviceDoc/70005213f.pdf
-  WORD retval;
+uint16_t readADC(uint8_t n) { // http://ww1.microchip.com/downloads/en/DeviceDoc/70005213f.pdf
+  uint16_t retval;
   
 
+  ADCCON3bits.GSWTRG = 1; // Start software trigger
 	__delay_us(10);
   
-  ADCCON3bits.GSWTRG = 1; // Start software trigger
 
   switch(n) {
-    case 1:
-      while(!ADCDSTAT1bits.ARDY3)    // Wait for the conversion to complete
-        ClrWdt();
-      ADCDATA16;
-      retval=ADCDATA3;
-      break;
-    case 0:
-      while(!ADCDSTAT1bits.ARDY16)    // Wait for the conversion to complete
+    case 1:   // AN1
+      while(!ADCDSTAT1bits.ARDY4)    // Wait for the conversion to complete
         ClrWdt();
       ADCDATA3;
-      retval=ADCDATA16;
+      retval=ADCDATA4;
     // PARE che quando mandi il trigger, lui converte TUTTI i canali abilitati,
     // per cui se non pulisco "l'altro" mi becco un RDY e una lettura precedente...
     // forse COSI' funzionerebbe, PROVARE      while(ADCCON2bits.EOSRDY == 0) // Wait until the measurement run
+      break;
+    case 2:   // AN2
+      while(!ADCDSTAT1bits.ARDY3)    // Wait for the conversion to complete
+        ClrWdt();
+      ADCDATA4;
+      retval=ADCDATA3;
       break;
     default:
       break;
@@ -1855,7 +1856,7 @@ BYTE readADC(BYTE n) { // http://ww1.microchip.com/downloads/en/DeviceDoc/700052
  
 //    IFS0bits.AD1IF=0;
     
-  return retval >> 2;   // 12->10 bit
+  return retval >> 2;   // 12->10 bit, right align
   }
 
 void UART_Init(uint32_t baudRate) {
@@ -2193,7 +2194,7 @@ int emulateKBD(BYTE ch) {
           i8042OutPtr=1;
 					}
 				else {
-					Keyboard[1] = 0xe0;
+					Keyboard[1] = 0xf0;
 					Keyboard[0] = i;
           i8042OutPtr=2;
 					}
@@ -2256,7 +2257,7 @@ BYTE whichKeysFeed=0;
 char keysFeed[32]={0};
 volatile BYTE keysFeedPtr=255;
 const char *keysFeed1=" \r";     // per BASIC!
-const char *keysFeed2="8/14/2025\r\r";     // 
+const char *keysFeed2="10/9/2025\r\r";     // 
 const char *keysFeed3="DIR\r";     // 
 //const char *keysFeed1="  A\r";     // 
 //const char *keysFeed1="  A\x81\xa1\xa2:\r";     // space per BASIC su Bios "nuovo"
@@ -2271,11 +2272,11 @@ const char *keysFeed11="\r";
 const char *keysFeed12="\x1b";
 const char *keysFeed13="INTHW\r";
 
+volatile BYTE keysFeedPhase=0;
 void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   //100Hz 2024
 // https://www.microchip.com/forums/m842396.aspx per IRQ priority ecc
   static BYTE dividerTim,dividerVICpatch;
   static WORD dividerEmulKbd;
-  static BYTE keysFeedPhase=0;
   int i;
   BYTE n;
 
@@ -2435,24 +2436,33 @@ void __attribute__((no_fpu)) __ISR(_TIMER_3_VECTOR,ipl4SRS) TMR3_ISR(void) {   /
 			whichKeysFeed=0;
 //    goto fine;
 		}
-    
+
+#if 0/// spostato in CPU Emulate...    
   if(keysFeed[keysFeedPtr]) {
     dividerEmulKbd++;
+#ifdef EXT_80286
+    if(dividerEmulKbd>=30) {   // ~.5Hz per emulazione tastiera! (più veloce di tot non va...)
+      // cambia un cazzo porcamadonna
+#else
     if(dividerEmulKbd>=30) {   // ~.3Hz per emulazione tastiera! (più veloce di tot non va...)
+#endif
       dividerEmulKbd=0;
-      if(!keysFeedPhase) {
-        keysFeedPhase=1;
-        emulateKBD(keysFeed[keysFeedPtr]);
-        }
-      else {
-        keysFeedPhase=0;
-        emulateKBD(0);
-        keysFeedPtr++;
+      if(1  || /*SUPERPORCODIO*/!(KBStatus & KB_OUTPUTFULL)) {    // v.Windows QUA lo uso in modo leggermente diverso! come semaforo
+        if(!keysFeedPhase) {
+          keysFeedPhase=1;
+          emulateKBD(keysFeed[keysFeedPtr]);
+          }
+        else {
+          keysFeedPhase=0;
+          emulateKBD(0);
+          keysFeedPtr++;
+          }
         }
       }
     }
   else
     keysFeedPtr=255;
+#endif
     
   
 fine:
@@ -2466,7 +2476,7 @@ void __attribute__((no_fpu)) __ISR(_TIMER_4_VECTOR,ipl4SRS) TMR4_ISR(void) {
   
 //  if((i8253Mode[0] & 0b00001110) == 0 MA LUI METTE 6 ossia mode 3??! )
     
-  if(i8259RegW[1] == 0xbc &&      // PATCH finire gestione 8259, se no arrivano irq ad minchiam
+  if(     //i8259RegW[1] == 0xbc &&      // PATCH finire gestione 8259, se no arrivano irq ad minchiam
       !(i8259RegW[1] & 1)) {
 //      TIMIRQ=1;  //
     i8259RegR[0] |= 1;
@@ -2484,11 +2494,11 @@ fine:
 
 
 #ifdef ILI9341
-#define RPLATE 300
+#define RPLATE 256
 #define NUMSAMPLES 2
 #define SAMPLE_NOISE 6
 BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/) { // v. breakthrough
-  uint16_t x,y,z;
+  uint16_t x,y; int16_t z;
   static uint16_t oldx=HORIZ_SIZE/2,oldy=VERT_SIZE/2;
   int samples[NUMSAMPLES];
   uint8_t i, valid;
@@ -2497,26 +2507,26 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
 
 //  ANSELBbits.ANSB2 = 1;
   ANSELBbits.ANSB3 = 1;
-  ANSELEbits.ANSE6 = 1;
+  ANSELBbits.ANSB4 = 1;
 //  ANSELEbits.ANSE7 = 1;
   
-  TRISBbits.TRISB3=1;    //(_yp, INPUT);
-  TRISEbits.TRISE7=1;    //(_ym, INPUT);
-  TRISBbits.TRISB2=0;    //(_xp, OUTPUT);
-  TRISEbits.TRISE6=0;    //(_xm, OUTPUT);
+  TouchY1Tris=1;    //(_yp, INPUT);
+  TouchY2Tris=1;    //(_ym, INPUT);
+  TouchX1Tris=0;    //(_xp, OUTPUT);
+  TouchX2Tris=0;    //(_xm, OUTPUT);
 
   m_TouchX1=1;      //(_xp, HIGH);
   m_TouchX2=0;      //(_xm, LOW);
 
-  __delay_us(30); // Fast ARM chips need to allow voltages to settle
+  __delay_us(25); // Fast ARM chips need to allow voltages to settle
 
   for(i=0; i<NUMSAMPLES; i++)
-    samples[i] = readADC(1 /*_yp*/);
+    samples[i] = readADC(1 /*_yp AN1*/);
 
-  TRISBbits.TRISB3=0;    //(_yp, OUTPUT);
-  TRISEbits.TRISE7=0;    //(_ym, OUTPUT);
-  TRISBbits.TRISB2=1;    //(_xp, INPUT);
-  TRISEbits.TRISE6=1;    //(_xm, INPUT);
+  TouchY1Tris=0;    //(_yp, OUTPUT);
+  TouchY2Tris=0;    //(_ym, OUTPUT);
+  TouchX1Tris=1;    //(_xp, INPUT);
+  TouchX2Tris=1;    //(_xm, INPUT);
 
   m_TouchY2=1;      //(_ym, LOW);
   m_TouchY1=0;      //(_yp, HIGH);
@@ -2537,22 +2547,22 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
     }
 #endif
 
-  y = 1023-(1023-samples[NUMSAMPLES/2]);
-// qui li inverto... x con y e poi la direzione di y (credo dipenda dalla Rotazione)
+  y = 1023-samples[NUMSAMPLES/2];
+  // va da 0x70 a 0x370 circa, SISTEMARE/TARARE @200px
+  y=(y-0x60)/4;
 
-
-  __delay_us(30); // Fast ARM chips need to allow voltages to settle
+  __delay_us(25); // Fast ARM chips need to allow voltages to settle
 
   for(i=0; i<NUMSAMPLES; i++)
-    samples[i] = readADC(0 /*_xm*/);
+    samples[i] = readADC(2 /*_xm AN2*/);
 
    // Set X+ to ground
    // Set Y- to VCC
    // Hi-Z X- and Y+
-  TRISBbits.TRISB3=1;    //(_yp, INPUT);
-  TRISEbits.TRISE7=0;    //(_ym, OUTPUT);
-  TRISBbits.TRISB2=0;    //(_xp, OUTPUT);
-  TRISEbits.TRISE6=1;    //(_xm, INPUT);
+  TouchY1Tris=1;    //(_yp, INPUT);
+  TouchY1Tris=0;    //(_ym, OUTPUT);
+  TouchX1Tris=0;    //(_xp, OUTPUT);
+  TouchX2Tris=1;    //(_xm, INPUT);
 
   m_TouchY2=1;      //(_ym, HIGH); 
   m_TouchX1=0;      //(_xp, LOW);
@@ -2574,9 +2584,11 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
 #endif
 
   x = (1023-samples[NUMSAMPLES/2]);
-
-  __delay_us(30); // Fast ARM chips need to allow voltages to settle
-  int z1 = readADC(0 /*_xm*/); 
+// va da 0x60 a 0x360   TARARE @320px
+  x=((x-0x50)*5)/4;
+  
+  __delay_us(25); // Fast ARM chips need to allow voltages to settle
+  int z1 = readADC(2 /*_xm*/); 
   int z2 = readADC(1 /*_yp*/);
 
   if(RPLATE != 0) {
@@ -2590,7 +2602,7 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
     rtouch /= 1024;
      
     z = rtouch;
-    // abbiamo da 200 a 150 (< se + pressione) con stilo, 300..200 con cotton fioc :) 250..50 con dito
+    // [RPLATE=300] abbiamo da 200 a 150 (< se + pressione) con stilo, 300..200 con cotton fioc :) 250..50 con dito
     } 
   else {
     z = (1023-(z2-z1));
@@ -2600,49 +2612,46 @@ BYTE manageTouchScreen(void /*UGRAPH_COORD_T *x,UGRAPH_COORD_T *y,uint16_t *z*/)
     z = 0;
     }
 
-  TRISBbits.TRISB2=0;
-  TRISBbits.TRISB3=0;
-  TRISEbits.TRISE6=0;
-  TRISEbits.TRISE7=0;
-//  ANSELBbits.ANSB2 = 0;
+  TouchY1Tris=0;
+  TouchY2Tris=0;
+  TouchX1Tris=0;
+  TouchX2Tris=0;
   ANSELBbits.ANSB3 = 0;
-  ANSELEbits.ANSE6 = 0;
-//  ANSELEbits.ANSE7 = 0;
-
+  ANSELBbits.ANSB4 = 0;
 
   if(valid) {
-    mouseX=x-oldx;
-    mouseY=y-oldy;
-    
-    if(z > 200) {
+
+    if(z < RPLATE) {
+      mouseX=x-oldx;
+      mouseY=y-oldy;
+        
+      if(mouseState & 0b10000000) {		// semaforo
+        mouseState |= 0b00100000;     // left click
+  #if MOUSE_TYPE==1
+        COMDataEmuFifo[0]=0b01000000 | (mouseState & 0b00110000) | (((int8_t)mouseX >> 6) & 0x03) | (((int8_t)mouseY >> 4) & 0x0c);
+        COMDataEmuFifo[1]=(int8_t)mouseX & 0x3f;
+        COMDataEmuFifo[2]=(int8_t)mouseY & 0x3f;
+        COMDataEmuFifoCnt=0;
+  #elif MOUSE_TYPE==2
+        COMDataEmuFifo[0]=0b10000000) | (mouseState & 0b00100000) ? 0 : 0b00000100))  | 
+          (mouseState & 0b00010000 ? 0b00000001 : 0);
+        COMDataEmuFifo[1]=(int8_t)x;
+        COMDataEmuFifo[2]=(int8_t)-y;		// dio che culattoni :D
+        COMDataEmuFifo[3]=0;
+        COMDataEmuFifo[4]=0;
+        COMDataEmuFifoCnt=0;
+  #endif
+        i8250Reg[2] &= ~0b00000001;
+        if(i8250Reg[1] & 0b00000001)			// se IRQ attivo
+          i8259IRR |= 0x10;
+
+        i8250Reg[5] |= 1;			// byte rx in COM cmq
+
+        }
+      mouseState &= ~0b10000000;  // marker per COM
+
+      oldx=mouseX; oldy=mouseY; 
       }
-    
-    if(mouseState & 0b10000000) {		// semaforo
-      mouseState |= 0b00100000;     // left click
-#if MOUSE_TYPE==1
-      COMDataEmuFifo[0]=0b01000000 | (mouseState & 0b00110000) | (((int8_t)mouseX >> 6) & 0x03) | (((int8_t)mouseY >> 4) & 0x0c);
-      COMDataEmuFifo[1]=(int8_t)mouseX & 0x3f;
-      COMDataEmuFifo[2]=(int8_t)mouseY & 0x3f;
-      COMDataEmuFifoCnt=0;
-#elif MOUSE_TYPE==2
-      COMDataEmuFifo[0]=0b10000000) | (mouseState & 0b00100000) ? 0 : 0b00000100))  | 
-        (mouseState & 0b00010000 ? 0b00000001 : 0);
-      COMDataEmuFifo[1]=(int8_t)x;
-      COMDataEmuFifo[2]=(int8_t)-y;		// dio che culattoni :D
-      COMDataEmuFifo[3]=0;
-      COMDataEmuFifo[4]=0;
-      COMDataEmuFifoCnt=0;
-#endif
-			i8250Reg[2] &= ~0b00000001;
-			if(i8250Reg[1] & 0b00000001)			// se IRQ attivo
-        i8259IRR |= 0x10;
-
-      i8250Reg[5] |= 1;			// byte rx in COM cmq
-
-      }
-		mouseState &= ~0b10000000;  // marker per COM
-
-    oldx=mouseX; oldy=mouseY; 
     }
 
   return valid;

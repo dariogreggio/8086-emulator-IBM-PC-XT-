@@ -154,7 +154,7 @@ extern const uint8_t IBMBASIC[];
 
 #define US_TO_CT_TICKS  (CPU_CT_HZ/1000000UL)    // uS to CoreTimer Ticks
     
-#define VERNUML 30
+#define VERNUML 31
 #define VERNUMH 1
 
 
@@ -333,12 +333,17 @@ void LCDWrite(const char *);
 
 #define	m_LCDCSBit  LATBbits.LATB2      // anche touch
 
-#define m_TouchX1   LATBbits.LATB3  //AN3     // https://www.hackster.io/calogerus/arduino-uno-2-4-tft-lcd-display-shield-touch-panel-ili9341-576b1b
+#define m_TouchY1   LATBbits.LATB4  //AN1     // https://forum.arduino.cc/t/ili9341-shield-touchscreen-initial-setup/1171638  o https://forum.arduino.cc/t/ili9488-touchscreen-via-mcufriend_kbv-h/695844
+                                                //(NO PUTTANOGESU https://www.hackster.io/calogerus/arduino-uno-2-4-tft-lcd-display-shield-touch-panel-ili9341-576b1b
+#define TouchY1Tris TRISBbits.TRISB4
+#define m_TouchX1   LATBbits.LATB3  //AN2
+#define TouchX1Tris TRISBbits.TRISB3
 //#define m_TouchX2   PORTEbits.RE6  //AN16 ev.
-#define m_TouchX2   LATEbits.LATE6  //
-#define m_TouchY1   LATBbits.LATB2  //AN2
+#define m_TouchY2   LATEbits.LATE5  // IO7
+#define TouchY2Tris TRISEbits.TRISE5
 //#define m_TouchY2   PORTEbits.RE7  //AN15 ev.
-#define m_TouchY2   LATEbits.LATE7  //
+#define m_TouchX2   LATFbits.LATF5  // IO6
+#define TouchX2Tris TRISFbits.TRISF5
 
 #endif
 

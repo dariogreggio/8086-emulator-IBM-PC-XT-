@@ -176,6 +176,9 @@ BYTE totalTracks=80;		/*floppy720*/
 //BYTE sectorsPerTrack[4]={18,18,18,18} /*floppy1.4*/;
 BYTE sectorsPerTrack[4]={9,9,9,9} /*floppy720 v. tracks*/;
 BYTE totalTracks=80;		/*floppy1.4*/
+#else
+BYTE sectorsPerTrack[4]={9,9,9,9} /*floppy720 v. tracks*/;
+BYTE totalTracks=80;		/*floppy1.4*/
 #endif
 static uint8_t sectorData[SECTOR_SIZE];
 
@@ -235,17 +238,12 @@ extern union PIPE Pipe2;
 	seg->d.Access.A=1;\
 	}
 #define ADDRESS_286_R() {\
-	if(seg->s.x >= 0x1000)		/*PATCH  LMSW   sistemare*/ {\
-		t=MAKE20BITS(seg->s.x,ofs);\
-		}\
-	else {\
 		ADDRESS_286_PRE();\
 		if((seg->d.Access.b & 0 /*in effetti anche code è ok... B8(00001000)*/) != 0b00000000) {/*boh data */\
 			Exception86.descr.ud=EXCEPTION_GP;\
 			goto exception286;\
 			}\
 		ADDRESS_286_POST();\
-		}\
 	}
 #define ADDRESS_286_E() {\
 	struct SEGMENT_DESCRIPTOR *sd;\
@@ -263,17 +261,12 @@ extern union PIPE Pipe2;
 	}
 #define ADDRESS_286_W() {\
 	struct SEGMENT_DESCRIPTOR *sd;\
-	if(seg->s.x >= 0x1000)		/*PATCH  LMSW   sistemare*/ {\
-		t=MAKE20BITS(seg->s.x,ofs);\
-		}\
-	else {\
 		ADDRESS_286_PRE();\
 		if((seg->d.Access.b & 0b00001010) != 0b00000010) {/*data, writable*/\
 			Exception86.descr.ud=EXCEPTION_GP;\
 			goto exception286;\
 			}\
 		ADDRESS_286_POST();\
-		}\
 	}
 
 
@@ -749,13 +742,15 @@ uint8_t InValue(uint16_t t) {
 								i8042RegR[0]=0xAB;		i8042RegR[0]=0x83;
 								break;
 							default:
-								if(i8042RegW[1]>=0x00 && i8042RegW[1]<0x20) {   // read ram
-									i8042RegR[0]=KBRAM[i8042RegW[1] & 0x1f];
-									}
-								else if(i8042RegW[1]>=0x20 && i8042RegW[1]<0x40) {   // alias AMI
-									i8042RegR[0]=KBRAM[i8042RegW[1] & 0x1f];
-									}
-								else if(i8042RegW[1]>=0xF0 && i8042RegW[1]<=0xFF) {
+								if(!i8042OutPtr) {		// se non c'è tasto premuto
+									if(i8042RegW[1]>=0x00 && i8042RegW[1]<0x20) {   // read ram
+										i8042RegR[0]=KBRAM[i8042RegW[1] & 0x1f];
+										}
+									else if(i8042RegW[1]>=0x20 && i8042RegW[1]<0x40) {   // alias AMI
+										i8042RegR[0]=KBRAM[i8042RegW[1] & 0x1f];
+										}
+									else if(i8042RegW[1]>=0xF0 && i8042RegW[1]<=0xFF) {
+										}
 									}
 								else {
 									if(KBStatus & KB_OUTPUTFULL)		// SOLO se c'è stato davvero un tasto! (altrimenti siamo dopo reset o clock ENable
@@ -777,8 +772,15 @@ uint8_t InValue(uint16_t t) {
 						if(!--i8042OutPtr) {
 		          KBStatus &= ~KB_OUTPUTFULL;
 //							i8042Output &= ~B8(00010000);
-							i8042RegW[1]=0;
+//							i8042RegW[1]=0;
+											i8259IRR &= ~0b00000010;
 							}
+						else {
+																	if(KBCommand & 0b00000001) {     //..e se interrupt attivi...
+										//    KBDIRQ=1;
+											i8259IRR |= 0b00000010;
+											}
+						}
 						}
 					else {		// per sicurezza... verificare come mai, nel caso
 		        KBStatus &= ~KB_OUTPUTFULL;
@@ -3912,24 +3914,10 @@ reload0_:
 							KBCommand=t1;
 							KBStatus &= ~KB_POWERON;
 							KBStatus |= KBCommand & 0b00000100;
+							i8042RegW[1]=0;
 							break;
 						case 0xD1:
 							i8042Output=t1;			// https://wiki.osdev.org/A20_Line
-#ifdef _DEBUG
-#ifdef DEBUG_KB
-			{
-				extern HFILE spoolFile;
-				extern uint16_t _ip;
-				char myBuf[256];
-				wsprintf(myBuf,"%u: %04x  A20=%u\n",timeGetTime(),
-					_ip,i8042Output & 2 ? 1 : 0);
-				_lwrite(spoolFile,myBuf,strlen(myBuf));
-
-	//			if(i8042Output & 2)
-	//				debug=1;
-				}
-#endif
-#endif
 /*							if(i8042Output & B8(00010000))
 								KBStatus |= B8(00000001);
 							else
@@ -3938,15 +3926,20 @@ reload0_:
 								KBStatus |= B8(00000010);
 							else
 								KBStatus &= ~B8(00000010);*/
+							i8042RegW[1]=0;
 							break;
 						case 0xD0:			//read output port
+							i8042RegW[1]=0;
 							break;
 						case 0xD3:			// write aux/2nd
+
 							break;
 						case 0xD4:			// write aux/2nd
+
 							break;
 						case 0xED:			// LED, patch per ricevere secondo byte
 							t1;
+							goto kb_sendACK;
 							break;
 						case 0xF3:			// set typematic, patch per ricevere secondo byte
 							t1;
@@ -3954,7 +3947,6 @@ reload0_:
 						default:
 							if(!i8042RegW[1]) {     //comandi inviati qua (per la vera tastiera, sarebbero)
 								i8042RegW[0]=t1;     // 
-								i8042RegW[1]=0;     // direi, così pulisco
 		// qualsiasi byte qua che non segue un comando RIABILITA la tastiera https://www.os2museum.com/wp/ibm-pcat-8042-keyboard-controller-commands/
 								KBCommand &= ~0b00010000;
 								switch(t1) {
@@ -3965,7 +3957,7 @@ reload0_:
 
 		// DEVO ASPETTARE stato led qua!! come fare?
 										i8042RegW[1]=0xED;
-										KBStatus &= ~KB_OUTPUTFULL;		// 
+//										KBStatus &= ~KB_OUTPUTFULL;		// 
 
 kb_sendACK:
 										KBStatus |= KB_ENABLED | KB_OUTPUTFULL;		// b4=enabled, data available
@@ -3974,12 +3966,12 @@ kb_sendACK:
 										Keyboard[0]=0xFA;		// ACK
 										i8042OutPtr=1;
 										i8042RegW[0]=t1;  		
-										goto kb_setirq;
+										goto kb_setirq2;
 										break;
 									case 0xFE:     //resend (sarebbe ultimo byte a meno che non fosse Resend...
 										i8042OutPtr=1;
 										i8042RegW[0]=t1;  		i8042RegW[1]=0;
-										goto kb_setirq;
+										goto kb_setirq2;
 										break;
 									case 0xEE:     //echo
 										Keyboard[0]=i8042RegW[1];
@@ -4008,15 +4000,19 @@ kb_sendACK:
 
 										Keyboard[2]=0xfa;		Keyboard[1]=0xAB;		Keyboard[0]=0x83;
 
-										KBStatus |= KB_ENABLED | KB_OUTPUTFULL;		// b4=enabled, data available
+										KBStatus |= KB_ENABLED | KB_OUTPUTFULL  | KB_INPUTFULL;		// b4=enabled, data available, ? boh
 										i8042Output |= 0b00010000;
 
 										i8042OutPtr=3;
+										i8042RegW[1]=0;
 
 //										goto kb_sendACK;
 //										debug=1;
-
-
+kb_setirq2:
+										if(KBCommand & 0b00000001) {     //..e se interrupt attivi...
+										//    KBDIRQ=1;
+											i8259IRR |= 0b00000010;
+											}
 										break;
 //									case 0xF0:     //sarebbe Set translate mode bit , su MCA
 										//KBCommand |= B8(01000000)
@@ -4029,6 +4025,7 @@ kb_reset:
 										Keyboard[0]=0xaa; Keyboard[1]=0xfa;
 										KBStatus |= KB_ENABLED | KB_OUTPUTFULL;		// b4=enabled, data available
 										i8042Output |= 0b00010000;
+										i8042RegW[1]=0;
 										break;
 									default:
 										if((t1>=0xef && t1<=/*0xf2 read ID!*/0xf1) || (t1>=0xf7 && t1<=0xfd)) {	// nop
@@ -4041,6 +4038,7 @@ kb_reset:
 							else if(i8042RegW[1]>=0x60 && i8042RegW[1]<0x80) {		// write ram
 kb_writeram_:
 								KBRAM[i8042RegW[1] & 0x1f]=t1;
+								i8042RegW[1]=0;
 								}
 							else if(i8042RegW[1]>=0x40 && i8042RegW[1]<0x60) {		// alias AMI
 								goto kb_writeram_;
@@ -4056,8 +4054,9 @@ kb_writeram_:
 //							i8042RegW[1]
 
             }
+
           i8042RegW[0]=t1;     // 
-          i8042RegW[1]=0;     // direi, così pulisco
+//          i8042RegW[1]=0;     // direi, così pulisco
           break;
 
         case 1:     // brutalmente, per buzzer!  		system control port
@@ -4123,8 +4122,7 @@ kb_writeram_:
 						case 0xAA: 					// self test
 							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_POWERON | KB_COMMAND;				// command, data input full, has data output, alzo power-on
 							i8042Output |= 0b00010000;
-	            Keyboard[1]=0x55; Keyboard[0]=0x55 /*ribadisco*/ /*1 /*ID*/; i8042OutPtr=2;  //(su AMI si incula tutto!
-//							Keyboard[0]=0x55; i8042OutPtr=1;
+	            Keyboard[1]=0x55; Keyboard[0]=0x55 /*ribadisco*/ /*1 /*ID*/; i8042OutPtr=2;  // Phoenix ne vuole 2! AMI e DTK ok con 1 (su AMI si incula tutto!
 							goto kb_setirq;
 							break;
 						case 0xA9:			// test lines aux / #2 device
@@ -4142,16 +4140,19 @@ kb_writeram_:
 							break;
 						case 0xAD:			// disable
 							KBStatus |= KB_COMMAND | KB_INPUTFULL;		// command,data input full, 
-//							KBStatus &= ~B8(00000001);				// pulisco NO! il coso lo manda dopo ogni tasto ricevuto...
+//							KBStatus &= ~KB_OUTPUTFULL;				// pulisco NO! il coso lo manda dopo ogni tasto ricevuto...
 	//						i8259IRR &= ~B8(00000010);	// tutto
               KBRAM[0] |= 0x10; //set bit 4 -> disable kbd  da granite...
 //							KBCommand |= B8(00010000);
+							i8042RegW[1]=0;
 							break;
 						case 0xAE:			// enable
 							KBStatus |= KB_COMMAND | KB_INPUTFULL;				// command, data input full
-//							KBStatus &= ~B8(00000001);				// pulisco
+							KBStatus &= ~KB_OUTPUTFULL;				// pulisco
+//#pragma message porcodio non va piu DTK
               KBRAM[0] &= ~0x10; //clear bit 4 -> enable kbd  da granite...
 //							KBCommand &= ~B8(00010000);
+							i8042RegW[1]=0;
 							break;
 						case 0x20: // r/w control
 							KBStatus |= KB_OUTPUTFULL | KB_INPUTFULL | KB_COMMAND;				// command, data input full, has data output
@@ -4270,7 +4271,7 @@ kb_writeram:
 #endif
 
 									i8042RegW[1]=0;
-									KBStatus &= ~KB_INPUTFULL;
+									KBStatus &= ~(KB_INPUTFULL | KB_OUTPUTFULL);
 
 
 		//			ram_seg[0x472]=0x34;
